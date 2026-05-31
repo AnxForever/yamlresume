@@ -267,7 +267,7 @@ export const LATEX_COMPILE_TIMEOUT_MS = 30000
  * @param outputDir - Optional output directory.
  * @param timeout - Timeout in milliseconds. 0 means no timeout.
  */
-async function compileLaTeX(
+export async function compileLaTeX(
   texFile: string,
   outputDir?: string,
   timeout: number = LATEX_COMPILE_TIMEOUT_MS
