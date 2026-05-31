@@ -1,15 +1,19 @@
 .git
 .gitignore
+.github
 *.md
-.env*
 *.log
 .DS_Store
 build
 dist
 node_modules
+.next
+.vercel
 
 # dotenv environment variable files
 .env
+.env*
+.env.*
 .env.local*
 .env.development*
 .env.test*
@@ -18,3 +22,12 @@ node_modules
 packages/*/build
 packages/*/dist
 packages/*/node_modules
+**/.next
+**/coverage
+**/dist
+**/node_modules
+**/*.log
+**/*.tsbuildinfo
+
+baoanxin-resume.pdf
+包安心22408080303.pdf

@@ -153,3 +153,12 @@ packages/cli/resources/*.pdf
 packages/cli/my-resume.*
 
 .vscode
+
+# local debug screenshots & personal resume files (kept locally, never committed)
+/*.png
+/*.pdf
+/baoanxin-resume.yml
+
+# tooling scratch directories
+/.spec-workflow/
+/.playwright-mcp/

@@ -20,7 +20,8 @@ const args = [
   'packages/core/src',
   'packages/create-yamlresume/src',
   'packages/json2yamlresume/src',
-  'packages/playground/src'
+  'packages/playground/src',
+  'packages/web/src'
 ];
 
 // Check for -c flag
