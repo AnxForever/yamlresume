@@ -2,19 +2,19 @@
 
 ## Product boundary
 
-The backend MVP accepts a job description and one canonical YAMLResume source,
-then returns a grounded, job-targeted YAMLResume plus analysis artifacts. It is
-not an autonomous job-application bot and it does not crawl websites, send
-applications, host a frontend, or persist personal data in a production
-database.
+The backend MVP accepts a job description plus either a canonical YAMLResume
+source or candidate files, then returns a grounded, job-targeted YAMLResume
+plus analysis artifacts. It is not an autonomous job-application bot and it
+does not crawl websites, send applications, host a frontend, or persist
+personal data in a production database.
 
 ## User inputs
 
 ### Required
 
-- `jobDescription`: raw JD text.
-- `candidate.yaml` or `candidate.resume`: exactly one canonical YAMLResume
-  source.
+- `jobDescription` and/or `jobFiles`: raw JD text or supported files.
+- one candidate representation: `candidate.yaml`, `candidate.resume`, or one
+  or more `candidate.files`.
 
 ### Optional preferences
 
@@ -22,23 +22,26 @@ database.
 - target title override.
 - LaTeX template.
 - one-page or two-page target.
+- output formats and style presets.
 
-The canonical source requirement is deliberate: raw personal notes are too
-ambiguous to use safely without a separate profile-ingestion and confirmation
-workflow. That workflow is a future backend capability, not silently folded
-into resume generation.
+Candidate files can currently be normalized from text, structured documents,
+digital PDF, DOCX, HTML, Markdown, and supported image formats. The result is
+marked for review and can contain follow-up questions, but a resumable
+confirmation workflow is still planned; normalization must not be presented as
+user-confirmed truth.
 
 ## User outputs
 
 - structured `JobSpec`.
 - requirement-to-evidence `MatchReport`.
 - generated and validated YAMLResume.
-- YAML, HTML, and LaTeX artifacts.
+- YAML, JSON, Markdown, HTML, LaTeX, PDF, and DOCX artifacts.
 - deterministic source-to-draft diff.
 - deterministic quality report.
 - follow-up questions and warnings.
 - trace events for every workflow stage.
-- asynchronous run status for future Agent UI integration.
+- trace metadata for synchronous runs; asynchronous status is planned for
+  future Agent UI integration.
 
 ## Execution plan
 
@@ -97,7 +100,7 @@ Tests:
 
 ### Unit 4 — HTTP API
 
-**Status:** implemented, then extended in Unit 7.
+**Status:** implemented.
 
 Acceptance criteria:
 
@@ -117,9 +120,9 @@ Tests:
 
 ### Unit 5 — Deterministic transparency artifacts
 
-**Status:** next.
+**Status:** implemented.
 
-Deliverables:
+Delivered:
 
 - source-to-draft `ResumeDiff`;
 - deterministic `QualityReport` with must-have coverage, keyword coverage,
@@ -172,7 +175,7 @@ Tests:
 - CandidateNormalizationResponse, JobSpec and DraftResponse workflow paths;
 - token/latency/attempt aggregation and error/trace/API response redaction.
 
-### Unit 7 — Asynchronous run protocol
+### Unit 7A — Asynchronous run protocol
 
 **Status:** planned.
 
@@ -193,9 +196,32 @@ Tests:
 - unknown run;
 - API returns `202` then reaches a terminal state.
 
-### Unit 8 — Backend documentation and completion audit
+### Unit 7B — Structured human-in-the-loop interaction
 
 **Status:** planned.
+
+Deliverables:
+
+- typed interaction requests for choices, custom input, field-specific inputs,
+  files, and confirmations;
+- a persisted `needs_input` state linked to a run and workflow checkpoint;
+- an answer endpoint with idempotency and validation;
+- resume from the necessary stage without repeating unrelated model calls;
+- audit-safe question and answer metadata without logging private source text.
+
+Tests:
+
+- missing required fact pauses with one focused question;
+- suggested choices still allow custom input;
+- field requests select the correct control and validation rules;
+- conflicting files require confirmation;
+- repeated or stale answers are handled deterministically;
+- resumed runs preserve prior artifacts and do not duplicate completed stages.
+
+### Unit 8 — Backend documentation and completion audit
+
+**Status:** in progress; core design and API documents exist, while the final
+completion audit, runbook, and evaluation guide remain planned.
 
 Deliverables:
 
@@ -220,7 +246,7 @@ pnpm check:ci
 - frontend and open-source Agent UI selection;
 - authentication and multi-user tenancy;
 - production database and encrypted object storage;
-- raw PDF/DOCX profile ingestion;
+- production-grade OCR for image-only PDFs;
 - resumable human-in-the-loop answers;
 - automated web browsing or job application;
 - PDF compilation sandbox and page-count optimization;
