@@ -43,6 +43,8 @@ type HtmlTypography = {
 type HtmlAdvanced = {
   /** Whether to show icons for links and profiles. */
   showIcons?: boolean
+  /** Whether to show proficiency levels next to skills. */
+  showSkillLevels?: boolean
   /** Custom title for the HTML document. */
   title?: string
   /** Custom footer for the HTML document. */

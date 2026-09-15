@@ -74,6 +74,11 @@ export class HtmlRenderer extends Renderer {
     return layout?.advanced?.showIcons ?? true
   }
 
+  private get showSkillLevels(): boolean {
+    const layout = this.resume.layouts?.[this.layoutIndex] as HtmlLayout
+    return layout?.advanced?.showSkillLevels ?? true
+  }
+
   /**
    * Get the CSS styles for the HTML document.
    *
@@ -549,7 +554,7 @@ ${this.getStyles()}
         [
           '<div class="resume-skill-item">',
           `<div class="resume-skill-name">${name}${showIfNotEmpty(
-            level,
+            this.showSkillLevels ? level : '',
             `<span class="resume-skill-level">${colon}${level}</span>`
           )}</div>`,
           showIfNotEmpty(

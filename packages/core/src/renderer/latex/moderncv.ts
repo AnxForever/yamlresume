@@ -489,6 +489,8 @@ ${languages
       },
       locale,
     } = this.resume
+    const layout = this.resume.layouts?.[this.layoutIndex] as LatexLayout
+    const showSkillLevels = layout?.advanced?.showSkillLevels ?? true
 
     const {
       punctuations: { colon },
@@ -504,7 +506,7 @@ ${languages
 ${skills
   .map(
     ({ name, computed: { level, keywords } }) =>
-      `\\cvline{${name}}{${level}${showIfNotEmpty(
+      `\\cvline{${name}}{${showSkillLevels ? level : ''}${showIfNotEmpty(
         keywords,
         ` \\hfill \\textbf{${terms.keywords}}${colon}${keywords}`
       )}}`

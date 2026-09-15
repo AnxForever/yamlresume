@@ -41,9 +41,14 @@ export const LATEX_TEMPLATE_LABELS: Record<LatexTemplate, string> = {
   'moderncv-banking': '现代简约',
   'moderncv-casual': 'ModernCV Casual',
   'moderncv-classic': 'ModernCV Classic',
+  deedy: 'Deedy 双栏',
 }
 
-export const LATEX_TEMPLATES: LatexTemplate[] = ['jake', 'moderncv-banking']
+export const LATEX_TEMPLATES: LatexTemplate[] = [
+  'jake',
+  'moderncv-banking',
+  'deedy',
+]
 
 export const HTML_TEMPLATES: HtmlTemplate[] = ['calm', 'vscode']
 
@@ -211,10 +216,10 @@ export const DEFAULT_FORM_RESUME: FormResume = {
     phone: '15189096519',
     url: 'https://anxforever.cn',
     summary: [
-      '- 长期使用 Claude Code、Cursor、OpenAI Codex 等 AI 编程工具进行日常开发，熟悉提示词工程与 AI 辅助开发流程',
-      '- 具备 Next.js + React + TypeScript 全栈开发能力，独立完成多个项目从零到部署上线',
-      '- 主导开源项目 StyleKit（GitHub 100+ Stars），涵盖 AI 友好设计体系与 IDE 规则导出',
-      '- 注重代码质量与工程规范，善于将需求拆解为可落地的任务并推进交付',
+      '- 熟练使用 Claude Code、Cursor、OpenAI Codex 等 AI 编程工具进行 Vibe Coding，擅长把模糊想法拆解成可执行任务并快速完成原型',
+      '- 能够独立完成从需求分析、技术方案、界面与交互实现，到调试、测试和部署上线的完整开发闭环',
+      '- 具备 Next.js + React + TypeScript + Python / FastAPI 全栈开发能力，持续探索 AI 应用、Agent 工作流与开发者工具',
+      '- 维护开源项目 StyleKit（GitHub 300+ Stars），将 AI 工具融入设计系统与日常开发流程',
     ].join('\n'),
   },
   location: {
@@ -240,38 +245,27 @@ export const DEFAULT_FORM_RESUME: FormResume = {
       startDate: '2022-09',
       endDate: '2026-07',
       score: '',
-      courses: '深度学习, 机器学习, 大数据分析',
-      summary: ['- 全国大学生数字建模大赛省二等奖', '- CET-4'].join('\n'),
+      courses: '',
+      summary: [
+        '- 华清普智黑客松一等奖',
+        '- 全国大学生数字建模大赛省二等奖',
+      ].join('\n'),
     },
   ],
   work: [],
   projects: [
     {
       id: 'project-stylekit',
-      name: 'StyleKit - AI 友好的 Web 设计风格库平台',
-      description: '开源设计风格工具集，GitHub 100+ Stars',
+      name: 'StyleKit - AI 友好的 Web 设计系统',
+      description: '开源 AI 友好设计系统，GitHub 300+ Stars',
       url: 'https://stylekit.top',
       startDate: '2025-01',
       endDate: '',
-      keywords: 'Next.js, React, TypeScript, Supabase, AI Rules',
+      keywords: 'Next.js, React, TypeScript, Tailwind CSS, Supabase, CLI, MCP',
       summary: [
-        '- 基于 Next.js 16 + React 19 + TypeScript + Tailwind CSS 4 构建全栈应用，收录 130+ 种设计风格，已开源部署上线',
-        '- 实现 Prompt Builder、IDE 规则导出（.cursorrules / claude-rules）、风格验证 Linter 等 AI-Native 能力',
-        '- 设计风格分类体系，支持风格变体、标签筛选，实现 Louvain 社区算法驱动的风格推荐',
-      ].join('\n'),
-    },
-    {
-      id: 'project-stylekit-agent',
-      name: 'StyleKit Agent - 对话式 AI 页面规划助手',
-      description: '将页面需求转化为可粘贴 AI 编码 Prompt 的 Planning Agent',
-      url: 'https://stylekit.top/agent',
-      startDate: '2026-02',
-      endDate: '',
-      keywords: 'Agent, LLM, Planning, Next.js',
-      summary: [
-        '- 基于多槽位规划器架构，通过结构化对话逐步填充页面目的、受众、风格、布局、组件与约束等字段',
-        '- 对接 StyleKit 130+ 风格库与场景映射规则，自动推荐兼容风格并生成含 Tailwind tokens 与硬约束的可粘贴 AI 编码 Prompt',
-        '- 基于 Next.js App Router 实现会话持久化，可与 Cursor / v0 / Claude 等 AI 编码工具协作',
+        '- 基于 Next.js 16 + React 19 + TypeScript + Tailwind CSS 4 构建全栈平台，收录 146 种视觉与布局风格，提供实时 Showcase、组件配方与设计 Tokens',
+        '- 构建 AI-Native 分发体系，支持 Cursor / Claude Code / Windsurf IDE Rules、shadcn 主题与 Agent Skill 导出',
+        '- 开发离线 CLI 与 MCP Server，支持在 Claude Code、Cursor、Windsurf 中搜索风格、读取 Tokens / 组件配方并生成安装命令',
       ].join('\n'),
     },
     {
@@ -289,43 +283,26 @@ export const DEFAULT_FORM_RESUME: FormResume = {
         '- 基于 FastAPI + Next.js 构建端到端 Demo，模型与 70K 中文数据集已发布至 Hugging Face',
       ].join('\n'),
     },
-    {
-      id: 'project-blog',
-      name: '个人博客',
-      description: '基于 Next.js 的技术博客站点',
-      url: 'https://anxforever.cn',
-      startDate: '2024-09',
-      endDate: '',
-      keywords: 'Next.js, React, Vercel',
-      summary: [
-        '- 基于开源项目二次开发，Next.js + React + TypeScript 技术栈，自定义设计系统，支持深色模式与响应式布局',
-      ].join('\n'),
-    },
   ],
   skills: [
     {
-      id: 'skill-frontend',
-      name: '前端开发',
+      id: 'skill-vibe-coding',
+      name: 'Vibe Coding 与 AI 工具',
       level: 'Intermediate',
-      keywords: 'Next.js, React, TypeScript, Tailwind CSS, Framer Motion',
+      keywords:
+        'Claude Code, Cursor, OpenAI Codex, Prompt Engineering, AI-assisted Development, Git',
     },
     {
-      id: 'skill-ai',
-      name: 'AI 工具与工程',
+      id: 'skill-fullstack',
+      name: 'AI 全栈开发',
       level: 'Intermediate',
-      keywords: 'Claude Code, Cursor, OpenAI Codex, Prompt Engineering',
+      keywords: 'Next.js, React, TypeScript, Tailwind CSS, Python, FastAPI',
     },
     {
-      id: 'skill-backend',
-      name: '后端与部署',
-      level: 'Beginner',
-      keywords: 'FastAPI, Supabase, PostgreSQL, Vercel, Git',
-    },
-    {
-      id: 'skill-testing',
-      name: '测试',
-      level: 'Beginner',
-      keywords: 'Jest, Playwright',
+      id: 'skill-ml',
+      name: '机器学习实践',
+      level: 'Intermediate',
+      keywords: 'PyTorch, BERT, Hugging Face, NLP, Model Evaluation',
     },
   ],
 }
@@ -505,6 +482,12 @@ function buildLatexResume(form: FormResume): Resume {
     ...baseLayout,
     engine: 'latex' as const,
     template: form.template,
+    advanced: {
+      ...(((baseLayout as Record<string, unknown>).advanced as
+        | Record<string, unknown>
+        | undefined) ?? {}),
+      showSkillLevels: false,
+    },
     typography: {
       ...baseTypography,
       fontSize: form.fontSize,
@@ -567,6 +550,7 @@ export function buildHtmlResume(form: FormResume): Resume {
         },
         advanced: {
           showIcons: true,
+          showSkillLevels: false,
           title: `${resume.content.basics.name} Resume`,
           footer: '',
         },

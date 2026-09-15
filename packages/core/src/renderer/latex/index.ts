@@ -23,6 +23,7 @@
  */
 
 export { LatexRenderer } from './base'
+export { DeedyRenderer } from './deedy'
 export { JakeRenderer } from './jake'
 export {
   ModerncvBankingRenderer,

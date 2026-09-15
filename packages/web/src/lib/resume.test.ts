@@ -40,8 +40,12 @@ describe('resume form mapping', () => {
 
     expect(resume.content.basics.name).toBe(DEFAULT_FORM_RESUME.basics.name)
     expect(resume.content.education).toHaveLength(1)
-    expect(resume.content.projects).toHaveLength(4)
-    expect(resume.content.skills).toHaveLength(4)
+    expect(resume.content.projects).toHaveLength(
+      DEFAULT_FORM_RESUME.projects.length
+    )
+    expect(resume.content.skills).toHaveLength(
+      DEFAULT_FORM_RESUME.skills.length
+    )
     expect(resume.layouts?.[0]?.engine).toBe('latex')
     expect(
       resume.layouts?.[0]?.engine === 'latex'

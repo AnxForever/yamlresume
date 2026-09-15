@@ -63,6 +63,8 @@ type LatexAdvanced = {
   }
   /** Whether to show icons for links and profiles. */
   showIcons?: boolean
+  /** Whether to show proficiency levels next to skills. */
+  showSkillLevels?: boolean
 }
 
 /**

@@ -27,6 +27,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { Resume } from '@/models'
 import { collectAllKeys, removeKeysFromObject } from '@/utils'
 import { getFixture, getRandomSections, sections } from '../test-utils'
+import { DeedyRenderer } from './deedy'
 import { JakeRenderer } from './jake'
 import {
   ModerncvBankingRenderer,
@@ -43,6 +44,7 @@ describe('smoke test for all renderers', () => {
     ModerncvBankingRenderer,
     ModerncvClassicRenderer,
     ModerncvCasualRenderer,
+    DeedyRenderer,
   ]
 
   function expectValidLaTeXDocument(result: string) {

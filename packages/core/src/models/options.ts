@@ -81,6 +81,7 @@ export const LATEX_TEMPLATE_OPTIONS = [
   'moderncv-banking',
   'moderncv-casual',
   'moderncv-classic',
+  'deedy',
 ] as const
 
 /**

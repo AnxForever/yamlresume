@@ -2602,7 +2602,8 @@
                           "jake",
                           "moderncv-banking",
                           "moderncv-casual",
-                          "moderncv-classic"
+                          "moderncv-classic",
+                          "deedy"
                         ],
                         "title": "[optional] Latex template option",
                         "description": "A predefined option from the available LaTeX template choices or `null`."

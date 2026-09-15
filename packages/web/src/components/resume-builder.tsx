@@ -197,6 +197,10 @@ const TEMPLATE_DETAILS: Record<
     description: '传统履历样式，适合学术、科研、竞赛经历较多的场景。',
     fit: '更强调履历完整',
   },
+  deedy: {
+    description: '紧凑双栏布局，适合技能与项目经历都较丰富的技术岗。',
+    fit: '更适合高信息密度简历',
+  },
 }
 
 function cx(...parts: Array<string | false | null | undefined>): string {
@@ -2331,7 +2335,6 @@ function SkillsForm({
           key={item.id}
           index={index + 1}
           title={item.name}
-          subtitle={LEVEL_OPTIONS.find((o) => o.value === item.level)?.label}
           isOpen={openCard === item.id}
           onToggle={() => onToggle(item.id)}
           moveUpLabel="上移技能"

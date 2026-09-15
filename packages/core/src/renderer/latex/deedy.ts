@@ -38,29 +38,31 @@ import { LatexRenderer } from './base'
 import { normalizeUnit } from './preamble'
 
 /**
- * Renderer for Jake's Resume template.
+ * Renderer for the Deedy Resume template.
  *
- * This template is based on the popular "Jake's Resume" LaTeX template
- * originally created by Jake Gutierrez and widely used on Overleaf.
+ * This template is inspired by the popular "Deedy Resume" originally created
+ * by Debarghya Das, a classic two-column design widely used on Overleaf.
  *
- * It uses the `article` document class with custom commands for resume
- * formatting, producing a clean, ATS-friendly layout with:
- * - Centered header with contact info separated by `$|$`
- * - Section headings with `\titlerule` dividers
- * - `tabular*` based subheadings for aligned date ranges
- * - Compact itemize lists for bullet points
+ * It uses the `article` document class together with the `paracol` package to
+ * produce a narrow-left / wide-right two-column layout:
+ * - A full-width header with a large name, headline and contact line.
+ * - A narrow left column (~33%) for secondary information such as education,
+ *   skills, languages, certificates and interests.
+ * - A wide right column for primary information such as the summary, work,
+ *   projects, awards, publications, volunteer and references.
+ * - Uppercase, accent-colored section headings with a colored `\titlerule`.
  *
- * @see {@link https://www.overleaf.com/latex/templates/jakes-resume/syzfjbzwjncs}
- * @see {@link https://github.com/jakeryang/resume}
+ * @see {@link https://www.overleaf.com/latex/templates/deedy-resume-reversed/bjryvfsjdyxz}
+ * @see {@link https://github.com/deedy/Deedy-Resume}
  */
-class JakeRenderer extends LatexRenderer {
-  // the left and right padding for the section content
-  private padding: string
+class DeedyRenderer extends LatexRenderer {
   // separator for contact info
   private separator: string
+  // ratio of the narrow left column
+  private columnRatio: string
 
   /**
-   * Constructor for the JakeRenderer class.
+   * Constructor for the DeedyRenderer class.
    *
    * @param resume - The resume object
    * @param layoutIndex - The index of the selected layout to use.
@@ -77,15 +79,15 @@ class JakeRenderer extends LatexRenderer {
       layoutIndex
     )
 
-    this.padding = '6pt'
     this.separator = ' $|$ '
+    this.columnRatio = '0.33'
   }
 
   /**
    * Render the document class configuration.
    *
    * Uses the `article` document class, respecting user-configured paper size
-   * and font size, with Jake's defaults of letterpaper and 11pt.
+   * and font size, with a default of 11pt.
    */
   private renderDocumentClassConfig(): string {
     const layout = this.resume.layouts?.[this.layoutIndex]
@@ -123,24 +125,25 @@ class JakeRenderer extends LatexRenderer {
   }
 
   /**
-   * Render the LaTeX packages required by Jake's Resume template.
+   * Render the LaTeX packages required by the Deedy template.
    */
   private renderPackages(): string {
     return joinNonEmptyString(
       [
-        '\\usepackage{changepage}',
-        '\\usepackage[usenames,dvipsnames]{color}',
+        '\\usepackage{paracol}',
+        '\\usepackage{titlesec}',
+        '\\usepackage[usenames,dvipsnames]{xcolor}',
         '\\usepackage{enumitem}',
+        '\\usepackage{changepage}',
         this.renderFontawesome(),
         '\\usepackage[hidelinks]{hyperref}',
-        '\\usepackage{titlesec}',
       ],
       '\n'
     )
   }
 
   /**
-   * Render the page layout/margin configuration.
+   * Render the page numbers configuration.
    */
   private renderPageNumbersConfig(): string {
     const layout = this.resume.layouts?.[this.layoutIndex]
@@ -154,29 +157,48 @@ class JakeRenderer extends LatexRenderer {
   }
 
   /**
-   * Render the section formatting configuration.
+   * Render the accent color used for section headings.
    */
-  private renderSectionFormatting(): string {
-    return `% global itemize spacing
-\\setlist[itemize]{nosep}
-\\setlength{\\parindent}{0pt}
-
-% Sections formatting
-\\titleformat{\\section}{
-  \\vspace{-4pt}\\scshape\\raggedright\\large
-}{}{0em}{}[\\color{black}\\titlerule \\vspace{-5pt}]`
+  private renderColorConfig(): string {
+    return `% Deedy accent color
+\\definecolor{deedyprimary}{HTML}{2B6CB0}`
   }
 
   /**
-   * Render the custom resume commands used by Jake's template.
+   * Render the section formatting configuration.
+   *
+   * Produces the Deedy signature: uppercase, accent-colored section headings
+   * with a colored titlerule below them. The format is kept compact so it
+   * behaves well inside the narrow left column managed by paracol.
+   */
+  private renderSectionFormatting(): string {
+    return `% global itemize spacing
+\\setlist[itemize]{nosep, leftmargin=*}
+\\setlength{\\parindent}{0pt}
+
+% Sections formatting - uppercase, accent-colored with a colored titlerule
+\\titleformat{\\section}{
+  \\vspace{-4pt}\\color{deedyprimary}\\scshape\\raggedright\\large
+}{}{0em}{}[{\\color{deedyprimary}\\titlerule}\\vspace{-4pt}]
+\\titlespacing*{\\section}{0pt}{8pt}{4pt}`
+  }
+
+  /**
+   * Render the custom resume commands used by the Deedy template.
    */
   private renderCustomCommands(): string {
     return `% Custom commands
-\\newcommand{\\resumeSubheading}[4]{
-  \\begin{tabular*}{\\textwidth}[t]{l@{\\extracolsep{\\fill}}r}
-    \\textbf{#1} & #2 \\\\
-    \\textit{#3} & \\textit{#4} \\\\
-  \\end{tabular*}
+% Wide-column entry: bold title with right-aligned date, then italic
+% subtitle on the next line.
+\\newcommand{\\resumeEntry}[4]{
+  \\noindent\\textbf{#1}\\hfill{#2}\\\\
+  \\textit{#3}\\hfill{#4}\\\\[2pt]
+}
+% Narrow-column entry: stacked institution, detail and date lines.
+\\newcommand{\\resumeStack}[3]{
+  \\noindent\\textbf{#1}\\\\
+  #2\\\\
+  #3\\\\[4pt]
 }
 
 % Auto-underline all links
@@ -240,6 +262,9 @@ class JakeRenderer extends LatexRenderer {
       // PDF metadata
       this.renderPdfMetadata(),
 
+      // accent color
+      this.renderColorConfig(),
+
       // section formatting and custom commands
       this.renderSectionFormatting(),
       this.renderCustomCommands(),
@@ -247,7 +272,11 @@ class JakeRenderer extends LatexRenderer {
   }
 
   /**
-   * Render the basics section (centered header).
+   * Render the basics section (full-width, left-aligned header).
+   *
+   * Deedy style uses a large name followed by a headline. The contact line
+   * (location, phone, email, url) is appended right after, separated by the
+   * configured separator.
    *
    * @returns The LaTeX code for the heading
    */
@@ -262,28 +291,31 @@ class JakeRenderer extends LatexRenderer {
       return ''
     }
 
+    const contactLine = joinNonEmptyString(
+      [
+        this.renderLocation(),
+        showIfNotEmpty(phone, this.iconedString('\\faPhoneVolume', phone)),
+        showIfNotEmpty(
+          email,
+          this.iconedString(
+            '\\faEnvelope[regular]',
+            `\\href{mailto:${email}}{${email}}`
+          )
+        ),
+        showIfNotEmpty(url, this.iconedString('\\faGlobe', `\\url{${url}}`)),
+      ],
+      this.separator
+    )
+
     return joinNonEmptyString([
       `\\textbf{\\Huge \\scshape ${name}}\\vspace{2pt}`,
-      `{\\Large ${headline}}`,
-      joinNonEmptyString(
-        [
-          showIfNotEmpty(phone, this.iconedString('\\faPhoneVolume', phone)),
-          showIfNotEmpty(
-            email,
-            this.iconedString(
-              '\\faEnvelope[regular]',
-              `\\href{mailto:${email}}{${email}}`
-            )
-          ),
-          showIfNotEmpty(url, this.iconedString('\\faGlobe', `\\url{${url}}`)),
-        ],
-        this.separator
-      ),
+      showIfNotEmpty(headline, `{\\Large ${headline}}\\vspace{2pt}`),
+      showIfNotEmpty(contactLine, contactLine),
     ])
   }
 
   /**
-   * Render the location (full address) as the first line of contact info.
+   * Render the location (full address) for use in the contact line.
    *
    * @returns The LaTeX code for the location line
    */
@@ -296,13 +328,16 @@ class JakeRenderer extends LatexRenderer {
       },
     } = this.resume
 
-    return showIfNotEmpty(fullAddress, `${fullAddress}`)
+    return showIfNotEmpty(
+      fullAddress,
+      this.iconedString('\\faMapMarker', `${fullAddress}`)
+    )
   }
 
   /**
-   * Render homepage and profiles as the third line of contact info.
+   * Render homepage and profiles as a line below the contact info.
    *
-   * @returns The LaTeX code for the homepage/profiles line
+   * @returns The LaTeX code for the profiles line
    */
   renderProfiles(): string {
     const {
@@ -328,6 +363,8 @@ class JakeRenderer extends LatexRenderer {
   /**
    * Render the summary section.
    *
+   * In the Deedy layout this sits at the top of the wide right column.
+   *
    * @returns The LaTeX code for the summary section
    */
   renderSummary(): string {
@@ -344,14 +381,15 @@ class JakeRenderer extends LatexRenderer {
       summary,
       `\\section{${sectionNames.basics}}
 
-\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${summary}
-\\end{adjustwidth}`
+${summary}`
     )
   }
 
   /**
-   * Render the education section.
+   * Render the education section (narrow left column).
+   *
+   * Uses the compact `\resumeStack` command: institution, degree/area/score,
+   * then the date range, each on its own line.
    *
    * @returns The LaTeX code for the education section
    */
@@ -383,20 +421,22 @@ ${education
     }) =>
       joinNonEmptyString(
         [
-          `\\resumeSubheading
-{${institution}}{${showIfNotEmpty(url, `\\href{${url}}{${url}}`)}}
-{${degreeAreaAndScore}}{${showIfNotEmpty(startDate, dateRange)}}`,
+          `\\resumeStack
+{${showIfNotEmpty(url, `\\href{${url}}{${institution}}`) || institution}}
+{${degreeAreaAndScore}}
+{${showIfNotEmpty(startDate, dateRange)}}`,
           showIf(
             !isEmptyValue(summary) || !isEmptyValue(courses),
-            `\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${joinNonEmptyString(
-  [
-    showIfNotEmpty(summary, `${summary}`),
-    showIfNotEmpty(courses, `\\textbf{${terms.courses}}${colon}${courses}`),
-  ],
-  '\n'
-)}
-\\end{adjustwidth}`
+            joinNonEmptyString(
+              [
+                showIfNotEmpty(summary, `${summary}`),
+                showIfNotEmpty(
+                  courses,
+                  `\\textbf{${terms.courses}}${colon}${courses}`
+                ),
+              ],
+              '\n'
+            )
           ),
         ],
         '\n'
@@ -406,7 +446,143 @@ ${joinNonEmptyString(
   }
 
   /**
-   * Render the work section.
+   * Render the skills section (narrow left column).
+   *
+   * Uses a compact `name: keywords` format.
+   *
+   * @returns The LaTeX code for the skills section
+   */
+  renderSkills(): string {
+    const {
+      content: {
+        computed: { sectionNames },
+        skills,
+      },
+      locale,
+    } = this.resume
+
+    if (isEmptyValue(skills)) {
+      return ''
+    }
+
+    const {
+      punctuations: { colon },
+    } = getTemplateTranslations(locale?.language)
+
+    return `\\section{${sectionNames.skills}}
+${skills
+  .map(
+    ({ name, computed: { level, keywords } }) =>
+      `\\textbf{${name}}${showIfNotEmpty(
+        level,
+        `${colon}${level}`
+      )}${showIfNotEmpty(keywords, `\\\\${keywords}`)}`
+  )
+  .join('\n\n')}`
+  }
+
+  /**
+   * Render the languages section (narrow left column).
+   *
+   * Uses a compact `language: fluency` format.
+   *
+   * @returns The LaTeX code for the languages section
+   */
+  renderLanguages(): string {
+    const {
+      content: {
+        computed: { sectionNames },
+        languages,
+      },
+      locale,
+    } = this.resume
+
+    if (isEmptyValue(languages)) {
+      return ''
+    }
+
+    const {
+      punctuations: { colon },
+      terms,
+    } = getTemplateTranslations(locale?.language)
+
+    return `\\section{${sectionNames.languages}}
+${languages
+  .map(
+    ({ computed: { language, fluency, keywords } }) =>
+      `\\textbf{${language}}${showIfNotEmpty(
+        fluency,
+        `${colon}${fluency}`
+      )}${showIfNotEmpty(
+        keywords,
+        `\\\\\\textbf{${terms.keywords}}${colon}${keywords}`
+      )}`
+  )
+  .join('\n\n')}`
+  }
+
+  /**
+   * Render the certificates section (narrow left column).
+   *
+   * @returns The LaTeX code for the certificates section
+   */
+  renderCertificates(): string {
+    const {
+      content: {
+        computed: { sectionNames },
+        certificates,
+      },
+    } = this.resume
+
+    if (isEmptyValue(certificates)) {
+      return ''
+    }
+
+    return `\\section{${sectionNames.certificates}}
+${certificates
+  .map(
+    ({ computed: { date }, issuer, name, url }) =>
+      `\\resumeStack
+{${showIfNotEmpty(url, `\\href{${url}}{${name}}`) || name}}
+{${issuer}}
+{${date}}`
+  )
+  .join('\n\n')}`
+  }
+
+  /**
+   * Render the interests section (narrow left column).
+   *
+   * @returns The LaTeX code for the interests section
+   */
+  renderInterests(): string {
+    const {
+      content: { interests, computed },
+      locale,
+    } = this.resume
+
+    if (isEmptyValue(interests)) {
+      return ''
+    }
+
+    const {
+      punctuations: { colon },
+    } = getTemplateTranslations(locale?.language)
+
+    return `\\section{${computed.sectionNames.interests}}
+${interests
+  .map(
+    ({ name, computed: { keywords } }) =>
+      `\\textbf{${name}}${showIfNotEmpty(keywords, `${colon}${keywords}`)}`
+  )
+  .join('\n\n')}`
+  }
+
+  /**
+   * Render the work section (wide right column).
+   *
+   * Uses the `\resumeEntry` command: bold position with a right-aligned date
+   * range, italic company with optional URL, then the summary and keywords.
    *
    * @returns The LaTeX code for the work section
    */
@@ -433,265 +609,34 @@ ${work
       name,
       position,
       url,
-    }) => {
-      return joinNonEmptyString(
+    }) =>
+      joinNonEmptyString(
         [
-          `\\resumeSubheading
+          `\\resumeEntry
 {${position}}{${showIfNotEmpty(startDate, dateRange)}}
 {${name}}{${showIfNotEmpty(url, `\\href{${url}}{${url}}`)}}`,
           showIf(
             !isEmptyValue(summary) || !isEmptyValue(keywords),
-            `\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${joinNonEmptyString(
-  [
-    showIfNotEmpty(summary, `${summary}`),
-    showIfNotEmpty(keywords, `\\textbf{${terms.keywords}}${colon}${keywords}`),
-  ],
-  '\n'
-)}
-\\end{adjustwidth}`
+            joinNonEmptyString(
+              [
+                showIfNotEmpty(summary, `${summary}`),
+                showIfNotEmpty(
+                  keywords,
+                  `\\textbf{${terms.keywords}}${colon}${keywords}`
+                ),
+              ],
+              '\n'
+            )
           ),
         ],
         '\n'
       )
-    }
   )
   .join('\n\n')}`
   }
 
   /**
-   * Render the languages section.
-   *
-   * Uses Jake's Technical Skills pattern with label: value format.
-   *
-   * @returns The LaTeX code for the languages section
-   */
-  renderLanguages(): string {
-    const {
-      content: {
-        computed: { sectionNames },
-        languages,
-      },
-      locale,
-    } = this.resume
-
-    if (isEmptyValue(languages)) {
-      return ''
-    }
-
-    const {
-      punctuations: { colon },
-      terms,
-    } = getTemplateTranslations(locale?.language)
-
-    return `\\section{${sectionNames.languages}}
-\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${languages
-  .map(
-    ({ computed: { language, fluency, keywords } }) =>
-      `\\textbf{${language}}${showIfNotEmpty(
-        fluency,
-        `${colon}${fluency}`
-      )}${showIfNotEmpty(
-        keywords,
-        ` \\hfill \\textbf{${terms.keywords}}${colon}${keywords}`
-      )}`
-  )
-  .join('\n\n')}
-\\end{adjustwidth}`
-  }
-
-  /**
-   * Render the skills section.
-   *
-   * Uses Jake's Technical Skills pattern with label: keywords format.
-   *
-   * @returns The LaTeX code for the skills section
-   */
-  renderSkills(): string {
-    const {
-      content: {
-        computed: { sectionNames },
-        skills,
-      },
-      locale,
-    } = this.resume
-    const layout = this.resume.layouts?.[this.layoutIndex] as LatexLayout
-    const showSkillLevels = layout?.advanced?.showSkillLevels ?? true
-
-    if (isEmptyValue(skills)) {
-      return ''
-    }
-
-    const {
-      punctuations: { colon },
-      terms,
-    } = getTemplateTranslations(locale?.language)
-
-    return `\\section{${sectionNames.skills}}
-\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${skills
-  .map(
-    ({ name, computed: { level, keywords } }) =>
-      `\\textbf{${name}}${showIfNotEmpty(
-        showSkillLevels ? level : '',
-        `${colon}${level}`
-      )}${showIfNotEmpty(
-        keywords,
-        ` \\hfill \\textbf{${terms.keywords}}${colon}${keywords}`
-      )}`
-  )
-  .join('\n\n')}
-\\end{adjustwidth}`
-  }
-
-  /**
-   * Render the awards section.
-   *
-   * @returns The LaTeX code for the awards section
-   */
-  renderAwards(): string {
-    const {
-      content: {
-        computed: { sectionNames },
-        awards,
-      },
-    } = this.resume
-
-    if (isEmptyValue(awards)) {
-      return ''
-    }
-
-    return `\\section{${sectionNames.awards}}
-${awards
-  .map(({ computed: { date, summary }, awarder, title }) =>
-    joinNonEmptyString(
-      [
-        `\\resumeSubheading
-{${title}}{${date}}
-{${awarder}}{}`,
-        showIfNotEmpty(
-          summary,
-          `\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${summary}
-\\end{adjustwidth}`
-        ),
-      ],
-      '\n'
-    )
-  )
-  .join('\n\n')}`
-  }
-
-  /**
-   * Render the certificates section.
-   *
-   * @returns The LaTeX code for the certificates section
-   */
-  renderCertificates(): string {
-    const {
-      content: {
-        computed: { sectionNames },
-        certificates,
-      },
-    } = this.resume
-
-    if (isEmptyValue(certificates)) {
-      return ''
-    }
-
-    return `\\section{${sectionNames.certificates}}
-${certificates
-  .map(
-    ({ computed: { date }, issuer, name, url }) =>
-      `\\resumeSubheading
-{${name}}{${date}}
-{${issuer}}{${showIfNotEmpty(url, `\\href{${url}}{${url}}`)}}`
-  )
-  .join('\n\n')}`
-  }
-
-  /**
-   * Render the publications section.
-   *
-   * @returns The LaTeX code for the publications section
-   */
-  renderPublications(): string {
-    const {
-      content: {
-        computed: { sectionNames },
-        publications,
-      },
-    } = this.resume
-
-    if (isEmptyValue(publications)) {
-      return ''
-    }
-
-    return `\\section{${sectionNames.publications}}
-${publications
-  .map(({ computed: { releaseDate, summary }, name, publisher, url }) =>
-    joinNonEmptyString(
-      [
-        `\\resumeSubheading
-{${name}}{${releaseDate}}
-{${publisher}}{${showIfNotEmpty(url, `\\href{${url}}{${url}}`)}}`,
-        showIfNotEmpty(
-          summary,
-          `\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${summary}
-\\end{adjustwidth}`
-        ),
-      ],
-      '\n'
-    )
-  )
-  .join('\n\n')}`
-  }
-
-  /**
-   * Render the references section.
-   *
-   * @returns The LaTeX code for the references section
-   */
-  renderReferences(): string {
-    const {
-      content: {
-        computed: { sectionNames },
-        references,
-      },
-    } = this.resume
-
-    if (isEmptyValue(references)) {
-      return ''
-    }
-
-    return `\\section{${sectionNames.references}}
-${references
-  .map(({ email, relationship, name, phone, computed: { summary } }) =>
-    joinNonEmptyString(
-      [
-        `\\resumeSubheading
-{${name}}{${relationship}}
-{${email}}{${phone}}`,
-        showIfNotEmpty(
-          summary,
-          `\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${summary}
-\\end{adjustwidth}`
-        ),
-      ],
-      '\n'
-    )
-  )
-  .join('\n\n')}`
-  }
-
-  /**
-   * Render the projects section.
-   *
-   * Uses the `\resumeSubheading` command for consistent layout with other
-   * sections like volunteer.
+   * Render the projects section (wide right column).
    *
    * @returns The LaTeX code for the projects section
    */
@@ -700,6 +645,7 @@ ${summary}
       content: { projects, computed },
       locale,
     } = this.resume
+
     const {
       punctuations: { colon },
       terms,
@@ -720,20 +666,21 @@ ${projects
     }) =>
       joinNonEmptyString(
         [
-          `\\resumeSubheading
+          `\\resumeEntry
 {${name}}{${showIfNotEmpty(startDate, dateRange)}}
 {${description}}{${showIfNotEmpty(url, `\\href{${url}}{${url}}`)}}`,
           showIf(
             !isEmptyValue(summary) || !isEmptyValue(keywords),
-            `\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${joinNonEmptyString(
-  [
-    showIfNotEmpty(summary, `${summary}`),
-    showIfNotEmpty(keywords, `\\textbf{${terms.keywords}}${colon}${keywords}`),
-  ],
-  '\n'
-)}
-\\end{adjustwidth}`
+            joinNonEmptyString(
+              [
+                showIfNotEmpty(summary, `${summary}`),
+                showIfNotEmpty(
+                  keywords,
+                  `\\textbf{${terms.keywords}}${colon}${keywords}`
+                ),
+              ],
+              '\n'
+            )
           ),
         ],
         '\n'
@@ -743,39 +690,73 @@ ${joinNonEmptyString(
   }
 
   /**
-   * Render the interests section.
+   * Render the awards section (wide right column).
    *
-   * Uses Jake's Technical Skills pattern.
-   *
-   * @returns The LaTeX code for the interests section
+   * @returns The LaTeX code for the awards section
    */
-  renderInterests(): string {
+  renderAwards(): string {
     const {
-      content: { interests, computed },
-      locale,
+      content: {
+        computed: { sectionNames },
+        awards,
+      },
     } = this.resume
 
-    if (isEmptyValue(interests)) {
+    if (isEmptyValue(awards)) {
       return ''
     }
 
-    const {
-      punctuations: { colon },
-    } = getTemplateTranslations(locale?.language)
-
-    return `\\section{${computed.sectionNames.interests}}
-\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${interests
-  .map(
-    ({ name, computed: { keywords } }) =>
-      `\\textbf{${name}}${showIfNotEmpty(keywords, `${colon}${keywords}`)}`
+    return `\\section{${sectionNames.awards}}
+${awards
+  .map(({ computed: { date, summary }, awarder, title }) =>
+    joinNonEmptyString(
+      [
+        `\\resumeEntry
+{${title}}{${date}}
+{${awarder}}{}`,
+        showIfNotEmpty(summary, `${summary}`),
+      ],
+      '\n'
+    )
   )
-  .join('\n\n')}
-\\end{adjustwidth}`
+  .join('\n\n')}`
   }
 
   /**
-   * Render the volunteer section.
+   * Render the publications section (wide right column).
+   *
+   * @returns The LaTeX code for the publications section
+   */
+  renderPublications(): string {
+    const {
+      content: {
+        computed: { sectionNames },
+        publications,
+      },
+    } = this.resume
+
+    if (isEmptyValue(publications)) {
+      return ''
+    }
+
+    return `\\section{${sectionNames.publications}}
+${publications
+  .map(({ computed: { releaseDate, summary }, name, publisher, url }) =>
+    joinNonEmptyString(
+      [
+        `\\resumeEntry
+{${name}}{${releaseDate}}
+{${publisher}}{${showIfNotEmpty(url, `\\href{${url}}{${url}}`)}}`,
+        showIfNotEmpty(summary, `${summary}`),
+      ],
+      '\n'
+    )
+  )
+  .join('\n\n')}`
+  }
+
+  /**
+   * Render the volunteer section (wide right column).
    *
    * @returns The LaTeX code for the volunteer section
    */
@@ -799,20 +780,96 @@ ${volunteer
     }) =>
       joinNonEmptyString(
         [
-          `\\resumeSubheading
+          `\\resumeEntry
 {${position}}{${showIfNotEmpty(startDate, dateRange)}}
 {${organization}}{${showIfNotEmpty(url, `\\href{${url}}{${url}}`)}}`,
-          showIfNotEmpty(
-            summary,
-            `\\begin{adjustwidth}{${this.padding}}{${this.padding}}
-${summary}
-\\end{adjustwidth}`
-          ),
+          showIfNotEmpty(summary, `${summary}`),
         ],
         '\n'
       )
   )
   .join('\n\n')}`
+  }
+
+  /**
+   * Render the references section (wide right column).
+   *
+   * @returns The LaTeX code for the references section
+   */
+  renderReferences(): string {
+    const {
+      content: {
+        computed: { sectionNames },
+        references,
+      },
+    } = this.resume
+
+    if (isEmptyValue(references)) {
+      return ''
+    }
+
+    return `\\section{${sectionNames.references}}
+${references
+  .map(({ email, relationship, name, phone, computed: { summary } }) =>
+    joinNonEmptyString(
+      [
+        `\\resumeEntry
+{${name}}{${relationship}}
+{${email}}{${phone}}`,
+        showIfNotEmpty(summary, `${summary}`),
+      ],
+      '\n'
+    )
+  )
+  .join('\n\n')}`
+  }
+
+  /**
+   * Render the contents of the narrow left column.
+   *
+   * Secondary information lives here: education, skills, languages,
+   * certificates and interests. Empty sections are filtered out so no empty
+   * column or stray heading is produced.
+   *
+   * @returns The LaTeX code for the left column
+   */
+  private renderLeftColumn(): string {
+    return joinNonEmptyString([
+      this.renderEducation(),
+      this.renderSkills(),
+      this.renderLanguages(),
+      this.renderCertificates(),
+      this.renderInterests(),
+    ])
+  }
+
+  /**
+   * Render the contents of the wide right column.
+   *
+   * Primary information lives here: summary, work, projects, awards,
+   * publications, volunteer and references. Empty sections are filtered out.
+   *
+   * @returns The LaTeX code for the right column
+   */
+  private renderRightColumn(): string {
+    return joinNonEmptyString([
+      this.renderSummary(),
+      this.renderWork(),
+      this.renderProjects(),
+      this.renderAwards(),
+      this.renderPublications(),
+      this.renderVolunteer(),
+      this.renderReferences(),
+    ])
+  }
+
+  /**
+   * Render the full-width header block (basics + profiles).
+   *
+   * @returns The LaTeX code for the header
+   */
+  private renderHeader(): string {
+    return joinNonEmptyString([this.renderBasics(), this.renderProfiles()])
   }
 
   /**
@@ -827,8 +884,9 @@ ${summary}
   /**
    * Generate the LaTeX code for the resume.
    *
-   * Assembles the preamble, header (basics + location + profiles in a
-   * centered block), and ordered sections into a complete LaTeX document.
+   * Assembles the preamble, a full-width header, and a two-column body driven
+   * by the `paracol` package: a narrow left column for secondary information
+   * and a wide right column for primary information.
    *
    * @returns The LaTeX code for the resume
    */
@@ -837,17 +895,22 @@ ${summary}
 
 \\begin{document}
 
-\\begin{center}
-${this.renderBasics()}
+${this.renderHeader()}
 
-${this.renderLocation()}
+\\bigskip
 
-${this.renderProfiles()}
-\\end{center}
+\\columnratio{${this.columnRatio}}
+\\begin{paracol}{2}
 
-${this.renderOrderedSections()}
+${this.renderLeftColumn()}
+
+\\switchcolumn
+
+${this.renderRightColumn()}
+
+\\end{paracol}
 \\end{document}`
   }
 }
 
-export { JakeRenderer }
+export { DeedyRenderer }

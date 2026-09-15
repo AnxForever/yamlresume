@@ -133,6 +133,12 @@ export function getLatexTemplateDetail(template: LatexTemplate) {
       name: 'ModernCV Classic',
       description: 'ModernCV template with classic style',
     },
+    deedy: {
+      engine: 'latex',
+      name: 'Deedy',
+      description:
+        'A compact two-column resume template inspired by Deedy Resume, with a narrow sidebar and a wide main column',
+    },
   }
 
   if (template in templateDetails) {

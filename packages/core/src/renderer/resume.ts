@@ -30,6 +30,7 @@ import type { Resume } from '@/models'
 import type { Renderer } from './base'
 import { HtmlRenderer } from './html'
 import {
+  DeedyRenderer,
   JakeRenderer,
   ModerncvBankingRenderer,
   ModerncvCasualRenderer,
@@ -42,6 +43,7 @@ const LATEX_RESUME_RENDERER_MAP = {
   'moderncv-banking': ModerncvBankingRenderer,
   'moderncv-classic': ModerncvClassicRenderer,
   'moderncv-casual': ModerncvCasualRenderer,
+  deedy: DeedyRenderer,
 }
 
 /**
