@@ -1,5 +1,7 @@
 # Resume Agent Backend
 
+> 本文只描述 Career Agent 的首个能力模块：针对 JD 的简历定制后端。它不是顶层 Career Agent，也不负责学习计划、岗位情报、资料研究或公司评估；这些能力将通过独立模块接入未来的 Career Agent Runtime。
+
 ## Goal
 
 Turn a job description and a source YAMLResume into a job-targeted resume that
