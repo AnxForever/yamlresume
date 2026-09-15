@@ -1,0 +1,589 @@
+openapi: 3.1.0
+info:
+  title: YAMLResume Agent API
+  version: 1.0.0
+  description: |
+    Backend API for evidence-grounded, job-tailored resume generation.
+    Every response carries a request ID. Binary artifacts are Base64 in the
+    synchronous MVP; production deployments should replace large inline
+    artifacts with short-lived object-storage URLs.
+servers:
+  - url: http://localhost:8787
+    description: Local development
+tags:
+  - name: System
+  - name: Resume Agent
+paths:
+  /healthz:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: Check that the HTTP process is available
+      responses:
+        '200':
+          description: Process is healthy
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Health'
+  /v1/capabilities:
+    get:
+      tags: [System]
+      operationId: getCapabilities
+      summary: Discover supported inputs, limits, styles, and output formats
+      responses:
+        '200':
+          description: Frontend capability descriptor
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Capabilities'
+  /v1/tailor-resume:
+    post:
+      tags: [Resume Agent]
+      operationId: tailorResume
+      summary: Generate grounded resume variants for a job description
+      description: |
+        Runs input extraction, optional candidate normalization, JD analysis,
+        evidence matching, drafting, deterministic validation, quality checks,
+        and multi-format rendering. Use JSON for API clients and multipart for
+        browser uploads. This synchronous endpoint is intended for the MVP;
+        a run-oriented asynchronous protocol is planned for long workflows.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TailorResumeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TailorResumeMultipartRequest'
+            encoding:
+              jobFiles:
+                contentType: application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, text/plain, text/markdown, image/png, image/jpeg, image/webp
+              candidateFiles:
+                contentType: application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, text/plain, text/markdown, image/png, image/jpeg, image/webp
+      responses:
+        '200':
+          description: Tailoring workflow completed; individual artifact failures are reported in the result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TailorResumeResult'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/AgentValidationFailed'
+        '502':
+          $ref: '#/components/responses/LlmRequestFailed'
+        '503':
+          $ref: '#/components/responses/LlmNotConfigured'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: Optional caller-provided correlation ID, truncated to 128 characters
+      schema:
+        type: string
+        maxLength: 128
+  responses:
+    InvalidRequest:
+      description: Request body, multipart form, file, or schema is invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    UnsupportedMediaType:
+      description: Content-Type is not application/json or multipart/form-data
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    AgentValidationFailed:
+      description: Candidate or generated resume failed deterministic validation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    LlmRequestFailed:
+      description: Model provider request failed or returned unusable output
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    LlmNotConfigured:
+      description: Server model credentials are missing or invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InternalError:
+      description: Unexpected server failure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    ApiMeta:
+      type: object
+      required: [apiVersion, requestId]
+      properties:
+        apiVersion:
+          type: string
+          const: v1
+        requestId:
+          type: string
+    SuccessEnvelope:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {}
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    ErrorDetail:
+      type: object
+      required: [message]
+      properties:
+        path:
+          type: string
+        message:
+          type: string
+    ErrorEnvelope:
+      type: object
+      required: [error, meta]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - invalid_request
+                - not_found
+                - agent_validation_failed
+                - llm_not_configured
+                - llm_request_failed
+                - structured_output_validation_failed
+                - agent_failed
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                $ref: '#/components/schemas/ErrorDetail'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+    Health:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          const: true
+    InputFile:
+      type: object
+      required: [filename]
+      properties:
+        id:
+          type: string
+          maxLength: 128
+        filename:
+          type: string
+          maxLength: 255
+        mediaType:
+          type: string
+          maxLength: 128
+        text:
+          type: string
+          maxLength: 1000000
+        contentBase64:
+          type: string
+          maxLength: 20000000
+      oneOf:
+        - required: [text]
+        - required: [contentBase64]
+    CandidateInput:
+      type: object
+      properties:
+        yaml:
+          type: string
+          maxLength: 500000
+        resume:
+          type: object
+          additionalProperties: true
+          description: YAMLResume-compatible object
+        files:
+          type: array
+          maxItems: 12
+          items:
+            $ref: '#/components/schemas/InputFile'
+      anyOf:
+        - required: [yaml]
+        - required: [resume]
+        - required: [files]
+    TailorPreferences:
+      type: object
+      properties:
+        language:
+          type: string
+          maxLength: 32
+        targetTitle:
+          type: string
+          maxLength: 200
+        maxPages:
+          type: integer
+          enum: [1, 2]
+        template:
+          type: string
+          enum: [jake, moderncv-banking, moderncv-casual, moderncv-classic, deedy]
+          deprecated: true
+          description: Legacy single-template preference; styles should be used by new clients
+        styles:
+          type: array
+          minItems: 1
+          maxItems: 5
+          default: [ats-compact]
+          items:
+            $ref: '#/components/schemas/StylePresetId'
+        formats:
+          type: array
+          minItems: 1
+          maxItems: 7
+          default: [yaml, json, markdown, html, latex]
+          items:
+            $ref: '#/components/schemas/OutputFormat'
+    TailorResumeRequest:
+      type: object
+      required: [candidate]
+      properties:
+        jobDescription:
+          type: string
+          minLength: 20
+          maxLength: 100000
+        jobFiles:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/InputFile'
+        candidate:
+          $ref: '#/components/schemas/CandidateInput'
+        preferences:
+          $ref: '#/components/schemas/TailorPreferences'
+      anyOf:
+        - required: [jobDescription]
+        - required: [jobFiles]
+    TailorResumeMultipartRequest:
+      type: object
+      properties:
+        jobDescription:
+          type: string
+          description: Optional direct JD text
+        candidate:
+          type: string
+          description: JSON string containing candidate.yaml or candidate.resume
+        preferences:
+          type: string
+          description: JSON string matching TailorPreferences
+        jobFiles:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            format: binary
+        candidateFiles:
+          type: array
+          maxItems: 12
+          items:
+            type: string
+            format: binary
+    StylePresetId:
+      type: string
+      enum:
+        - ats-compact
+        - modern-professional
+        - modern-classic
+        - modern-casual
+        - developer-two-column
+    OutputFormat:
+      type: string
+      enum: [yaml, json, markdown, html, latex, pdf, docx]
+    JobRequirement:
+      type: object
+      required: [id, text, keywords, importance, category]
+      properties:
+        id: { type: string }
+        text: { type: string }
+        keywords:
+          type: array
+          items: { type: string }
+        importance:
+          type: string
+          enum: [must-have, nice-to-have]
+        category:
+          type: string
+          enum: [technical, domain, responsibility, soft-skill, other]
+    JobSpec:
+      type: object
+      required: [targetTitle, seniority, summary, requirements, keywords]
+      properties:
+        targetTitle: { type: string }
+        seniority:
+          type: string
+          enum: [intern, junior, mid, senior, lead, unknown]
+        company: { type: string }
+        summary: { type: string }
+        requirements:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobRequirement'
+        keywords:
+          type: array
+          items: { type: string }
+    RequirementMatch:
+      type: object
+      required: [requirementId, requirement, status, evidenceIds, rationale]
+      properties:
+        requirementId: { type: string }
+        requirement: { type: string }
+        status:
+          type: string
+          enum: [matched, partial, missing]
+        evidenceIds:
+          type: array
+          items: { type: string }
+        rationale: { type: string }
+    MatchReport:
+      type: object
+      required: [score, matchedRequirements, missingRequirements, selectedEvidenceIds]
+      properties:
+        score: { type: number, minimum: 0, maximum: 1 }
+        matchedRequirements:
+          type: array
+          items:
+            $ref: '#/components/schemas/RequirementMatch'
+        missingRequirements:
+          type: array
+          items:
+            $ref: '#/components/schemas/RequirementMatch'
+        selectedEvidenceIds:
+          type: array
+          items: { type: string }
+    ResumeChange:
+      type: object
+      required: [type, path, section]
+      properties:
+        type:
+          type: string
+          enum: [added, removed, changed, reordered]
+        path: { type: string }
+        section: { type: string }
+        before: {}
+        after: {}
+    ResumeDiff:
+      type: object
+      required: [changes, counts]
+      properties:
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResumeChange'
+        counts:
+          type: object
+          required: [added, removed, changed, reordered]
+          properties:
+            added: { type: integer }
+            removed: { type: integer }
+            changed: { type: integer }
+            reordered: { type: integer }
+    QualityWarning:
+      type: object
+      required: [code, severity, message]
+      properties:
+        code: { type: string }
+        severity:
+          type: string
+          enum: [info, warning]
+        message: { type: string }
+    QualityReport:
+      type: object
+      required: [requirementCoverage, mustHaveCoverage, keywordCoverage, matchedKeywords, missingKeywords, missingMustHave, warnings]
+      properties:
+        requirementCoverage: { type: number, minimum: 0, maximum: 1 }
+        mustHaveCoverage: { type: number, minimum: 0, maximum: 1 }
+        keywordCoverage: { type: number, minimum: 0, maximum: 1 }
+        matchedKeywords:
+          type: array
+          items: { type: string }
+        missingKeywords:
+          type: array
+          items: { type: string }
+        missingMustHave:
+          type: array
+          items: { type: string }
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/QualityWarning'
+    FollowUpQuestion:
+      type: object
+      required: [field, question, reason, severity]
+      properties:
+        field: { type: string }
+        question: { type: string }
+        reason: { type: string }
+        severity:
+          type: string
+          enum: [blocking, important, optional]
+    AgentTraceEvent:
+      type: object
+      required: [name, status, at]
+      properties:
+        name: { type: string }
+        status:
+          type: string
+          enum: [started, completed, failed]
+        at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties:
+            oneOf:
+              - { type: string }
+              - { type: number }
+              - { type: boolean }
+    OutputArtifact:
+      type: object
+      required: [format, style, filename, mediaType, encoding, content, sizeBytes]
+      properties:
+        format:
+          $ref: '#/components/schemas/OutputFormat'
+        style:
+          $ref: '#/components/schemas/StylePresetId'
+        filename: { type: string }
+        mediaType: { type: string }
+        encoding:
+          type: string
+          enum: [utf8, base64]
+        content:
+          type: string
+        sizeBytes:
+          type: integer
+          minimum: 0
+    ArtifactFailure:
+      type: object
+      required: [format, style, code, message]
+      properties:
+        format:
+          $ref: '#/components/schemas/OutputFormat'
+        style:
+          $ref: '#/components/schemas/StylePresetId'
+        code: { type: string }
+        message: { type: string }
+    RenderedResume:
+      type: object
+      required: [artifacts, failures]
+      properties:
+        yaml: { type: string }
+        json: { type: string }
+        markdown: { type: string }
+        html: { type: string }
+        latex: { type: string }
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/OutputArtifact'
+        failures:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArtifactFailure'
+    RenderedVariant:
+      type: object
+      required: [style, label, template, artifacts, failures]
+      properties:
+        style:
+          $ref: '#/components/schemas/StylePresetId'
+        label: { type: string }
+        template: { type: string }
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/OutputArtifact'
+        failures:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArtifactFailure'
+    TailorResumeResult:
+      type: object
+      required: [status, jobSpec, matchReport, diff, quality, resume, rendered, variants, questions, warnings, trace]
+      properties:
+        status:
+          type: string
+          const: completed
+        jobSpec:
+          $ref: '#/components/schemas/JobSpec'
+        matchReport:
+          $ref: '#/components/schemas/MatchReport'
+        diff:
+          $ref: '#/components/schemas/ResumeDiff'
+        quality:
+          $ref: '#/components/schemas/QualityReport'
+        resume:
+          type: object
+          additionalProperties: true
+          description: Validated YAMLResume object
+        rendered:
+          $ref: '#/components/schemas/RenderedResume'
+        variants:
+          type: array
+          items:
+            $ref: '#/components/schemas/RenderedVariant'
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FollowUpQuestion'
+        warnings:
+          type: array
+          items: { type: string }
+        trace:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentTraceEvent'
+    Capabilities:
+      type: object
+      required: [apiVersion, endpoints, input, output]
+      properties:
+        apiVersion: { type: string }
+        endpoints:
+          type: object
+          additionalProperties: { type: string }
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
