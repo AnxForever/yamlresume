@@ -1,0 +1,31 @@
+{
+  "name": "@yamlresume/resume-agent-api",
+  "version": "0.12.2",
+  "private": true,
+  "description": "HTTP API for YAMLResume's job-tailoring agent",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
+  "scripts": {
+    "build": "tsup",
+    "build:watch": "tsup --watch",
+    "build:clean": "rm -rf dist",
+    "dev": "tsx src/server.ts",
+    "test": "vitest --run",
+    "test:cov": "vitest --coverage --run",
+    "test:watch": "vitest",
+    "lint": "biome check src"
+  },
+  "dependencies": {
+    "@yamlresume/resume-agent": "workspace:*",
+    "zod": "^4.3.6",
+    "tslib": "^2.8.1",
+    "busboy": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.4.0",
+    "@types/busboy": "^1.5.4",
+    "yaml": "^2.8.2"
+  }
+}

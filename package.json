@@ -25,7 +25,9 @@
     "json2yamlresume": "pnpm --filter json2yamlresume",
     "playground": "pnpm --filter @yamlresume/playground",
     "web": "pnpm --filter @yamlresume/web",
-    "typedoc": "pnpm -r typedoc"
+    "typedoc": "pnpm -r typedoc",
+    "agent": "pnpm --filter @yamlresume/resume-agent",
+    "agent-api": "pnpm --filter @yamlresume/resume-agent-api"
   },
   "lint-staged": {
     "packages/*/src/**/*.ts": "pnpm check"
