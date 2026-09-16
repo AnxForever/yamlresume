@@ -1069,20 +1069,18 @@ describe('extractArtifact', () => {
     expect(result.mediaType).toBe('text/plain')
   })
 
-  it('recognizes an RTF control header before its extractor is enabled', async () => {
-    await expect(
-      extractArtifact({
-        filename: 'candidate.rtf',
-        mediaType: 'application/rtf',
-        contentBase64: Buffer.from(
-          '{\\rtf1\\ansi Platform engineer}',
-          'ascii'
-        ).toString('base64'),
-      })
-    ).rejects.toMatchObject({
-      code: 'unsupported_file_type',
-      message: 'File type is not supported.',
+  it('extracts RTF after validating its control header', async () => {
+    const result = await extractArtifact({
+      filename: 'candidate.rtf',
+      mediaType: 'application/rtf',
+      contentBase64: Buffer.from(
+        '{\\rtf1\\ansi Platform engineer}',
+        'ascii'
+      ).toString('base64'),
     })
+
+    expect(result.mediaType).toBe('application/rtf')
+    expect(result.text).toBe('Platform engineer')
   })
 
   it('enforces duplicate IDs and total size limits', async () => {

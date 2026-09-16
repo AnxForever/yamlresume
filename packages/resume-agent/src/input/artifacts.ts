@@ -32,6 +32,7 @@ import type { ExtractedArtifact, InputFile } from '@/contracts'
 import { DOCX_MEDIA_TYPE, detectInputFormat } from '@/input/detection'
 import { ArtifactInputError } from '@/input/errors'
 import { extractOdtText, ODT_MEDIA_TYPE } from '@/input/odt'
+import { extractRtfText } from '@/input/rtf'
 
 export type { ArtifactInputErrorCode } from '@/input/errors'
 export { ArtifactInputError } from '@/input/errors'
@@ -334,6 +335,17 @@ export async function extractArtifact(
       mediaType,
       kind: 'text',
       text: extractOdtText(buffer),
+      warnings,
+    }
+  }
+
+  if (mediaType === 'application/rtf') {
+    return {
+      id,
+      filename: file.filename,
+      mediaType,
+      kind: 'text',
+      text: extractRtfText(buffer),
       warnings,
     }
   }

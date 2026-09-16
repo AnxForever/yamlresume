@@ -1,8 +1,8 @@
 # Resume Agent 常见文档输入 Feature Brief
 
 > Feature ID：RA-001B
-> 状态：Partial implementation；RA-001B-A1 可信识别与 RA-001B-B ODT 正文提取已开发级实现，
-> RTF、旧 DOC extractor 与 CFB/Word stream 核验仍为 Planned
+> 状态：Partial implementation；RA-001B-A1 可信识别、RA-001B-B ODT 与 RA-001B-C RTF 正文提取已开发级实现，
+> 旧 DOC extractor 与 CFB/Word stream 核验仍为 Planned
 > 最后审阅：2026-09-16
 > 范围：可信文件识别，以及 ODT、RTF、旧版 DOC 的文本提取；不包含 OCR、宏执行或通用 Office 转换服务。
 
@@ -37,7 +37,7 @@ ODT、RTF 与 Word 97–2003 `.doc`。本 Feature 立项时，这些文件没有
 RA-001B-A1 已改变第 3–7 项：输入模块现在先组合扩展名、声明 MIME、内容签名和容器结构，
 未知 binary 不再回退 UTF-8；DOCX/ODT 通过有界 ZIP index 区分；错误使用稳定 code 与固定
 message；DOCX 底层异常不再外泄。RA-001B-B 又在同一 seam 启用了 ODT 可见正文提取；RTF
-当前只完成 header 识别，旧 DOC 尚无 extractor，不能把尚未完成的格式写成输入支持。
+RTF 已完成有界可见正文 extractor；旧 DOC 尚无 extractor，不能把尚未完成的格式写成输入支持。
 
 ## 3. 研究证据与决策
 
@@ -249,9 +249,9 @@ XML/RTF nesting 128 层。
 | --- | --- | --- | --- | --- | --- |
 | RA-001B-A | upload → trusted detection；伪装文件不能选错 parser | Partial implementation：A1 已开发级实现 | Partial：OWASP、内容签名、fatal 解码、有界 ZIP index、mismatch/对抗 tests | backfilled | CFB Word stream、真实跨来源 corpus 与 fuzz |
 | RA-001B-B | ODT package → visible text | Implemented for development | Partial：OASIS package/schema、OWASP XML、对抗 tests、candidate/JD/API/Run、四个真实本地 package 与独立 reader 对照 | none | 跨 OS/异构 corpus、fuzz、样式派生隐藏语义、生产隔离与 telemetry |
-| RA-001B-C | RTF stream → Unicode visible text | Planned | Partial：Microsoft RTF 规范 | none | reader 选型与对抗 tests |
+| RA-001B-C | RTF stream → Unicode visible text | Implemented for development | Partial：Microsoft/IANA RTF 规范、两个独立 reader 源码、本机 LibreOffice、bounded scanner 与对抗 tests | none | candidate/JD/API/Run/restart 纵向验收、跨 OS corpus、font-table charset、fuzz、隔离与 telemetry |
 | RA-001B-D | legacy DOC → isolated visible text | Planned | Partial：MS-DOC、候选包元数据 | none | parser spike、隔离、损坏 corpus |
-| RA-001B-E | parser failure → safe user error | In development：检测/PDF/DOCX/ODT/API/Run 已统一 | Partial：固定错误、同步 HTTP 与异步 Run 脱敏 tests | backfilled | RTF/DOC extractor 与生产日志 |
+| RA-001B-E | parser failure → safe user error | In development：检测/PDF/DOCX/ODT/RTF/API/Run 已统一 | Partial：固定错误、RTF/同步 HTTP 与异步 Run 脱敏 tests | backfilled | DOC extractor 与生产日志 |
 
 ### 11.1 当前实施切片：RA-001B-A
 
@@ -284,8 +284,8 @@ XML/RTF nesting 128 层。
 `bounded-zip` 是内部 adapter，不写临时文件、不把用户路径交给文件系统，也没有借用 `docx`/
 `mammoth` 的传递 `jszip`。相同检测 seam 同时服务 candidate 与 JD 文件。
 
-当前只把已存在 extractor 的格式列入 capabilities；RA-001B-B 完成后 ODT 已加入，RTF/DOC
-仍必须等各自提取、对抗测试和兼容性门禁完成后才能加入。
+当前只把已存在 extractor 的格式列入 capabilities；ODT 与 RTF 已加入，DOC 仍必须等提取、
+对抗测试和兼容性门禁完成后才能加入。
 
 ### 11.2 当前验证证据
 
@@ -357,6 +357,36 @@ extractor 的独立路径可看到对应正文。该证据只支持 `Implemented
   `odt.ts` 已人工核对完整 MIT header。没有用 `process.exit`、延长 timeout 或关闭泄漏检测
   代替生命周期修复。
 
+### 11.5 RA-001B-C RTF 证据与契约
+
+2026-09-16 以 Microsoft archived RTF 1.6 文档、IANA `application/rtf` 登记、RTF 1.9.1
+sample reader 衍生源码、Node 22.21.1 和 LibreOffice 24.2.7.2 为基线。用户结果不是“删除反斜杠
+后得到文字”，而是从常见 RTF 简历/JD 中还原可见 Unicode 正文，同时不执行 field、对象或
+外部引用，也不让图片/二进制 payload、深层 group 或超长 control 消耗无界资源。
+
+| 问题 | 证据 | 决策 / 可证伪约束 | 验收 |
+| --- | --- | --- | --- |
+| token/group 如何读取 | Microsoft syntax/reader conventions 定义 control word/symbol、group stack、未知 control 与 `\*` destination；sample reader 强调 skip 状态也必须处理 `\binN` | 以 Buffer 单遍 scanner 保存 group state；未知 control 忽略，未知 starred destination 整组跳过，brace/escape/截断必须完整消费 | literal/control/group/malformed/unknown destination tests |
+| Unicode 与 code page 如何还原 | `\uN` 使用 signed 16-bit code unit；`\ucN` group-scoped；fallback 中任一 control 算一个字符，brace 提前结束；`\ansicpgN` 指定 byte decoder | 当前实现覆盖 signed code unit、surrogate pair、`uc` fallback、hex escape 与 ASCII/Windows-1252 常见输入；CJK code page 与多字节 fallback 仍保持缺口，不伪装成已支持 | Unicode/emoji、uc0/ucN、hex、unsupported code page tests；CJK corpus 后续补齐 |
+| 哪些文字可见 | IANA 提醒 RTF 可引用外部文件/对象；规范区分 body、metadata、picture/object、field instruction/result、hidden/revision text | 保留 body、`fldrslt` 与已修订正文；跳过 metadata/generator、font/style/list table、header/footer、annotation、deleted/hidden、pict/object/file/data destinations；永不解析 URI 或执行 field | hidden/deleted/metadata/pict/object/fldinst/fldrslt/privacy tests |
+| 资源如何封顶 | 上传层已有 12 MiB；参考 parser 对超长 token、binary 和 nesting 均需单独防线 | group depth 128、control count 250,000、control name 32、binary/hex payload 8 MiB、输出 1,000,000 chars；超限统一 `document_limit_exceeded` | 每类 limit 的公开接口回归 |
+| 复用什么 | `rtf-toolkit@0.5.0`（MIT，commit `6af77a6`）固定跳过一个 Unicode fallback 且截断过长 control；`rtf-stream-parser`（MIT，commit `f112deb`）偏 encapsulation/stream 并依赖外部 decode | Learn from 两者的 token/fallback/binary tests，不引入依赖；adapt Microsoft state-stack/sample-reader 模型到内部 `rtf.ts` 深模块 | 无 package/lockfile 变化；调用方仍只依赖 `extractArtifact` |
+
+开发契约接受标准 `application/rtf`、`application/x-rtf` 与 `text/rtf` 的内容签名一致输入；返回
+`kind: text` 与 canonical `application/rtf`。格式/结构损坏只返回
+`corrupt_document: RTF document is invalid or unsupported.`，资源超限返回固定
+`document_limit_exceeded`，正文为空返回既有 `empty_extracted_text`。LibreOffice 只作为开发期
+独立 reader，不进入 runtime 或自动测试依赖。旧 DOC、跨 OS corpus、font-table charset 覆盖、
+fuzz、worker 隔离与生产 telemetry 仍是后续门禁。
+
+实现结果：`packages/resume-agent/src/input/rtf.ts` 以单遍 Buffer scanner 实现该契约，未增加
+运行时依赖。RTF 已从“仅能识别 header”推进为 `extractArtifact` 可用的 `kind: text` 输入；
+`rtf.test.ts` 覆盖可见正文、段落、转义、负 Unicode code unit 与 surrogate pair、`uc` fallback、
+metadata/pict/field/未知 starred destination、`bin` payload 和截断 group。2026-09-16 门禁为
+focused 输入 48/48、完整 resume-agent 250/250、TypeScript、build、目标 Biome 与
+`git diff --check` 通过。该证据仍只支持 `Implemented for development`；没有把 RTF 的跨平台
+兼容性、字体表 code page、真实候选/JD Run 重启和生产隔离误写成已完成。
+
 ## 12. 会推翻方案的证据
 
 - 若授权样本显示 DOC 使用率极低且隔离成本过高，可保持 adapter 与明确转换指引，不能用
@@ -387,5 +417,17 @@ extractor 的独立路径可看到对应正文。该证据只支持 `Implemented
   <https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/>
 - Microsoft Rich Text Format specification：
   <https://learn.microsoft.com/en-us/previous-versions/office/developer/office2000/aa140277(v=office.10)>
+- Microsoft RTF Syntax / Reader Conventions / Header and Unicode：
+  <https://learn.microsoft.com/en-us/previous-versions/office/developer/office2000/aa140284(v=office.10)>
+  <https://learn.microsoft.com/en-us/previous-versions/office/developer/office2000/aa140286(v=office.10)>
+  <https://latex2rtf.sourceforge.net/rtfspec_6.html>
+- IANA `application/rtf` media type：
+  <https://www.iana.org/assignments/media-types/application/rtf>
+- Microsoft sample-reader guidance mirror：
+  <https://latex2rtf.sourceforge.net/rtfspec_45.html>
+- `rtf-toolkit`（MIT，reviewed commit `6af77a6`）：
+  <https://github.com/jschulte/rtf-toolkit>
+- `rtf-stream-parser`（MIT，reviewed commit `f112deb`）：
+  <https://github.com/mazira/rtf-stream-parser>
 - `word-extractor` repository：
   <https://github.com/morungos/node-word-extractor>
