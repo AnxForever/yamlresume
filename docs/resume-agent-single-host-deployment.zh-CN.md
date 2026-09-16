@@ -76,6 +76,10 @@ Auth 保护，不把该配置描述成多用户应用认证。
 `POST /api/v1/chat` 返回 200 和合法的 `{ reply, readyToGenerate }`。Web 未重启，API/Web 均为
 `active`，SQLite 与 Provider env 未改动。
 
+同一 release 的合成 RTF candidate 请求已通过公网输入类型校验并进入 Agent，但两次完整
+`tailor-resume` 均以脱敏的 `422 agent_validation_failed` 结束；这证明 RTF 输入边界已接通，
+不证明真实模型归一化质量或最终产物 E2E 已通过。原始 RTF、模型输出和错误正文未保存。
+
 ### 2026-09-16 API-only upgrade rehearsal
 
 一次只替换 API/Agent dist 的升级演练未进入可用状态：新二进制在监听前以稳定错误
