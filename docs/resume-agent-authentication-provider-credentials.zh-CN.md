@@ -171,6 +171,9 @@ owner 不变量集中在 `AuthService` seam，调用方无法绕过加密 envelo
 - `git diff --check`：通过；新增 3 个 TypeScript 文件均有完整 MIT header；
 - `pnpm license:check`：命令返回 0，但本机没有 `addlicense` binary，脚本明确报告 skip，因此不把它
   误写成有效的自动 license 扫描；
+- 临时 localhost 认证冒烟：匿名 `/v1/auth/me` 为 401；注册 `anxforever@example.com` 后，带
+  HttpOnly session 的 `/v1/auth/me` 与 `/v1/capabilities` 为 200；logout 后 `/v1/auth/me` 再次为
+  401。测试使用临时 SQLite/keyring，未写入仓库或线上服务。
 - 仓库级 `pnpm check:ci` 已运行，但被受保护前端的 2 条 Biome 问题拦住；独立 `pnpm check:tsc`
   还被 `packages/playground` 的 React 类型版本冲突拦住。本切片没有修改这些范围外文件。
 
