@@ -26,6 +26,7 @@ import type { LlmClient } from '@yamlresume/resume-agent'
 import {
   ResumeAgentRunService,
   ResumeTailoringAgent,
+  renderResumeVariant,
 } from '@yamlresume/resume-agent'
 import { describe, expect, it } from 'vitest'
 
@@ -102,13 +103,19 @@ describe('agent API', () => {
         headers: { 'X-Request-Id': 'frontend-test' },
       })
       const payload = (await response.json()) as {
-        data?: { output?: { formats?: string[]; styles?: unknown[] } }
+        data?: {
+          input?: { fileTypes?: string[] }
+          output?: { formats?: string[]; styles?: unknown[] }
+        }
         meta?: { requestId?: string }
       }
 
       expect(response.status).toBe(200)
       expect(response.headers.get('x-request-id')).toBe('frontend-test')
       expect(payload.meta?.requestId).toBe('frontend-test')
+      expect(payload.data?.input?.fileTypes).toContain(
+        'application/vnd.oasis.opendocument.text'
+      )
       expect(payload.data?.output?.formats).toContain('docx')
       expect(payload.data?.output?.formats).toContain('txt')
       expect(payload.data?.output?.formats).toContain('rtf')
@@ -136,6 +143,87 @@ describe('agent API', () => {
       expect(payload.data?.status).toBe('completed')
       expect(payload.data?.rendered?.artifacts).toHaveLength(5)
       expect(payload.meta?.requestId).toBe(response.headers.get('x-request-id'))
+    })
+  })
+
+  it('accepts an ODT job file through the synchronous HTTP contract', async () => {
+    const rendered = await renderResumeVariant(
+      candidate as Parameters<typeof renderResumeVariant>[0],
+      'ats-compact',
+      { formats: ['odt'] }
+    )
+    const odt = rendered.artifacts.find((artifact) => artifact.format === 'odt')
+    expect(odt?.encoding).toBe('base64')
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/tailor-resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobFiles: [
+            {
+              filename: 'role.odt',
+              contentBase64: odt?.content,
+            },
+          ],
+          candidate: { resume: candidate },
+          preferences: { formats: ['yaml'] },
+        }),
+      })
+      const payload = (await response.json()) as {
+        data?: { status?: string; jobSpec?: { targetTitle?: string } }
+      }
+
+      expect(response.status).toBe(200)
+      expect(payload.data?.status).toBe('completed')
+      expect(payload.data?.jobSpec?.targetTitle).toBe('TypeScript Engineer')
+    })
+  })
+
+  it('returns a private-safe HTTP error for a corrupted ODT upload', async () => {
+    const privateMarker = 'PRIVATE_ODT_JOB_DETAIL_57326'
+    const privateResume = {
+      ...candidate,
+      content: {
+        ...candidate.content,
+        basics: { ...candidate.content.basics, name: privateMarker },
+      },
+    }
+    const rendered = await renderResumeVariant(
+      privateResume as Parameters<typeof renderResumeVariant>[0],
+      'ats-compact',
+      { formats: ['odt'] }
+    )
+    const odt = rendered.artifacts.find((artifact) => artifact.format === 'odt')
+    const corrupted = Buffer.from(odt?.content ?? '', 'base64')
+    const markerOffset = corrupted.indexOf(privateMarker)
+    expect(markerOffset).toBeGreaterThan(0)
+    corrupted[markerOffset] = (corrupted[markerOffset] ?? 0) ^ 0x01
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/tailor-resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobFiles: [
+            {
+              filename: 'role.odt',
+              contentBase64: corrupted.toString('base64'),
+            },
+          ],
+          candidate: { resume: candidate },
+        }),
+      })
+      const payload = (await response.json()) as {
+        error?: { code?: string; message?: string }
+      }
+
+      expect(response.status).toBe(422)
+      expect(payload.error).toEqual({
+        code: 'corrupt_document',
+        message: 'Document archive is invalid or unsupported.',
+      })
+      expect(JSON.stringify(payload)).not.toContain(privateMarker)
     })
   })
 

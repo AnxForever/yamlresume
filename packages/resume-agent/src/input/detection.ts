@@ -29,10 +29,11 @@ import {
   openBoundedZip,
 } from '@/input/bounded-zip'
 import { ArtifactInputError } from '@/input/errors'
+import { inspectOdtPackage, ODT_MEDIA_TYPE } from '@/input/odt'
 
 export const DOCX_MEDIA_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-export const ODT_MEDIA_TYPE = 'application/vnd.oasis.opendocument.text'
+export { ODT_MEDIA_TYPE } from '@/input/odt'
 
 export type SupportedInputFormat =
   | 'plain-text'
@@ -252,32 +253,19 @@ function detectZipFormat(buffer: Buffer): DetectedInputFormat | undefined {
     }
   }
 
-  const mimetype = archive.entry('mimetype')
-  if (
-    mimetype?.compressionMethod === 0 &&
-    mimetype.localHeaderOffset === 0 &&
-    archive.has('META-INF/manifest.xml') &&
-    archive.has('content.xml') &&
-    archive.read('mimetype').toString('ascii') === ODT_MEDIA_TYPE
-  ) {
-    const manifest = decodeUtf8(archive.read('META-INF/manifest.xml'))
-    if (
-      !/<!DOCTYPE|<!ENTITY/iu.test(manifest) &&
-      manifest.includes('manifest:full-path="/"') &&
-      manifest.includes(`manifest:media-type="${ODT_MEDIA_TYPE}"`)
-    ) {
-      validateArchiveEntries(archive)
-      return {
-        format: 'odt',
-        canonicalMediaType: ODT_MEDIA_TYPE,
-        confidence: 'signature-and-container',
-      }
+  if (inspectOdtPackage(archive)) {
+    validateArchiveEntries(archive)
+    return {
+      format: 'odt',
+      canonicalMediaType: ODT_MEDIA_TYPE,
+      confidence: 'signature-and-container',
     }
   }
   return undefined
 }
 
 function mapArchiveError(error: unknown): never {
+  if (error instanceof ArtifactInputError) throw error
   if (error instanceof BoundedZipError) {
     if (error.code === 'encrypted_archive') {
       throw new ArtifactInputError(

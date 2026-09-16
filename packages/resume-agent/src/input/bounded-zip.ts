@@ -55,6 +55,7 @@ export interface BoundedZipEntry {
   readonly compressedSize: number
   readonly uncompressedSize: number
   readonly localHeaderOffset: number
+  readonly localExtraLength: number
 }
 
 interface IndexedZipEntry extends BoundedZipEntry {
@@ -265,6 +266,7 @@ export function openBoundedZip(
       compressedSize,
       uncompressedSize,
       localHeaderOffset,
+      localExtraLength,
       crc32: checksum,
       dataOffset,
     })

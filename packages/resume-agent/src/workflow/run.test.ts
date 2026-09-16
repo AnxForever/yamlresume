@@ -25,6 +25,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { LlmClient } from '@/contracts'
+import { renderOdtDocument } from '@/rendering/odt'
 import { ResumeTailoringAgent } from '@/workflow/agent'
 import {
   InMemoryRunStore,
@@ -294,6 +295,37 @@ describe('ResumeAgentRunService', () => {
     expect(completed?.result?.jobSpec.targetTitle).toBe('TypeScript Engineer')
   })
 
+  it('completes an asynchronous run with an ODT job file', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const service = new ResumeAgentRunService(fakeAgent(), {
+      idFactory: () => 'run-odt-job',
+      schedule: (task) => tasks.push(task),
+    })
+    const jobOdt = renderOdtDocument({
+      title: 'Platform Engineer Role',
+      headline: '',
+      contacts: [],
+      summaryHeading: 'Requirements',
+      summary: ['Build reliable TypeScript systems.'],
+      sections: [],
+    })
+
+    await service.start({
+      jobFiles: [
+        {
+          filename: 'role.odt',
+          contentBase64: jobOdt.toString('base64'),
+        },
+      ],
+      candidate: { resume: candidate },
+    })
+    await tasks[0]?.()
+
+    const completed = await service.get('run-odt-job')
+    expect(completed?.status).toBe('completed')
+    expect(completed?.result?.jobSpec.targetTitle).toBe('TypeScript Engineer')
+  })
+
   it('stores a safe failure without leaking the underlying error', async () => {
     const tasks: Array<() => Promise<void>> = []
     const llm: LlmClient = {
@@ -354,6 +386,49 @@ describe('ResumeAgentRunService', () => {
     expect(failed?.error).toEqual({
       code: 'file_type_mismatch',
       message: 'File type does not match its content.',
+    })
+    expect(JSON.stringify(failed)).not.toContain(privateMarker)
+  })
+
+  it('preserves a private-safe ODT failure on an asynchronous run', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const privateMarker = 'PRIVATE_ASYNC_ODT_CANDIDATE_38614'
+    const odt = renderOdtDocument({
+      title: privateMarker,
+      headline: 'Platform Engineer',
+      contacts: [],
+      summaryHeading: 'Summary',
+      summary: ['Builds reliable systems.'],
+      sections: [],
+    })
+    const corrupted = Buffer.from(odt)
+    const markerOffset = corrupted.indexOf(privateMarker)
+    expect(markerOffset).toBeGreaterThan(0)
+    corrupted[markerOffset] = (corrupted[markerOffset] ?? 0) ^ 0x01
+    const service = new ResumeAgentRunService(fakeAgent(), {
+      idFactory: () => 'run-invalid-odt',
+      schedule: (task) => tasks.push(task),
+    })
+
+    await service.start({
+      jobDescription:
+        'We need a TypeScript Engineer to build reliable systems.',
+      candidate: {
+        files: [
+          {
+            filename: 'candidate.odt',
+            contentBase64: corrupted.toString('base64'),
+          },
+        ],
+      },
+    })
+    await tasks[0]?.()
+
+    const failed = await service.get('run-invalid-odt')
+    expect(failed?.status).toBe('failed')
+    expect(failed?.error).toEqual({
+      code: 'corrupt_document',
+      message: 'Document archive is invalid or unsupported.',
     })
     expect(JSON.stringify(failed)).not.toContain(privateMarker)
   })

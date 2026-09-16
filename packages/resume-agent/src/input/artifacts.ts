@@ -31,6 +31,7 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { ExtractedArtifact, InputFile } from '@/contracts'
 import { DOCX_MEDIA_TYPE, detectInputFormat } from '@/input/detection'
 import { ArtifactInputError } from '@/input/errors'
+import { extractOdtText, ODT_MEDIA_TYPE } from '@/input/odt'
 
 export type { ArtifactInputErrorCode } from '@/input/errors'
 export { ArtifactInputError } from '@/input/errors'
@@ -323,6 +324,17 @@ export async function extractArtifact(
         'document_extraction_failed',
         'Could not extract DOCX text.'
       )
+    }
+  }
+
+  if (mediaType === ODT_MEDIA_TYPE) {
+    return {
+      id,
+      filename: file.filename,
+      mediaType,
+      kind: 'text',
+      text: extractOdtText(buffer),
+      warnings,
     }
   }
 

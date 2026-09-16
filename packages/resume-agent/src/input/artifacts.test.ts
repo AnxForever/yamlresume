@@ -108,6 +108,106 @@ function localEntryDataOffset(buffer: Buffer, name: string): number {
   throw new Error(`Missing local ZIP entry: ${name}`)
 }
 
+function fixtureCrc32(content: Buffer): number {
+  let crc = 0xffffffff
+  for (const byte of content) {
+    crc ^= byte
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1))
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+function storedZipFixture(
+  entries: Array<{ name: string; content: Buffer; localExtra?: Buffer }>
+): Buffer {
+  const localParts: Buffer[] = []
+  const centralParts: Buffer[] = []
+  let localOffset = 0
+
+  for (const entry of entries) {
+    const filename = Buffer.from(entry.name, 'utf8')
+    const localExtra = entry.localExtra ?? Buffer.alloc(0)
+    const checksum = fixtureCrc32(entry.content)
+    const localHeader = Buffer.alloc(30)
+    localHeader.writeUInt32LE(0x04034b50, 0)
+    localHeader.writeUInt16LE(20, 4)
+    localHeader.writeUInt16LE(0x0800, 6)
+    localHeader.writeUInt32LE(checksum, 14)
+    localHeader.writeUInt32LE(entry.content.length, 18)
+    localHeader.writeUInt32LE(entry.content.length, 22)
+    localHeader.writeUInt16LE(filename.length, 26)
+    localHeader.writeUInt16LE(localExtra.length, 28)
+    localParts.push(localHeader, filename, localExtra, entry.content)
+
+    const centralHeader = Buffer.alloc(46)
+    centralHeader.writeUInt32LE(0x02014b50, 0)
+    centralHeader.writeUInt16LE(20, 4)
+    centralHeader.writeUInt16LE(20, 6)
+    centralHeader.writeUInt16LE(0x0800, 8)
+    centralHeader.writeUInt32LE(checksum, 16)
+    centralHeader.writeUInt32LE(entry.content.length, 20)
+    centralHeader.writeUInt32LE(entry.content.length, 24)
+    centralHeader.writeUInt16LE(filename.length, 28)
+    centralHeader.writeUInt32LE(localOffset, 42)
+    centralParts.push(centralHeader, filename)
+    localOffset +=
+      30 + filename.length + localExtra.length + entry.content.length
+  }
+
+  const centralDirectory = Buffer.concat(centralParts)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(entries.length, 8)
+  end.writeUInt16LE(entries.length, 10)
+  end.writeUInt32LE(centralDirectory.length, 12)
+  end.writeUInt32LE(localOffset, 16)
+  return Buffer.concat([...localParts, centralDirectory, end])
+}
+
+const ODT_MEDIA_TYPE = 'application/vnd.oasis.opendocument.text'
+const MANIFEST_NAMESPACE = 'urn:oasis:names:tc:opendocument:xmlns:manifest:1.0'
+const OFFICE_NAMESPACE = 'urn:oasis:names:tc:opendocument:xmlns:office:1.0'
+const TEXT_NAMESPACE = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0'
+const DRAW_NAMESPACE = 'urn:oasis:names:tc:opendocument:xmlns:drawing:1.0'
+
+function createOdtFixture(options: {
+  body?: string
+  contentXml?: string | Buffer
+  manifestXml?: string | Buffer
+  mimetypeLocalExtra?: Buffer
+}): Buffer {
+  const manifest =
+    options.manifestXml ??
+    `<?xml version="1.0" encoding="UTF-8"?>
+<manifest:manifest xmlns:manifest="${MANIFEST_NAMESPACE}" manifest:version="1.3">
+  <manifest:file-entry manifest:full-path="/" manifest:media-type="${ODT_MEDIA_TYPE}"/>
+  <manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
+</manifest:manifest>`
+  const content =
+    options.contentXml ??
+    `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="${OFFICE_NAMESPACE}" xmlns:text="${TEXT_NAMESPACE}" office:version="1.3">
+  <office:body><office:text>${options.body ?? ''}</office:text></office:body>
+</office:document-content>`
+  return storedZipFixture([
+    {
+      name: 'mimetype',
+      content: Buffer.from(ODT_MEDIA_TYPE, 'ascii'),
+      localExtra: options.mimetypeLocalExtra,
+    },
+    {
+      name: 'META-INF/manifest.xml',
+      content: Buffer.isBuffer(manifest) ? manifest : Buffer.from(manifest),
+    },
+    {
+      name: 'content.xml',
+      content: Buffer.isBuffer(content) ? content : Buffer.from(content),
+    },
+  ])
+}
+
 describe('extractArtifact', () => {
   it('extracts text and infers a markdown media type from the filename', async () => {
     const result = await extractArtifact({
@@ -232,6 +332,355 @@ describe('extractArtifact', () => {
     ).rejects.toMatchObject({
       code: 'file_type_mismatch',
       message: 'File type does not match its content.',
+    })
+  })
+
+  it('extracts headings and paragraphs from an ODT package', async () => {
+    const odt = renderOdtDocument({
+      title: 'Synthetic Candidate',
+      headline: 'Platform Engineer',
+      contacts: [],
+      summaryHeading: 'Summary',
+      summary: ['Builds reliable systems.'],
+      sections: [],
+    })
+
+    const result = await extractArtifact({
+      filename: 'candidate.odt',
+      contentBase64: odt.toString('base64'),
+    })
+
+    expect(result).toMatchObject({
+      kind: 'text',
+      mediaType: 'application/vnd.oasis.opendocument.text',
+      text: [
+        'Synthetic Candidate',
+        'Platform Engineer',
+        'Summary',
+        'Builds reliable systems.',
+      ].join('\n'),
+    })
+  })
+
+  it('preserves ODT list order, bullets, and Unicode text', async () => {
+    const odt = renderOdtDocument({
+      title: '候选人 😀',
+      headline: '',
+      contacts: [],
+      summaryHeading: 'Summary',
+      summary: [],
+      sections: [
+        {
+          heading: '项目经历',
+          entries: [
+            {
+              title: '可靠系统',
+              metadata: '',
+              details: ['构建 TypeScript 服务', '降低延迟 42%'],
+            },
+          ],
+        },
+      ],
+    })
+
+    const result = await extractArtifact({
+      filename: 'candidate.odt',
+      contentBase64: odt.toString('base64'),
+    })
+
+    expect(result.text).toBe(
+      [
+        '候选人 😀',
+        '项目经历',
+        '可靠系统',
+        '- 构建 TypeScript 服务',
+        '- 降低延迟 42%',
+      ].join('\n')
+    )
+  })
+
+  it('recognizes ODT namespaces independently of XML prefix spelling', async () => {
+    const odt = createOdtFixture({
+      manifestXml: `<?xml version="1.0" encoding="UTF-8"?>
+<m:manifest xmlns:m="${MANIFEST_NAMESPACE}">
+  <m:file-entry m:media-type="${ODT_MEDIA_TYPE}" m:full-path="/"/>
+  <m:file-entry m:media-type="text/xml" m:full-path="content.xml"/>
+</m:manifest>`,
+      contentXml: `<?xml version="1.0" encoding="UTF-8"?>
+<o:document-content xmlns:o="${OFFICE_NAMESPACE}" xmlns:t="${TEXT_NAMESPACE}">
+  <o:body><o:text><t:p>Alias prefixes work</t:p></o:text></o:body>
+</o:document-content>`,
+    })
+
+    const result = await extractArtifact({
+      filename: 'candidate.odt',
+      contentBase64: odt.toString('base64'),
+    })
+
+    expect(result.text).toBe('Alias prefixes work')
+  })
+
+  it('rejects unbound ODT namespace prefixes', async () => {
+    const odt = createOdtFixture({
+      contentXml: `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="${OFFICE_NAMESPACE}">
+  <office:body><office:text><text:p>Unbound prefix</text:p></office:text></office:body>
+</office:document-content>`,
+    })
+
+    await expect(
+      extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    ).rejects.toMatchObject({
+      code: 'corrupt_document',
+      message: 'ODT document is invalid or unsupported.',
+    })
+  })
+
+  it('preserves ODT explicit spaces, tabs, and line breaks', async () => {
+    const odt = createOdtFixture({
+      body: '<text:p>Platform<text:s text:c="2"/>Engineer<text:tab/>Remote<text:line-break/>2026</text:p>',
+    })
+
+    const result = await extractArtifact({
+      filename: 'candidate.odt',
+      contentBase64: odt.toString('base64'),
+    })
+
+    expect(result.text).toBe('Platform  Engineer\tRemote\n2026')
+  })
+
+  it('rejects ODT content outside the document-content root structure', async () => {
+    const odt = createOdtFixture({
+      contentXml: `<?xml version="1.0" encoding="UTF-8"?>
+<foreign:root xmlns:foreign="urn:example:foreign" xmlns:office="${OFFICE_NAMESPACE}" xmlns:text="${TEXT_NAMESPACE}">
+  <office:body><office:text><text:p>Decoy candidate</text:p></office:text></office:body>
+</foreign:root>`,
+    })
+
+    await expect(
+      extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    ).rejects.toMatchObject({
+      code: 'corrupt_document',
+      message: 'ODT document is invalid or unsupported.',
+    })
+  })
+
+  it('keeps visible frame text while excluding hidden and review content', async () => {
+    const odt = createOdtFixture({
+      body: `<text:p>Visible<office:annotation><text:p>Private note</text:p></office:annotation> text</text:p>
+<text:tracked-changes><text:changed-region><text:deletion><text:p>Deleted text</text:p></text:deletion></text:changed-region></text:tracked-changes>
+<text:section text:display="none"><text:p>Hidden text</text:p></text:section>
+<draw:frame xmlns:draw="${DRAW_NAMESPACE}"><draw:text-box><text:p>Frame text</text:p></draw:text-box></draw:frame>
+<draw:object xmlns:draw="${DRAW_NAMESPACE}"><text:p>Embedded object text</text:p></draw:object>`,
+    })
+
+    const result = await extractArtifact({
+      filename: 'candidate.odt',
+      contentBase64: odt.toString('base64'),
+    })
+
+    expect(result.text).toBe('Visible text\nFrame text')
+  })
+
+  it('preserves text-box paragraphs anchored inside an outer paragraph', async () => {
+    const odt = createOdtFixture({
+      body: `<text:p>Before frame<draw:frame xmlns:draw="${DRAW_NAMESPACE}"><draw:text-box><text:p>Inside frame</text:p></draw:text-box></draw:frame>After frame</text:p>`,
+    })
+
+    const result = await extractArtifact({
+      filename: 'candidate.odt',
+      contentBase64: odt.toString('base64'),
+    })
+
+    expect(result.text).toBe('Before frame\nInside frame\nAfter frame')
+  })
+
+  it('rejects an ODT package with no visible body text', async () => {
+    const odt = createOdtFixture({
+      body: '<text:p>  </text:p><text:section text:display="none"><text:p>Hidden only</text:p></text:section>',
+    })
+
+    await expect(
+      extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    ).rejects.toMatchObject({
+      code: 'empty_extracted_text',
+      message: 'Document contains no extractable text.',
+    })
+  })
+
+  it('rejects malformed ODT content XML with a stable error', async () => {
+    const odt = createOdtFixture({
+      contentXml: `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="${OFFICE_NAMESPACE}" xmlns:text="${TEXT_NAMESPACE}">
+  <office:body><office:text><text:p>Truncated candidate</office:text></office:body>
+</office:document-content>`,
+    })
+
+    await expect(
+      extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    ).rejects.toMatchObject({
+      code: 'corrupt_document',
+      message: 'ODT document is invalid or unsupported.',
+    })
+  })
+
+  it('rejects ODT DTD and external entity declarations without disclosure', async () => {
+    const privateMarker = 'PRIVATE_LOCAL_FILE_CONTENT_88214'
+    const odt = createOdtFixture({
+      contentXml: `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE office:document-content [<!ENTITY xxe SYSTEM "file:///tmp/${privateMarker}">]>
+<office:document-content xmlns:office="${OFFICE_NAMESPACE}" xmlns:text="${TEXT_NAMESPACE}">
+  <office:body><office:text><text:p>&xxe;</text:p></office:text></office:body>
+</office:document-content>`,
+    })
+
+    let thrown: unknown
+    try {
+      await extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toMatchObject({
+      code: 'corrupt_document',
+      message: 'ODT document is invalid or unsupported.',
+    })
+    expect(JSON.stringify(thrown)).not.toContain(privateMarker)
+  })
+
+  it('rejects ODT XML nesting beyond the processing limit', async () => {
+    const nesting = 125
+    const odt = createOdtFixture({
+      body: `<text:p>${'<text:span>'.repeat(nesting)}Deep${'</text:span>'.repeat(nesting)}</text:p>`,
+    })
+
+    await expect(
+      extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    ).rejects.toMatchObject({
+      code: 'document_limit_exceeded',
+      message: 'ODT document exceeds safe processing limits.',
+    })
+  })
+
+  it('rejects ODT XML with excessive element count', async () => {
+    const odt = createOdtFixture({
+      body: `<text:p>${'<text:span/>'.repeat(100_001)}Candidate</text:p>`,
+    })
+
+    await expect(
+      extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    ).rejects.toMatchObject({
+      code: 'document_limit_exceeded',
+      message: 'ODT document exceeds safe processing limits.',
+    })
+  })
+
+  it('rejects ODT extracted text beyond the character limit', async () => {
+    const odt = createOdtFixture({
+      body: '<text:p>A<text:s text:c="1000000"/>B</text:p>',
+    })
+
+    await expect(
+      extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    ).rejects.toMatchObject({
+      code: 'document_limit_exceeded',
+      message: 'ODT document exceeds safe processing limits.',
+    })
+  })
+
+  it('rejects ODF manifest encryption before reading document text', async () => {
+    const privateMarker = 'PRIVATE_ENCRYPTED_CANDIDATE_49271'
+    const odt = createOdtFixture({
+      body: `<text:p>${privateMarker}</text:p>`,
+      manifestXml: `<?xml version="1.0" encoding="UTF-8"?>
+<manifest:manifest xmlns:manifest="${MANIFEST_NAMESPACE}">
+  <manifest:file-entry manifest:full-path="/" manifest:media-type="${ODT_MEDIA_TYPE}"/>
+  <manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml">
+    <manifest:encryption-data/>
+  </manifest:file-entry>
+</manifest:manifest>`,
+    })
+
+    let thrown: unknown
+    try {
+      await extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toMatchObject({
+      code: 'encrypted_document',
+      message: 'Encrypted documents are not supported.',
+    })
+    expect(JSON.stringify(thrown)).not.toContain(privateMarker)
+  })
+
+  it('rejects invalid UTF-8 in ODT content XML', async () => {
+    const prefix = `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="${OFFICE_NAMESPACE}" xmlns:text="${TEXT_NAMESPACE}">
+  <office:body><office:text><text:p>`
+    const suffix =
+      '</text:p></office:text></office:body></office:document-content>'
+    const odt = createOdtFixture({
+      contentXml: Buffer.concat([
+        Buffer.from(prefix),
+        Buffer.from([0xc3, 0x28]),
+        Buffer.from(suffix),
+      ]),
+    })
+
+    await expect(
+      extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    ).rejects.toMatchObject({
+      code: 'corrupt_document',
+      message: 'ODT document is invalid or unsupported.',
+    })
+  })
+
+  it('rejects an ODT mimetype entry with a local ZIP extra field', async () => {
+    const odt = createOdtFixture({
+      body: '<text:p>Candidate</text:p>',
+      mimetypeLocalExtra: Buffer.from([0x00, 0x00]),
+    })
+
+    await expect(
+      extractArtifact({
+        filename: 'candidate.odt',
+        contentBase64: odt.toString('base64'),
+      })
+    ).rejects.toMatchObject({
+      code: 'corrupt_document',
+      message: 'ODT document is invalid or unsupported.',
     })
   })
 

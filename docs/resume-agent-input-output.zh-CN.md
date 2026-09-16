@@ -11,6 +11,7 @@
 - JSON / YAML；
 - 可提取文本的 PDF；
 - DOCX；
+- ODT；
 - PNG / JPEG / WebP / GIF 岗位截图；
 - 多个文件组合，例如“官网 JD + 招聘软件截图 + HR 补充说明”。
 
@@ -23,6 +24,7 @@
 - TXT / Markdown 个人资料；
 - PDF 简历；
 - DOCX 简历；
+- ODT 简历；
 - PNG / JPEG / WebP / GIF 简历截图；
 - 项目说明、证书、作品集文字、招聘沟通补充等多个文件。
 
@@ -38,6 +40,7 @@
 - 每个文件必须使用唯一 ID；
 - 声明 MIME、扩展名、内容签名和容器结构冲突时拒绝，不把未知 binary 回退成文本；
 - DOCX/ODT ZIP 检查 entry 路径、重复、加密、ZIP64、展开量和 CRC；
+- ODT XML 拒绝 DTD/ENTITY，并限制深度、元素数量和提取字符数；
 - 拒绝不支持或无法安全识别的类型；
 - 原始二进制不写日志；
 - API Key 只能通过环境变量注入，不能写入仓库或请求正文。
@@ -82,7 +85,7 @@
   ↓
 内容签名、声明一致性、容器结构与大小限制
   ↓
-文本 / PDF / DOCX 提取
+文本 / PDF / DOCX / ODT 提取
   ├── 图片 → 视觉模型附件
   └── 扫描 PDF 无文本 → OCR/视觉处理警告
   ↓
@@ -93,7 +96,8 @@
 
 轻量解析器用于干净文本、PDF、DOCX，避免所有文件都先调用模型。`detectInputFormat`
 在 parser 之前统一处理内容签名、fatal UTF-8/UTF-16 解码和 DOCX/ODT 的有界 ZIP 识别；
-RTF 当前只完成 header 识别，尚未启用正文 extractor。复杂扫描、多栏版面、表格和图片可切换到
+ODT 已用有界、namespace-aware 的 scanner 提取可见正文。RTF 当前只完成 header 识别，尚未
+启用正文 extractor。复杂扫描、多栏版面、表格和图片可切换到
 独立文档解析服务。调研后建议未来为解析器定义 Port，并可选接入 Docling 一类本地、布局感知的
 解析服务，而不是把 Python 文档栈强行塞进 TypeScript 主进程。
 
@@ -128,8 +132,8 @@ ODT 是确定性的 ODF 1.3 ZIP package。所有 artifact 都记录准确媒体�
 不增加 legacy 顶层字段。后续生产环境应改成对象存储短期下载地址，避免把大文件长期放在
 JSON 和数据库里。
 
-RTF、ODT、旧 `.doc` 正文提取仍是 Planned；可信检测基础只完成了开发级 A1 切片，不应据此
-推断这些格式已可作为候选人/JD 输入。输入证据见
+ODT 正文提取已为 candidate、JD、HTTP 和异步 Run 启用开发级能力；RTF 与旧 `.doc` 仍是
+Planned，不应从 header/容器检测推断它们已可输入。输入证据见
 [`resume-agent-common-document-ingestion.zh-CN.md`](./resume-agent-common-document-ingestion.zh-CN.md)，
 输出证据和剩余兼容矩阵见
 [`resume-agent-common-document-export.zh-CN.md`](./resume-agent-common-document-export.zh-CN.md)。

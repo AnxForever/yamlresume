@@ -218,7 +218,7 @@ pnpm license:check
 
 | 生命周期 | 当前已实现 | 下一优先级 | 需要单独解决的问题 |
 | --- | --- | --- | --- |
-| 输入解析 | TXT/Markdown/HTML/JSON/YAML、数字 PDF、DOCX、PNG/JPEG/WebP/GIF media type | ODT、RTF、旧版 DOC；补齐扩展名/MIME 映射 | 内容签名、编码、加密/损坏文件、宏、ZIP/XML bomb、OCR、解析器沙箱 |
+| 输入解析 | TXT/Markdown/HTML/JSON/YAML、数字 PDF、DOCX、ODT、PNG/JPEG/WebP/GIF；ODT 已开发级提取 | RTF、旧版 DOC | 更广 corpus/fuzz、样式派生可见性、宏、OCR、解析器沙箱与生产 telemetry |
 | 输出交付 | YAML、JSON、Markdown、HTML、LaTeX、PDF、DOCX、TXT、RTF、ODT（RA-007C 已开发级实现） | 浏览器下载与更广 reader matrix | 样式保真、可访问性、跨阅读器兼容、转换资源限制 |
 
 范围决策：

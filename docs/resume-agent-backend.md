@@ -129,7 +129,7 @@ private. See the
 | ID | Capability | Delivery | Evidence | Coverage | Historical gap | Next acceptance evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | RA-001 | Validate candidate and API input | Implemented | Unit and API tests | Partial | None | Fuzz malformed YAML and oversized bodies |
-| RA-001B | Common resume/JD document ingestion | Partial implementation; trusted detection enabled | Content signatures, fatal text decoding, bounded DOCX/ODT ZIP inspection, stable API/Run errors and adversarial tests | Partial | Backfilled | ODT/RTF extractors, CFB/DOC isolation, real corpus, fuzz and operational limits |
+| RA-001B | Common resume/JD document ingestion | Partial implementation; trusted detection and ODT extraction enabled for development | Content signatures, fatal text decoding, bounded DOCX/ODT ZIP inspection, namespace-aware ODT extraction, stable API/Run errors and adversarial tests | Partial | Backfilled | RTF extractor, CFB/DOC isolation, broader corpus, fuzz and operational limits |
 | RA-002 | Structured JD analysis | Implemented | Zod contract, compatibility and Repair workflow tests | Partial | Backfilled | Golden JD evaluation set with field-level accuracy |
 | RA-003 | Candidate evidence index | Implemented | Stable source paths used by workflow test | Partial | Backfilled | Test every YAMLResume content section |
 | RA-004 | Requirement matching | Implemented | Deterministic lexical matcher | Gap | Inherited-unassessed | Compare lexical, embedding, and LLM reranking on eval set |
@@ -159,11 +159,28 @@ private. See the
 | Independent evidence | Existing `docx@9.7.1` and ODT writer packages, real PDF/image fixtures, Mammoth behavior, adversarial ZIP mutations and LibreOffice 24.2.7.2 as a later compatibility oracle |
 | Decision | Combine allowlisted auxiliary claims with content evidence; adopt a bounded internal ZIP index; reject MIME-only routing, unknown-binary text fallback, transitive JSZip and implicit LibreOffice runtime conversion |
 | Edge cases | MIME/extension conflict, extensionless signed file, unknown binary, UTF-8/UTF-16, empty text, DOCX/ODT confusion, unknown ZIP, traversal, duplicate entry, encryption, ZIP64, entry/expanded limits, CRC/inflate corruption and private parser errors |
-| Acceptance | 25 focused input tests, async Run and HTTP error tests, complete Agent/API suites, package type/build/Biome/license/diff gates; exact results live in `resume-agent-common-document-ingestion.zh-CN.md` |
+| Acceptance | 27 focused input tests, async Run and HTTP error tests, complete Agent/API suites, package type/build/Biome/license/diff gates; exact results live in `resume-agent-common-document-ingestion.zh-CN.md` |
 | Coverage | Partial: application-side A1 detection and error delivery are covered; CFB/DOC, real heterogeneous corpus, fuzz, time/memory isolation and operational telemetry are absent |
 | Historical gap | Backfilled; inherited routing trusted caller MIME and defaulted unknown extensions/binary to text |
-| Remaining gap | ODT/RTF visible-text extraction, legacy DOC parser isolation, cross-OS fixtures and production abuse evidence |
+| Remaining gap | RTF visible-text extraction, legacy DOC parser isolation, cross-OS fixtures and production abuse evidence; ODT is tracked below |
 | Last reviewed | 2026-09-16, Node 22.21.1, Mammoth 1.12.3, `docx` 9.7.1 |
+
+### RA-001B-B evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | trusted ODT package → manifest/XML validation → visible text → candidate/JD normalization |
+| User outcome | Users can submit ODT resumes and job descriptions without leaking review metadata, hidden content, scripts or embedded objects into the model context |
+| Current state | ODT is enabled for development through `extractArtifact`, synchronous HTTP, asynchronous Run/restart and advertised capabilities/OpenAPI; RTF and legacy DOC remain planned |
+| Primary evidence | OASIS OpenDocument 1.3 Parts 2/3, OWASP XML Security Cheat Sheet, PKWARE APPNOTE and Node.js 22 `TextDecoder`/`zlib`, reviewed 2026-09-16 |
+| Independent evidence | Repository ODT exporter plus three system ODTs; LibreOffice 24.2.7.2 direct/PDF conversions and the existing PDF extractor |
+| Decision | Reuse the bounded ZIP module and keep one deep internal namespace-aware XML scanner; reject transitive parser dependencies and implicit LibreOffice runtime conversion |
+| Edge cases | Prefix aliases, foreign root, malformed/fatal UTF-8, DTD/entity, depth/element/output limits, manifest mismatch/encryption, `mimetype` local extra, hidden/review/object content and nested frame text boxes |
+| Acceptance | Public input tests plus candidate/JD, HTTP and Run/restart tests; four independent ODT samples extract 191/4443/4310/65 characters; exact package gates live in the focused Feature Brief |
+| Coverage | Partial: application behavior and bounded hostile fixtures are covered; style-derived visibility, cross-OS/corpus/fuzz, worker isolation and production telemetry are absent |
+| Historical gap | None; added as an independently researched and tested format slice |
+| Remaining gap | RTF and legacy DOC are separate slices; ODT still needs broader readers/corpus, fuzz, performance and operational evidence |
+| Last reviewed | 2026-09-16, Node 22.21.1, ODF 1.3 and LibreOffice 24.2.7.2 |
 
 ### RA-010C evidence detail
 
@@ -213,7 +230,7 @@ private. See the
 | Acceptance | 18 focused tests across rendering/styles/workflow; complete Resume Agent package suite; TypeScript, Biome and diff checks |
 | Coverage | Covered for application-side contracts in RA-007B; RA-007 aggregate remains partial |
 | Historical gap | Backfilled; inherited rendering lacked adjacent tests and previously returned incorrect public metadata/raw error messages |
-| Remaining gap | Legacy RTF/ODT/DOC ingestion remains RA-001B; real PDF sandbox/page count and cross-reader DOCX/style fidelity are unverified |
+| Remaining gap | RTF/legacy DOC ingestion remains RA-001B; ODT input is development-grade and still lacks broader corpus/fuzz evidence; real PDF sandbox/page count and cross-reader DOCX/style fidelity are unverified |
 | Last reviewed | 2026-09-16, Node 22, `@yamlresume/core@0.12.2`, `docx@9.7.1` |
 
 ### RA-007C evidence detail

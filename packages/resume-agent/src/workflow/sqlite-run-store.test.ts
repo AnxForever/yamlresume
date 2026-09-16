@@ -29,6 +29,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { LlmClient } from '@/contracts'
+import { renderOdtDocument } from '@/rendering/odt'
 import { ResumeTailoringAgent } from '@/workflow/agent'
 import {
   type ClaimedRunTask,
@@ -1135,6 +1136,83 @@ describe('SqliteRunStore', () => {
       'completed'
     )
     expect(await recoveredService.recoverPendingTasks()).toBe(0)
+  })
+
+  it('extracts a persisted ODT job after restart recovery', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const originalStore = await openStore(databasePath)
+    const originalService = new ResumeAgentRunService(unusedAgent(), {
+      store: originalStore,
+      idFactory: () => 'run-recover-odt-job',
+      now: () => new Date('2026-09-16T12:00:00.000Z'),
+      schedule: () => undefined,
+    })
+    const jobOdt = renderOdtDocument({
+      title: 'Recovered Platform Engineer Role',
+      headline: '',
+      contacts: [],
+      summaryHeading: 'Requirements',
+      summary: ['Build reliable TypeScript systems after restart.'],
+      sections: [],
+    })
+    await originalService.start({
+      jobFiles: [
+        {
+          filename: 'role.odt',
+          contentBase64: jobOdt.toString('base64'),
+        },
+      ],
+      candidate: { resume: completeCandidate },
+    })
+    originalStore.close()
+
+    const requests: string[] = []
+    const responses = [
+      {
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      },
+      {
+        resume: completeCandidate,
+        selectedEvidenceIds: [],
+        questions: [],
+        notes: [],
+      },
+    ]
+    const recoveredAgent = new ResumeTailoringAgent({
+      async completeJson(request) {
+        requests.push(request.user)
+        return {
+          data: responses.shift(),
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    })
+    const recoveredTasks: Array<() => Promise<void>> = []
+    const recoveredStore = await openStore(databasePath)
+    const recoveredService = new ResumeAgentRunService(recoveredAgent, {
+      store: recoveredStore,
+      now: () => new Date('2026-09-16T12:01:00.000Z'),
+      schedule: (task) => recoveredTasks.push(task),
+    })
+
+    expect(await recoveredService.recoverPendingTasks()).toBe(1)
+    await recoveredTasks[0]?.()
+
+    expect((await recoveredService.get('run-recover-odt-job'))?.status).toBe(
+      'completed'
+    )
+    expect(requests[0]).toContain(
+      'Build reliable TypeScript systems after restart.'
+    )
   })
 
   it('recovers completion after an answered run loses its schedule hint', async () => {

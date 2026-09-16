@@ -226,6 +226,7 @@ function capabilities() {
         'application/yaml',
         'application/pdf',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.oasis.opendocument.text',
         'image/png',
         'image/jpeg',
         'image/webp',

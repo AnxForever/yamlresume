@@ -1,16 +1,16 @@
 # Resume Agent 常见文档输入 Feature Brief
 
 > Feature ID：RA-001B
-> 状态：Partial implementation；RA-001B-A1 内容签名与有界 ZIP 识别已开发级实现，
-> ODT、RTF、旧 DOC extractor 与 CFB/Word stream 核验仍为 Planned
+> 状态：Partial implementation；RA-001B-A1 可信识别与 RA-001B-B ODT 正文提取已开发级实现，
+> RTF、旧 DOC extractor 与 CFB/Word stream 核验仍为 Planned
 > 最后审阅：2026-09-16
 > 范围：可信文件识别，以及 ODT、RTF、旧版 DOC 的文本提取；不包含 OCR、宏执行或通用 Office 转换服务。
 
 ## 1. 用户问题与结果
 
 求职者和招聘方不会只使用 YAML、PDF 或 DOCX。旧简历、学校模板和招聘网站附件中仍会出现
-ODT、RTF 与 Word 97–2003 `.doc`。当前实现对这些文件没有可靠支持，并且未知扩展名会回退成
-`text/plain`，声明的 `mediaType` 也会直接覆盖扩展名推断。这会产生两类错误：
+ODT、RTF 与 Word 97–2003 `.doc`。本 Feature 立项时，这些文件没有可靠支持，并且未知扩展名
+会回退成 `text/plain`，声明的 `mediaType` 也会直接覆盖扩展名推断。这会产生两类错误：
 
 - 用户上传常见文档后得到乱码或模糊的“不支持”错误；
 - 攻击者可把二进制内容声明为文本，绕过预期的解析边界。
@@ -36,8 +36,8 @@ ODT、RTF 与 Word 97–2003 `.doc`。当前实现对这些文件没有可靠支
 
 RA-001B-A1 已改变第 3–7 项：输入模块现在先组合扩展名、声明 MIME、内容签名和容器结构，
 未知 binary 不再回退 UTF-8；DOCX/ODT 通过有界 ZIP index 区分；错误使用稳定 code 与固定
-message；DOCX 底层异常不再外泄。RTF 当前只完成 header 识别，ODT/RTF/DOC 尚未启用 extractor，
-因此 capabilities 仍保持原有已可提取格式，不能把检测基础设施写成完整输入支持。
+message；DOCX 底层异常不再外泄。RA-001B-B 又在同一 seam 启用了 ODT 可见正文提取；RTF
+当前只完成 header 识别，旧 DOC 尚无 extractor，不能把尚未完成的格式写成输入支持。
 
 ## 3. 研究证据与决策
 
@@ -169,7 +169,8 @@ parser 选择和错误清洗都封装在输入模块内。下游 evidence/prompt
 warning，不接触原始 parser 对象。
 
 初始开发阈值应集中为单一配置并由 fixture 校准，建议起点：每文件上传 12 MiB、archive
-entry 128 个、展开数据 32 MiB、提取文本 1,000,000 字符、XML/RTF nesting 128 层。
+entry 128 个、展开数据 32 MiB、提取文本 1,000,000 字符、单个 XML 100,000 个元素、
+XML/RTF nesting 128 层。
 这些是拒绝服务防线，不是产品承诺；变更必须有大文件基准证据。
 
 ## 7. 格式策略
@@ -178,7 +179,7 @@ entry 128 个、展开数据 32 MiB、提取文本 1,000,000 字符、XML/RTF ne
 
 - 只读取 `mimetype`、`META-INF/manifest.xml` 和 `content.xml` 所需内容；
 - 禁止 path traversal，拒绝重复关键 entry、加密正文、外部实体和超限 package；
-- 以 streaming XML parser 提取 heading、paragraph、列表、tab 与 line-break；
+- 以单遍、namespace-aware 的严格 XML scanner 提取 heading、paragraph、列表、tab 与 line-break；
 - 保持文档顺序，忽略样式、图片和脚本；缺失正文或提取为空给出明确结果。
 
 ### 7.2 RTF
@@ -247,10 +248,10 @@ entry 128 个、展开数据 32 MiB、提取文本 1,000,000 字符、XML/RTF ne
 | Feature ID | 生命周期 / 用户结果 | 交付 | 证据覆盖 | 历史缺口 | 剩余缺口 |
 | --- | --- | --- | --- | --- | --- |
 | RA-001B-A | upload → trusted detection；伪装文件不能选错 parser | Partial implementation：A1 已开发级实现 | Partial：OWASP、内容签名、fatal 解码、有界 ZIP index、mismatch/对抗 tests | backfilled | CFB Word stream、真实跨来源 corpus 与 fuzz |
-| RA-001B-B | ODT package → visible text | Planned | Partial：OASIS package 规范 | none | parser、limits、fixture corpus |
+| RA-001B-B | ODT package → visible text | Implemented for development | Partial：OASIS package/schema、OWASP XML、对抗 tests、candidate/JD/API/Run、四个真实本地 package 与独立 reader 对照 | none | 跨 OS/异构 corpus、fuzz、样式派生隐藏语义、生产隔离与 telemetry |
 | RA-001B-C | RTF stream → Unicode visible text | Planned | Partial：Microsoft RTF 规范 | none | reader 选型与对抗 tests |
 | RA-001B-D | legacy DOC → isolated visible text | Planned | Partial：MS-DOC、候选包元数据 | none | parser spike、隔离、损坏 corpus |
-| RA-001B-E | parser failure → safe user error | In development：检测/PDF/DOCX/API/Run 已统一 | Partial：固定错误、同步 HTTP 与异步 Run 脱敏 tests | backfilled | ODT/RTF/DOC extractor 与生产日志 |
+| RA-001B-E | parser failure → safe user error | In development：检测/PDF/DOCX/ODT/API/Run 已统一 | Partial：固定错误、同步 HTTP 与异步 Run 脱敏 tests | backfilled | RTF/DOC extractor 与生产日志 |
 
 ### 11.1 当前实施切片：RA-001B-A
 
@@ -283,8 +284,8 @@ entry 128 个、展开数据 32 MiB、提取文本 1,000,000 字符、XML/RTF ne
 `bounded-zip` 是内部 adapter，不写临时文件、不把用户路径交给文件系统，也没有借用 `docx`/
 `mammoth` 的传递 `jszip`。相同检测 seam 同时服务 candidate 与 JD 文件。
 
-当前仍只把已存在 extractor 的格式列为 Enabled；ODT/RTF/DOC 必须等各自提取、
-对抗测试和兼容性门禁完成后，才加入 API capabilities。
+当前只把已存在 extractor 的格式列入 capabilities；RA-001B-B 完成后 ODT 已加入，RTF/DOC
+仍必须等各自提取、对抗测试和兼容性门禁完成后才能加入。
 
 ### 11.2 当前验证证据
 
@@ -299,6 +300,62 @@ entry 128 个、展开数据 32 MiB、提取文本 1,000,000 字符、XML/RTF ne
   新增的三个 TypeScript 文件均手工核对保留完整 MIT header；
 - 当前证据只支持开发级应用边界，不包含 CFB/DOC、跨 OS、生产 worker 隔离、持续 fuzz 或
   恶意样本运营，因此 RA-001B 和 RA-001B-A 均不能标记为 Operational/Complete。
+
+### 11.3 RA-001B-B ODT 证据、契约与实现
+
+2026-09-16 以 Node 22.21.1、ODF 1.3 和当前 `db6c595` 为基线重新审阅。问题不是“从 ZIP
+找一段 XML”，而是只从可信 ODT package 提取当前可见正文，同时让恶意 XML 无法读本地/
+远程资源、无限展开或把批注和删除历史送入模型。
+
+| 问题 | 证据 | 决策 / 可证伪约束 | 验收 |
+| --- | --- | --- | --- |
+| package 如何成立 | ODF 1.3 Part 2 要求 manifest；`mimetype` 应为首个、STORE 且无 local extra field；root manifest media type 应与其一致 | 复用 `bounded-zip`，再次验证 root entry；有 `manifest:encryption-data` 即稳定拒绝 | 合法/加密/缺失/不一致 package tests |
+| 正文如何保真 | ODF 1.3 Part 3 定义 `office:text`、`text:p`/`text:h`、list、`text:s`、tab、line-break | 保持文档顺序与 Unicode；段落/标题分行、list 保留层级 bullet、显式空白保留 | 最小正文、list/Unicode、tab/line-break tests |
+| XML 如何安全处理 | OWASP XML 指出 DTD、外部实体与实体展开的机密性/可用性风险；Node 没有内建 ODF parser | 不使用未声明的传递依赖；实现 namespace-aware、fatal UTF-8、严格良构、拒绝 DTD/ENTITY、有限深度/元素数/输出的内部 scanner，且不解析 URI | malformed、DTD/XXE、未绑定 namespace、depth/element/output limit tests |
+| 什么是“当前可见” | 真实 LibreOffice package 含 hidden section；ODF 另有 tracked changes、annotation、scripts/object；真实字体 ODT 的正文也可位于 `draw:frame` 文本框 | 跳过 tracked-change store、annotation、hidden section/field、script、image/object；保留 frame 内真实 `text:p`/`text:h`，避免误删文本框正文 | hidden/deletion/annotation/object fixture 与真实 package 对照 |
+| 哪条接口承担复杂度 | 下游 candidate/JD 已统一经过 `extractArtifact(file)`；公开 detector contract 不应暴露 ZIP/XML parser 对象 | 将 manifest 与 XML 状态机封装在内部 ODT 深模块，调用方仍只依赖 `extractArtifact` 与稳定错误 | candidate、JD、同步 HTTP、异步 Run tests |
+
+实现将 package/manifest/XML 状态机封装在 `odt.ts`，复用 `bounded-zip`，公开接口仍只有
+`extractArtifact(file)`。正文只接受 `office:document-content → office:body → office:text`，保留
+标题、段落、嵌套列表、Unicode、`text:s`、tab、line-break 和文本框正文；批注、修订存储、
+隐藏 section/field、脚本、图片和嵌入对象不会进入模型上下文。DTD/ENTITY 不会被解析，输入采用
+fatal UTF-8，XML 深度、元素数与输出字符数分别限制为 128、100,000 和 1,000,000。
+
+逐行为 RED → GREEN 留下了可复验的设计证据：
+
+1. 最小 ODT 最初返回 `unsupported_file_type`，加入 extractor 后标题与段落可见；
+2. 等价 namespace prefix 最初被基于字符串的 manifest 检测拒绝，改为 expanded-name scanner；
+3. 任意 foreign root 最初可夹带 `office:text`，现在强制正文根路径和唯一 body/text；
+4. annotation 字符数据最初绕过 skip 状态，现由 text event 同样遵守 skip depth；
+5. `mimetype` local extra field 最初被接受，现由 ZIP entry 暴露并验证该字段；
+6. 合法的 paragraph → frame → text-box → paragraph 最初与单 `currentBlock` 冲突，现用 block stack
+   保持外层前缀、文本框正文和外层后缀的文档顺序；
+7. 100,001 个空元素最初仍能成功提取，新增公开接口回归后在通用 XML scanner 返回
+   `document_limit_exceeded`；四个真实样本的正文 XML 元素数为 19、188、343、129，给
+   100,000 上限保留了充足兼容余量；
+8. API 用例曾在源码已通过时返回 415；差分定位为 API 通过 package export 加载了旧
+   `resume-agent/dist`，重建依赖包后通过，没有为缓存问题修改 HTTP 代码。
+
+兼容实验包含本仓 exporter 生成包、Arphic UMing 字体比较文档、SIL Padauk type sample 和
+LibreOffice `idxexample.odt`，四者分别提取 191、4443、4310、65 个字符。LibreOffice 直接转 TXT
+会漏掉 page-anchored 文本框，因此不能作为唯一正文 oracle；LibreOffice → PDF → 既有 PDF
+extractor 的独立路径可看到对应正文。该证据只支持 `Implemented for development`：跨 OS、
+更广真实 corpus、fuzz、样式派生隐藏内容、worker 隔离和生产 telemetry 仍未完成。
+
+### 11.4 RA-001B-B 验收证据
+
+- `pnpm agent test src/input/artifacts.test.ts`：44/44；覆盖正文语义、namespace alias/未绑定
+  prefix、根结构、隐藏/批注/对象、DTD/XXE、fatal UTF-8、XML 深度/元素/输出上限，以及
+  ZIP traversal、重复、加密、ZIP64、展开量、CRC 与 `mimetype` local extra；
+- candidate 与 JD 通过完整 Agent seam；同步 HTTP、同进程异步 Run、私密安全失败，以及
+  SQLite 关闭/重开后的 ODT JD 恢复均通过；API 为 2 files / 19 tests；
+- `pnpm agent test`：16 files / 245 tests，5 秒内自然退出；Agent/API TypeScript 与 ESM/DTS
+  build、10 个目标 TypeScript 文件的 Biome、`git diff --check` 均通过；
+- `pnpm test`：134 files / 1434 tests，在包含并行前端与人工评审工作树时自然退出；ODT
+  四个真实样本重跑仍分别提取 191、4443、4310、65 个字符；
+- `pnpm license:check` 返回 0，但环境缺少 `addlicense` binary，实际扫描被脚本跳过；新增
+  `odt.ts` 已人工核对完整 MIT header。没有用 `process.exit`、延长 timeout 或关闭泄漏检测
+  代替生命周期修复。
 
 ## 12. 会推翻方案的证据
 
@@ -316,6 +373,16 @@ entry 128 个、展开数据 32 MiB、提取文本 1,000,000 字符、XML/RTF ne
   <https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html>
 - OASIS OpenDocument 1.3 Part 2 Packages：
   <https://docs.oasis-open.org/office/OpenDocument/v1.3/os/part2-packages/>
+- OASIS OpenDocument 1.3 Part 3 Schema：
+  <https://docs.oasis-open.org/office/OpenDocument/v1.3/os/part3-schema/>
+- OWASP XML Security Cheat Sheet：
+  <https://cheatsheetseries.owasp.org/cheatsheets/XML_Security_Cheat_Sheet.html>
+- PKWARE ZIP File Format Specification（APPNOTE）：
+  <https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT>
+- Node.js 22 `TextDecoder`：
+  <https://nodejs.org/docs/latest-v22.x/api/util.html#class-utiltextdecoder>
+- Node.js 22 `zlib`：
+  <https://nodejs.org/docs/latest-v22.x/api/zlib.html>
 - Microsoft Word Binary File Format `[MS-DOC]`：
   <https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/>
 - Microsoft Rich Text Format specification：

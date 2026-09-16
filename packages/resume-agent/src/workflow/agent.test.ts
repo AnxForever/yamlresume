@@ -25,6 +25,7 @@
 import { describe, expect, it } from 'vitest'
 import type { JsonCompletionRequest, LlmClient } from '@/contracts'
 import { StructuredOutputValidationError } from '@/llm/structured-output'
+import { renderOdtDocument } from '@/rendering/odt'
 import { ResumeTailoringAgent } from '@/workflow/agent'
 
 const candidate = {
@@ -121,6 +122,83 @@ describe('ResumeTailoringAgent', () => {
       'render_resume',
       'render_resume',
     ])
+  })
+
+  it('ingests ODT candidate and job files through the complete workflow', async () => {
+    const requests: JsonCompletionRequest[] = []
+    const responses = [
+      {
+        resume: candidate,
+        sourceArtifactIds: ['artifact.candidate.odt'],
+        questions: [],
+        warnings: [],
+      },
+      {
+        targetTitle: 'Platform Engineer',
+        seniority: 'senior',
+        summary: 'Builds reliable TypeScript platforms',
+        requirements: [],
+        keywords: ['TypeScript'],
+      },
+      {
+        resume: candidate,
+        selectedEvidenceIds: [],
+        questions: [],
+        notes: [],
+      },
+    ]
+    const llm: LlmClient = {
+      async completeJson(request) {
+        requests.push(request)
+        return {
+          data: responses.shift(),
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const candidateOdt = renderOdtDocument({
+      title: 'ODT Candidate',
+      headline: 'Reliable platform engineer',
+      contacts: [],
+      summaryHeading: 'Summary',
+      summary: ['Builds TypeScript services.'],
+      sections: [],
+    })
+    const jobOdt = renderOdtDocument({
+      title: 'Platform Engineer Role',
+      headline: '',
+      contacts: [],
+      summaryHeading: 'Requirements',
+      summary: ['Build reliable TypeScript platforms.'],
+      sections: [],
+    })
+
+    const result = await new ResumeTailoringAgent(llm).run({
+      jobFiles: [
+        {
+          filename: 'role.odt',
+          contentBase64: jobOdt.toString('base64'),
+        },
+      ],
+      candidate: {
+        files: [
+          {
+            filename: 'candidate.odt',
+            contentBase64: candidateOdt.toString('base64'),
+          },
+        ],
+      },
+      preferences: { formats: ['yaml'] },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(requests[0]?.user).toContain('Reliable platform engineer')
+    expect(requests[1]?.user).toContain('Build reliable TypeScript platforms.')
   })
 
   it('reports metadata from each rendered style preset', async () => {

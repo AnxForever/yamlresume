@@ -390,6 +390,24 @@ timer、server、socket 和 SQLite 生命周期。精确 14 文件/150 测试集
 完整调查证据见
 [`resume-agent-run-lease-heartbeat.zh-CN.md`](./resume-agent-run-lease-heartbeat.zh-CN.md#111-ra-015e-h完整测试进程不退出的后续诊断)。
 
+### 8.2 学习记录：ODT 输入是 package、XML 与可见性三层契约
+
+RA-001B-B 没有把 ODT 当成“ZIP 里读 `content.xml`”。研究先固定三层契约：ODF package 的
+`mimetype`/manifest，namespace-aware 且不解析实体的 XML，以及只交付当前可见正文的语义。
+实现继续复用 `extractArtifact(file)` 这个小接口，把 ZIP/manifest/XML 状态机留在内部深模块。
+
+逐行为 TDD 暴露了几类仅靠 happy path 看不到的缺陷：字符串匹配会拒绝等价 namespace prefix；
+只在 start/end event 跳过 annotation 会让字符数据泄漏；单一 paragraph buffer 无法处理真实 ODT
+中的 frame/text-box 嵌套；只限制 ZIP 字节、XML 深度和输出仍允许大量空元素消耗解析工作。对应
+修复分别是 expanded-name 解析、统一 skip depth、paragraph block stack，以及每 XML 100,000
+元素上限。四个独立样本的正文 XML 只有 19–343 个元素，兼容余量可量化而不是拍脑袋。
+
+LibreOffice 的直接 TXT 转换会漏掉 page-anchored 文本框，因此外部工具也不能天然充当正确
+oracle；本轮结合 LibreOffice → PDF → 既有 PDF extractor 交叉验证可见文本。结论只能写成
+`Implemented for development`：样式派生隐藏语义、跨 OS/更广 corpus、fuzz、进程隔离和生产
+telemetry 仍是明确缺口。完整证据与 RED → GREEN 记录见
+[`resume-agent-common-document-ingestion.zh-CN.md`](./resume-agent-common-document-ingestion.zh-CN.md#113-ra-001b-b-odt-证据契约与实现)。
+
 ## 9. 框架选型实验，而不是框架信仰
 
 到阶段 B 或 C 时，先准备同一组验收场景：
