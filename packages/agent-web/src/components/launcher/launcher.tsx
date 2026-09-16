@@ -28,12 +28,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { LogoMark } from '@/components/brand/logo'
 import type { SubmitRunResult } from '@/components/shell/app-shell'
 import type { AgentApiClient, ChatMessage } from '@/lib/api/client'
-import {
-  type AttachedFile,
-  loadDraft,
-  saveDraft,
-  submitBlockers,
-} from '@/lib/draft'
+import { type AttachedFile, loadDraft, saveDraft } from '@/lib/draft'
 import {
   availablePresets,
   SCENARIO_PRESETS,
@@ -135,15 +130,6 @@ export function LauncherView({
       capabilityView ? availablePresets(capabilityView) : SCENARIO_PRESETS,
     [capabilityView]
   )
-  const limits = useMemo(() => {
-    const backend = capabilityView?.input?.limits
-    return {
-      fileBytes: backend?.fileBytes ?? 12 * 1024 * 1024,
-      jobFiles: backend?.jobFiles ?? 8,
-      candidateFiles: backend?.candidateFiles ?? 12,
-    }
-  }, [capabilityView])
-
   // Restore the previously typed draft on mount. Only the text survives —
   // attached files cannot be serialized, so the user is told when they were
   // dropped rather than silently losing them.
@@ -175,11 +161,6 @@ export function LauncherView({
     return presets.find((entry) => entry.featured)?.id ?? presets[0]?.id ?? ''
   }, [presetId, presets])
 
-  const draft = useMemo(
-    () => ({ jobDescription, candidateYaml, files }),
-    [jobDescription, candidateYaml, files]
-  )
-  const blockers = useMemo(() => submitBlockers(draft, limits), [draft, limits])
   const capabilitiesReady = capabilityView !== null
 
   function handleAddFiles(list: FileList, role: 'job' | 'candidate') {
