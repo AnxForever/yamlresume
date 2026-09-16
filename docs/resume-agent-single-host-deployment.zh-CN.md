@@ -63,3 +63,15 @@ Nginx 配置必须在 reload 前通过 `nginx -t`。新服务至少验收：Basi
 - systemd restart 后，浏览器产生的 Run 仍能通过公开 HTTP 读取为 `completed`，证明部署路径实际使用 durable Store。
 - 首次 systemd 启动发现 `MemoryDenyWriteExecute` 与 V8 JIT 冲突并产生 SIGTRAP；根因确认后移除该项，其他隔离规则保留。Web 对 SIGTERM 返回 143，unit 用 `SuccessExitStatus=143` 明确为正常关闭；API SIGTERM 为 clean exit。
 - 旧 Deeix 容器、两个 volume、两个镜像、memory MCP unit 与目录已删除；Nginx ACME webroot 已改名。删除前的一致性备份位于 `/root/backups/deeix-chat-20260916T090100Z`，归档 SHA-256 为 `8096a2eeee31b79891df68f6e78481cbdba8a79e687af5f769971c3eef478cb6`，仅 root 可访问。
+
+### 2026-09-16 API-only upgrade rehearsal
+
+一次只替换 API/Agent dist 的升级演练未进入可用状态：新二进制在监听前以稳定错误
+`Agent API runtime configuration is invalid` 退出，说明现有生产 env 与新认证/runtime 配置尚未完成
+兼容性验收。回滚脚本将 `current` 恢复到 `20260916T085710Z`，从预留旧 artifact 恢复两个 dist，
+重启后 `/healthz` 返回 200，API/Web 均重新 `active`；没有修改 SQLite、Provider env 或 Web。
+
+演练还发现一个部署脚本陷阱：`cp -a /opt/yamlresume-agent/current new-release` 会复制 symlink
+本身，而不是 release 内容，随后写入新路径可能实际覆盖旧 release。后续发布必须先解析并复制
+`readlink -f current`（或使用明确的 `cp -aL`），并在切换前核对新目录不是 symlink；该失败路径保留
+在学习记录中，作为 rollback 演练证据而非成功部署证据。
