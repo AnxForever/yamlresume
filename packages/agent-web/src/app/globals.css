@@ -1,0 +1,79 @@
+@import "tailwindcss";
+@import "@appica/ui-react/styles.css";
+
+/* Tailwind must scan the library's compiled classes. */
+@source "../../node_modules/@appica/ui-react/dist";
+
+/*
+ * Warm-neutral override (kept from the Marvis reference direction):
+ * appica's default neutrals are cool (hue ~264); the launcher sits on a warm
+ * desk, so the two muted backgrounds are warmed. Everything else — ink scale,
+ * blue secondary, state colors, radius and shadow steps — stays appica stock.
+ *
+ * Radius usage in this app (concentric nesting):
+ *   window  → rounded-xl (18px)   outermost panels (sidebar, main)
+ *   card    → rounded-md (14px)   cards floating inside a panel
+ *   field   → rounded-xs (10px)   inputs, nav rows, chips
+ */
+:root,
+.light {
+  --background-subtle: oklch(0.984 0.003 85);
+  --background-muted: oklch(0.958 0.004 85);
+  --border: oklch(0.932 0.004 85);
+  --border-muted: oklch(0.958 0.004 85);
+
+  /*
+   * appica's stock `--focus-ring` is oklch(0.872) — roughly 1.3:1 against the
+   * white/near-white surfaces here, far below the 3:1 WCAG 1.4.11 requires for
+   * a focus indicator. Darken it to the app's own body-ink tone so keyboard
+   * focus is unmistakable without introducing a second accent color.
+   */
+  --focus-ring: oklch(0.446 0.03 256.802);
+
+  /* CJK-capable sans stack on top of appica's Latin-first stack. */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans SC", sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background-muted);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/*
+ * Focus treatment, split by element kind:
+ * - Keyboard-navigable controls (buttons, links, selects, list options) keep a
+ *   visible ring — in the neutral focus color, not the blue accent.
+ * - Text entry fields rely on the caret for focus feedback and get no painted
+ *   ring, matching the reference launcher's quiet look.
+ */
+a:focus-visible,
+button:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible,
+[role="option"]:focus-visible,
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+textarea:focus-visible,
+input:not([type="checkbox"]):not([type="radio"]):focus-visible {
+  outline: none;
+}
+
+/* Keep long evidence IDs, YAML and error codes from breaking the layout. */
+.break-anywhere {
+  overflow-wrap: anywhere;
+}
