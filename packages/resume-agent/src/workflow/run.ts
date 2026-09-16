@@ -34,6 +34,7 @@ import type {
   TailorResumeRequest,
   TailorResumeResult,
 } from '@/contracts'
+import { ArtifactInputError } from '@/input/errors'
 import type { ResumeTailoringAgent } from '@/workflow/agent'
 import {
   applyInteractionAnswer,
@@ -49,6 +50,12 @@ export type RunAnswerErrorCode =
   | 'idempotency_conflict'
   | 'answer_conflict'
   | 'run_checkpoint_missing'
+
+function publicRunFailure(error: unknown): AgentRunFailure | undefined {
+  return error instanceof ArtifactInputError
+    ? { code: error.code, message: error.message }
+    : undefined
+}
 
 export class RunAnswerError extends Error {
   constructor(
@@ -604,7 +611,7 @@ export class ResumeAgentRunService {
       await this.finish(id, result, heartbeat)
     } catch (error) {
       if (error instanceof RunTaskLeaseLostError) throw error
-      await this.fail(id, undefined, heartbeat)
+      await this.fail(id, publicRunFailure(error), heartbeat)
     }
   }
 
@@ -779,7 +786,7 @@ export class ResumeAgentRunService {
       await this.finish(id, result, heartbeat)
     } catch (error) {
       if (error instanceof RunTaskLeaseLostError) throw error
-      await this.fail(id, undefined, heartbeat)
+      await this.fail(id, publicRunFailure(error), heartbeat)
     }
   }
 

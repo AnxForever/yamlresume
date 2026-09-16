@@ -323,6 +323,41 @@ describe('ResumeAgentRunService', () => {
     expect(JSON.stringify(failed)).not.toContain('private resume content')
   })
 
+  it('preserves a stable input failure on an asynchronous run', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const privateMarker = 'PRIVATE_ASYNC_CANDIDATE_61932'
+    const service = new ResumeAgentRunService(fakeAgent(), {
+      idFactory: () => 'run-invalid-file',
+      schedule: (task) => tasks.push(task),
+    })
+
+    await service.start({
+      jobDescription:
+        'We need a TypeScript Engineer to build reliable systems.',
+      candidate: {
+        files: [
+          {
+            filename: 'candidate.txt',
+            mediaType: 'text/plain',
+            contentBase64: Buffer.from(
+              `%PDF-1.7\n${privateMarker}`,
+              'utf8'
+            ).toString('base64'),
+          },
+        ],
+      },
+    })
+    await tasks[0]?.()
+
+    const failed = await service.get('run-invalid-file')
+    expect(failed?.status).toBe('failed')
+    expect(failed?.error).toEqual({
+      code: 'file_type_mismatch',
+      message: 'File type does not match its content.',
+    })
+    expect(JSON.stringify(failed)).not.toContain(privateMarker)
+  })
+
   it('publishes the current stage while a run is still executing', async () => {
     const tasks: Array<() => Promise<void>> = []
     let resolveJobAnalysis: ((value: unknown) => void) | undefined

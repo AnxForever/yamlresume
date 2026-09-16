@@ -1,7 +1,8 @@
 # Resume Agent 常见文档输入 Feature Brief
 
 > Feature ID：RA-001B
-> 状态：Planned；研究与契约已就绪，尚未实现
+> 状态：Partial implementation；RA-001B-A1 内容签名与有界 ZIP 识别已开发级实现，
+> ODT、RTF、旧 DOC extractor 与 CFB/Word stream 核验仍为 Planned
 > 最后审阅：2026-09-16
 > 范围：可信文件识别，以及 ODT、RTF、旧版 DOC 的文本提取；不包含 OCR、宏执行或通用 Office 转换服务。
 
@@ -18,9 +19,9 @@ ODT、RTF 与 Word 97–2003 `.doc`。当前实现对这些文件没有可靠支
 可提取、可解释失败。完成后，用户可以把 ODT、RTF、旧 DOC 作为简历或 JD 输入；系统会先
 核对内容特征，再调用对应 extractor，并且不会执行宏、嵌入对象或外部引用。
 
-## 2. 当前实现审计
+## 2. 实现前审计与当前差异
 
-本地证据来自 `packages/resume-agent/src/input/artifacts.ts`、相邻测试和输入 Schema：
+实现前的本地证据来自 `packages/resume-agent/src/input/artifacts.ts`、相邻测试和输入 Schema：
 
 1. 已实现纯文本、YAML、JSON、Markdown、HTML、数字 PDF、DOCX，以及声明为
    PNG/JPEG/WebP/GIF 的图片输入；每文件限制 12 MiB，总计限制 30 MiB。
@@ -32,6 +33,11 @@ ODT、RTF 与 Word 97–2003 `.doc`。当前实现对这些文件没有可靠支
 7. 压缩文件只限制上传字节，没有限制 entry 数、解压总量、压缩比或 XML 复杂度。
 
 因此“现有测试通过”只能证明已覆盖样例，不能证明不可信文件上传边界安全。
+
+RA-001B-A1 已改变第 3–7 项：输入模块现在先组合扩展名、声明 MIME、内容签名和容器结构，
+未知 binary 不再回退 UTF-8；DOCX/ODT 通过有界 ZIP index 区分；错误使用稳定 code 与固定
+message；DOCX 底层异常不再外泄。RTF 当前只完成 header 识别，ODT/RTF/DOC 尚未启用 extractor，
+因此 capabilities 仍保持原有已可提取格式，不能把检测基础设施写成完整输入支持。
 
 ## 3. 研究证据与决策
 
@@ -240,11 +246,59 @@ entry 128 个、展开数据 32 MiB、提取文本 1,000,000 字符、XML/RTF ne
 
 | Feature ID | 生命周期 / 用户结果 | 交付 | 证据覆盖 | 历史缺口 | 剩余缺口 |
 | --- | --- | --- | --- | --- | --- |
-| RA-001B-A | upload → trusted detection；伪装文件不能选错 parser | Planned | Partial：OWASP、现有实现审计 | inherited-unassessed | detector 与 mismatch tests |
+| RA-001B-A | upload → trusted detection；伪装文件不能选错 parser | Partial implementation：A1 已开发级实现 | Partial：OWASP、内容签名、fatal 解码、有界 ZIP index、mismatch/对抗 tests | backfilled | CFB Word stream、真实跨来源 corpus 与 fuzz |
 | RA-001B-B | ODT package → visible text | Planned | Partial：OASIS package 规范 | none | parser、limits、fixture corpus |
 | RA-001B-C | RTF stream → Unicode visible text | Planned | Partial：Microsoft RTF 规范 | none | reader 选型与对抗 tests |
 | RA-001B-D | legacy DOC → isolated visible text | Planned | Partial：MS-DOC、候选包元数据 | none | parser spike、隔离、损坏 corpus |
-| RA-001B-E | parser failure → safe user error | Planned | Partial：现有错误审计、OWASP | inherited-unassessed | 跨 parser 脱敏 tests |
+| RA-001B-E | parser failure → safe user error | In development：检测/PDF/DOCX/API/Run 已统一 | Partial：固定错误、同步 HTTP 与异步 Run 脱敏 tests | backfilled | ODT/RTF/DOC extractor 与生产日志 |
+
+### 11.1 当前实施切片：RA-001B-A
+
+本轮实现检测 seam，不同时宣称 ODT、RTF 或 DOC 已可提取。研究复核确认：OWASP 要求把
+调用方 `Content-Type` 视为不可信信号，并将 allowlist、内容签名、扩展名和解压后大小限制
+组合使用；当前 `inferMediaType` 恰好违反这一前提。Node 22 的 fatal `TextDecoder` 可用于
+拒绝无效 UTF-8/UTF-16，`zlib` 的输出上限可作为后续 archive reader 的第二道防线，但不能
+替代 ZIP central/local header、entry 数和声明展开大小的显式校验。
+
+实际 tracer 顺序与结果：
+
+1. **扩展名 characterization RED → GREEN：** `.htm` 与 `.gif` 被误归为纯文本；补齐
+   TXT/HTML/GIF 等映射，并让直接 `text` 与 base64 HTML 使用相同正文归一化。
+2. **内容证据 RED → GREEN：** 无扩展名 PDF/PNG 会落入文本；加入 PDF、PNG、JPEG、GIF、
+   WebP 和 RTF signature，声明 MIME/扩展名降为一致性信号。
+3. **伪装与编码 RED → GREEN：** PDF 冒充 TXT、文本冒充 PNG、冲突 MIME/扩展名和未知
+   binary 均曾静默选错 parser；现在返回固定 `file_type_mismatch`、`invalid_file_encoding` 或
+   `unsupported_file_type`。UTF-8 与 BOM UTF-16 使用 fatal decoder，空正文单独失败。
+4. **容器识别 RED → GREEN：** 无扩展名 DOCX 原先被当文本；新增 `bounded-zip` 深模块，
+   核对 EOCD、central/local header、entry 路径/唯一性、加密、ZIP64、压缩方法、CRC、entry 数、
+   声明和实际展开量，并以 content types 或 ODF mimetype/manifest 区分 DOCX/ODT。
+5. **真实缺陷 RED → GREEN：** 初版只读取 DOCX `[Content_Types].xml`，损坏的
+   `word/document.xml` 会先进入 Mammoth，错误分类为 `document_extraction_failed`。新增损坏
+   entry 回归后，识别阶段会有界展开并校验 package 的全部 entry，提前返回 `corrupt_document`。
+6. **错误交付 RED → GREEN：** 固定 code 最初仍被同步 API 降级成 `500 agent_failed`、异步
+   Run 降级成 `agent_run_failed`；现在同步请求按 413/415/422 返回原稳定 code，异步 Run 保存
+   同一安全 failure，正文和底层异常不进入响应或 snapshot。
+
+实现采用 `detectInputFormat` 这一小接口；调用方不需要知道 ZIP、XML、签名、编码或一致性算法。
+`bounded-zip` 是内部 adapter，不写临时文件、不把用户路径交给文件系统，也没有借用 `docx`/
+`mammoth` 的传递 `jszip`。相同检测 seam 同时服务 candidate 与 JD 文件。
+
+当前仍只把已存在 extractor 的格式列为 Enabled；ODT/RTF/DOC 必须等各自提取、
+对抗测试和兼容性门禁完成后，才加入 API capabilities。
+
+### 11.2 当前验证证据
+
+- focused 输入测试：27/27；覆盖正常格式、签名优先、MIME/扩展名冲突、UTF-16、空正文、
+  未知 binary、DOCX/ODT 区分、路径穿越、重复 entry、加密、展开超限和损坏压缩数据；
+- 异步 Run 定向测试：19/19；同步 HTTP server 定向测试：13/13；
+- 完整 Agent：15 files / 204 tests；完整 API：2 files / 17 tests；排除共享工作树中尚未提交的
+  `agent-web` 后，全仓稳定范围为 123 files / 1282 tests；包含该并行前端切片的当前工作树
+  `pnpm test` 也以 133 files / 1391 tests 通过；Agent/API TypeScript 和 build、目标 Biome、
+  `git diff --check` 均通过；
+- `license:check` 退出码为 0，但环境缺少 `addlicense` binary，实际扫描被脚本跳过；本切片
+  新增的三个 TypeScript 文件均手工核对保留完整 MIT header；
+- 当前证据只支持开发级应用边界，不包含 CFB/DOC、跨 OS、生产 worker 隔离、持续 fuzz 或
+  恶意样本运营，因此 RA-001B 和 RA-001B-A 均不能标记为 Operational/Complete。
 
 ## 12. 会推翻方案的证据
 

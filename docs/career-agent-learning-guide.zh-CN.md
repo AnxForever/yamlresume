@@ -421,9 +421,10 @@ timer、server、socket 和 SQLite 生命周期。精确 14 文件/150 测试集
 4. [`resume-agent-evaluation-harness.zh-CN.md`](./resume-agent-evaluation-harness.zh-CN.md)：理解确定性 runner、运行时输出校验和安全报告；
 5. [`resume-agent-public-job-evaluation.zh-CN.md`](./resume-agent-public-job-evaluation.zh-CN.md)：理解真实公开 JD、合成候选人、真实 Provider 调用和模型质量证据为何必须分开；
 6. [`resume-agent-input-output.zh-CN.md`](./resume-agent-input-output.zh-CN.md)：理解输入、输出和文件能力；
-7. [`resume-agent-common-document-export.zh-CN.md`](./resume-agent-common-document-export.zh-CN.md)：用 TXT/RTF/ODT 的证据台账、共享语义模型、逐行为 TDD、确定性 ZIP/XML 和真实 reader/schema 实验学习 exporter 开发；
-8. [`resume-agent-implementation-plan.md`](./resume-agent-implementation-plan.md)：理解实现顺序和遗留缺口；
-9. 按本文第 3 节的顺序阅读源代码和相邻测试。
+7. [`resume-agent-common-document-ingestion.zh-CN.md`](./resume-agent-common-document-ingestion.zh-CN.md)：用不可信上传、内容签名、fatal 解码、有界 ZIP、稳定错误和对抗 fixture 学习安全 parser seam；
+8. [`resume-agent-common-document-export.zh-CN.md`](./resume-agent-common-document-export.zh-CN.md)：用 TXT/RTF/ODT 的证据台账、共享语义模型、逐行为 TDD、确定性 ZIP/XML 和真实 reader/schema 实验学习 exporter 开发；
+9. [`resume-agent-implementation-plan.md`](./resume-agent-implementation-plan.md)：理解实现顺序和遗留缺口；
+10. 按本文第 3 节的顺序阅读源代码和相邻测试。
 
 ### 10.2 再读外部一手资料
 

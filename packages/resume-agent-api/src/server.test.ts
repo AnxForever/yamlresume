@@ -139,6 +139,43 @@ describe('agent API', () => {
     })
   })
 
+  it('returns a stable input error when uploaded content contradicts its type', async () => {
+    const privateMarker = 'PRIVATE_CANDIDATE_DETAIL_72891'
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/tailor-resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobDescription:
+            'We need a TypeScript Engineer to build reliable systems.',
+          candidate: {
+            files: [
+              {
+                filename: 'candidate.txt',
+                mediaType: 'text/plain',
+                contentBase64: Buffer.from(
+                  `%PDF-1.7\n${privateMarker}`,
+                  'utf8'
+                ).toString('base64'),
+              },
+            ],
+          },
+        }),
+      })
+      const payload = (await response.json()) as {
+        error?: { code?: string; message?: string }
+      }
+
+      expect(response.status).toBe(422)
+      expect(payload.error).toEqual({
+        code: 'file_type_mismatch',
+        message: 'File type does not match its content.',
+      })
+      expect(JSON.stringify(payload)).not.toContain(privateMarker)
+    })
+  })
+
   it('delivers a requested ODT package through the HTTP contract', async () => {
     await withServer(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/v1/tailor-resume`, {

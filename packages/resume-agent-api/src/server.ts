@@ -30,6 +30,7 @@ import {
   type ServerResponse,
 } from 'node:http'
 import {
+  ArtifactInputError,
   CandidateValidationError,
   createOpenAICompatibleClientFromEnv,
   DraftValidationError,
@@ -413,6 +414,16 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
       success(response, 200, result, requestId)
     } catch (runError) {
       const message = getErrorMessage(runError)
+      if (runError instanceof ArtifactInputError) {
+        const status =
+          runError.code === 'document_limit_exceeded'
+            ? 413
+            : runError.code === 'unsupported_file_type'
+              ? 415
+              : 422
+        error(response, status, runError.code, runError.message, requestId)
+        return
+      }
       if (
         runError instanceof CandidateValidationError ||
         runError instanceof DraftValidationError

@@ -318,6 +318,14 @@ components:
                 - llm_not_configured
                 - llm_request_failed
                 - structured_output_validation_failed
+                - unsupported_file_type
+                - file_type_mismatch
+                - invalid_file_encoding
+                - corrupt_document
+                - encrypted_document
+                - document_limit_exceeded
+                - document_extraction_failed
+                - empty_extracted_text
                 - agent_failed
             message:
               type: string

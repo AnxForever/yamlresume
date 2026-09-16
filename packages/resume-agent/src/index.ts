@@ -120,6 +120,7 @@ export {
 } from './evaluation/contracts'
 export { publicJobDerivedDevelopmentCases } from './evaluation/fixtures/public-job-derived'
 export { runEvaluation } from './evaluation/runner'
+export type { ArtifactInputErrorCode } from './input/artifacts'
 export {
   ArtifactInputError,
   extractArtifact,

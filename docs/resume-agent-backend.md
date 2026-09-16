@@ -129,7 +129,7 @@ private. See the
 | ID | Capability | Delivery | Evidence | Coverage | Historical gap | Next acceptance evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | RA-001 | Validate candidate and API input | Implemented | Unit and API tests | Partial | None | Fuzz malformed YAML and oversized bodies |
-| RA-001B | Common resume/JD document ingestion | Planned | Current parser inventory and format roadmap | Gap | Inherited-unassessed | Research ODT/RTF/DOC adapters, content signatures, decompression limits and fixture corpus |
+| RA-001B | Common resume/JD document ingestion | Partial implementation; trusted detection enabled | Content signatures, fatal text decoding, bounded DOCX/ODT ZIP inspection, stable API/Run errors and adversarial tests | Partial | Backfilled | ODT/RTF extractors, CFB/DOC isolation, real corpus, fuzz and operational limits |
 | RA-002 | Structured JD analysis | Implemented | Zod contract, compatibility and Repair workflow tests | Partial | Backfilled | Golden JD evaluation set with field-level accuracy |
 | RA-003 | Candidate evidence index | Implemented | Stable source paths used by workflow test | Partial | Backfilled | Test every YAMLResume content section |
 | RA-004 | Requirement matching | Implemented | Deterministic lexical matcher | Gap | Inherited-unassessed | Compare lexical, embedding, and LLM reranking on eval set |
@@ -147,6 +147,23 @@ private. See the
 | RA-015C | Transactional Run outbox and restart recovery | Implemented for development; explicit drain only | Run + task atomic transactions, v1→v2 migration, lease/ack/release, lost-hint restart and terminal replay tests | Partial | None | Heartbeat/fencing supplied by RA-015E; no automatic poller, DLQ/backoff or operational evidence |
 | RA-015D | Multi-worker lease takeover and fault verification | Implemented for development; same-host only | Claim-generation fencing, same-Run serialization, crash takeover, bounded batch/attempts and privacy tests | Partial | Reopened-by-change | Long-task heartbeat/fencing supplied by RA-015E; no DLQ/redrive, automatic worker or multi-host evidence |
 | RA-015E | Run task lease heartbeat and lost-lease write isolation | Implemented for development; same-host only | Exact-generation renewal, Store-side leased CAS, deferred Provider/fake-clock takeover, renewal failure, shutdown and timer cleanup tests | Partial | Reopened-by-change | At-least-once Provider calls; RA-015F claim-ahead/automatic worker, metrics and multi-host adapter remain |
+
+### RA-001B-A1 evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | untrusted candidate/JD upload → type detection → parser selection or safe rejection |
+| User outcome | Signed and container formats cannot silently masquerade as text or select the wrong parser; failures are stable and do not reveal document content |
+| Current state | Existing text/PDF/DOCX/image paths use content-aware detection; DOCX/ODT ZIP packages are distinguished; RTF header is recognized but its extractor is not enabled; legacy DOC remains planned |
+| Primary evidence | OWASP File Upload Cheat Sheet, OASIS OpenDocument 1.3 Packages, PKWARE ZIP APPNOTE, Node.js 22 `TextDecoder`/`zlib`, reviewed 2026-09-16 |
+| Independent evidence | Existing `docx@9.7.1` and ODT writer packages, real PDF/image fixtures, Mammoth behavior, adversarial ZIP mutations and LibreOffice 24.2.7.2 as a later compatibility oracle |
+| Decision | Combine allowlisted auxiliary claims with content evidence; adopt a bounded internal ZIP index; reject MIME-only routing, unknown-binary text fallback, transitive JSZip and implicit LibreOffice runtime conversion |
+| Edge cases | MIME/extension conflict, extensionless signed file, unknown binary, UTF-8/UTF-16, empty text, DOCX/ODT confusion, unknown ZIP, traversal, duplicate entry, encryption, ZIP64, entry/expanded limits, CRC/inflate corruption and private parser errors |
+| Acceptance | 25 focused input tests, async Run and HTTP error tests, complete Agent/API suites, package type/build/Biome/license/diff gates; exact results live in `resume-agent-common-document-ingestion.zh-CN.md` |
+| Coverage | Partial: application-side A1 detection and error delivery are covered; CFB/DOC, real heterogeneous corpus, fuzz, time/memory isolation and operational telemetry are absent |
+| Historical gap | Backfilled; inherited routing trusted caller MIME and defaulted unknown extensions/binary to text |
+| Remaining gap | ODT/RTF visible-text extraction, legacy DOC parser isolation, cross-OS fixtures and production abuse evidence |
+| Last reviewed | 2026-09-16, Node 22.21.1, Mammoth 1.12.3, `docx` 9.7.1 |
 
 ### RA-010C evidence detail
 

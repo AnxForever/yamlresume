@@ -29,21 +29,15 @@ import mammoth from 'mammoth'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 import type { ExtractedArtifact, InputFile } from '@/contracts'
+import { DOCX_MEDIA_TYPE, detectInputFormat } from '@/input/detection'
+import { ArtifactInputError } from '@/input/errors'
+
+export type { ArtifactInputErrorCode } from '@/input/errors'
+export { ArtifactInputError } from '@/input/errors'
 
 export const MAX_ARTIFACT_BYTES = 12 * 1024 * 1024
 export const MAX_TOTAL_ARTIFACT_BYTES = 30 * 1024 * 1024
 
-const TEXT_MEDIA_TYPES = new Set([
-  'application/json',
-  'application/ld+json',
-  'application/yaml',
-  'text/html',
-  'text/markdown',
-  'text/plain',
-  'text/x-markdown',
-  'text/yaml',
-  'text/xml',
-])
 const IMAGE_MEDIA_TYPES = new Set([
   'image/gif',
   'image/jpeg',
@@ -133,60 +127,24 @@ function createPdfBinaryDataFactory(resourceWarnings: Set<string>) {
   }
 }
 
-export class ArtifactInputError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'ArtifactInputError'
-  }
-}
-
-function extensionOf(filename: string): string {
-  const extension = filename.toLocaleLowerCase().split('.').pop()
-  return extension ?? ''
-}
-
-function inferMediaType(file: InputFile): string {
-  if (file.mediaType) {
-    return file.mediaType.toLocaleLowerCase().split(';')[0].trim()
-  }
-
-  switch (extensionOf(file.filename)) {
-    case 'docx':
-      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    case 'json':
-      return 'application/json'
-    case 'md':
-    case 'markdown':
-      return 'text/markdown'
-    case 'pdf':
-      return 'application/pdf'
-    case 'jpg':
-    case 'jpeg':
-      return 'image/jpeg'
-    case 'png':
-      return 'image/png'
-    case 'webp':
-      return 'image/webp'
-    case 'yaml':
-    case 'yml':
-      return 'application/yaml'
-    default:
-      return 'text/plain'
-  }
-}
-
-function decodeBase64(value: string, filename: string): Buffer {
+function decodeBase64(value: string): Buffer {
   const normalized = value.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '')
   if (
     !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) ||
     normalized.length % 4 === 1
   ) {
-    throw new ArtifactInputError(`Invalid base64 content for ${filename}`)
+    throw new ArtifactInputError(
+      'invalid_file_encoding',
+      'File content is not valid base64.'
+    )
   }
 
   const buffer = Buffer.from(normalized, 'base64')
   if (buffer.length === 0) {
-    throw new ArtifactInputError(`Empty file content for ${filename}`)
+    throw new ArtifactInputError(
+      'empty_extracted_text',
+      'File content is empty.'
+    )
   }
   return buffer
 }
@@ -202,12 +160,19 @@ function stripHtml(value: string): string {
     .trim()
 }
 
-function textFromBuffer(buffer: Buffer, mediaType: string): string {
-  const text = buffer
-    .toString('utf8')
-    .replace(/^\uFEFF/, '')
-    .trim()
-  return mediaType === 'text/html' ? stripHtml(text) : text
+function normalizeExtractedText(text: string, mediaType: string): string {
+  const normalized = text.trim()
+  return mediaType === 'text/html' ? stripHtml(normalized) : normalized
+}
+
+function requireExtractedText(text: string): string {
+  if (!text.trim()) {
+    throw new ArtifactInputError(
+      'empty_extracted_text',
+      'Document contains no extractable text.'
+    )
+  }
+  return text
 }
 
 function pdfExtractionErrorMessage(error: unknown): string {
@@ -260,10 +225,7 @@ async function extractPdfText(
 
 function kindFor(mediaType: string): ExtractedArtifact['kind'] {
   if (mediaType === 'application/pdf') return 'pdf'
-  if (
-    mediaType ===
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-  ) {
+  if (mediaType === DOCX_MEDIA_TYPE) {
     return 'docx'
   }
   if (IMAGE_MEDIA_TYPES.has(mediaType)) return 'image'
@@ -273,43 +235,52 @@ function kindFor(mediaType: string): ExtractedArtifact['kind'] {
 export async function extractArtifact(
   file: InputFile
 ): Promise<ExtractedArtifact> {
-  const mediaType = inferMediaType(file)
-  const kind = kindFor(mediaType)
   const warnings: string[] = []
   let buffer: Buffer | undefined
 
   if (file.contentBase64 !== undefined) {
-    buffer = decodeBase64(file.contentBase64, file.filename)
+    buffer = decodeBase64(file.contentBase64)
     if (buffer.length > MAX_ARTIFACT_BYTES) {
       throw new ArtifactInputError(
-        `${file.filename} exceeds the ${MAX_ARTIFACT_BYTES} byte per-file limit`
+        'document_limit_exceeded',
+        `File exceeds the ${MAX_ARTIFACT_BYTES} byte per-file limit.`
       )
     }
   }
 
+  const detected = detectInputFormat(file, buffer)
+  const mediaType = detected.canonicalMediaType
+  const decodedText = detected.decodedText
+  const kind = kindFor(mediaType)
+
   const id = file.id ?? `artifact.${file.filename}`
   if (file.text !== undefined) {
+    const text = normalizeExtractedText(file.text, mediaType)
     return {
       id,
       filename: file.filename,
       mediaType,
       kind: 'text',
-      text: file.text.trim(),
+      text: requireExtractedText(text),
       warnings,
     }
   }
 
   if (!buffer) {
-    throw new ArtifactInputError(`Missing content for ${file.filename}`)
+    throw new ArtifactInputError(
+      'document_extraction_failed',
+      'File content is missing.'
+    )
   }
 
-  if (TEXT_MEDIA_TYPES.has(mediaType)) {
+  if (decodedText !== undefined) {
+    const text = normalizeExtractedText(decodedText, mediaType)
     return {
       id,
       filename: file.filename,
       mediaType,
       kind: 'text',
-      text: textFromBuffer(buffer, mediaType),
+      text: requireExtractedText(text),
       warnings,
     }
   }
@@ -326,7 +297,12 @@ export async function extractArtifact(
       }
       return { id, filename: file.filename, mediaType, kind, text, warnings }
     } catch (error) {
-      throw new ArtifactInputError(pdfExtractionErrorMessage(error))
+      throw new ArtifactInputError(
+        error instanceof Error && error.name === 'PasswordException'
+          ? 'encrypted_document'
+          : 'corrupt_document',
+        pdfExtractionErrorMessage(error)
+      )
     }
   }
 
@@ -342,9 +318,10 @@ export async function extractArtifact(
         text: result.value.trim(),
         warnings,
       }
-    } catch (error) {
+    } catch {
       throw new ArtifactInputError(
-        `Could not extract DOCX text from ${file.filename}: ${error instanceof Error ? error.message : String(error)}`
+        'document_extraction_failed',
+        'Could not extract DOCX text.'
       )
     }
   }
@@ -361,7 +338,8 @@ export async function extractArtifact(
   }
 
   throw new ArtifactInputError(
-    `Unsupported file type for ${file.filename}; supported types include text, YAML, JSON, Markdown, PDF, DOCX, PNG, JPEG, and WebP`
+    'unsupported_file_type',
+    'File type is not supported.'
   )
 }
 
@@ -379,13 +357,17 @@ export async function extractArtifacts(
     totalBytes += bytes
     if (totalBytes > MAX_TOTAL_ARTIFACT_BYTES) {
       throw new ArtifactInputError(
-        `Input files exceed the ${MAX_TOTAL_ARTIFACT_BYTES} byte total limit`
+        'document_limit_exceeded',
+        `Input files exceed the ${MAX_TOTAL_ARTIFACT_BYTES} byte total limit.`
       )
     }
 
     const result = await extractArtifact(file)
     if (ids.has(result.id)) {
-      throw new ArtifactInputError(`Duplicate input artifact id: ${result.id}`)
+      throw new ArtifactInputError(
+        'document_extraction_failed',
+        'Input artifact IDs must be unique.'
+      )
     }
     ids.add(result.id)
     results.push(result)
