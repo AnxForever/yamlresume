@@ -298,6 +298,17 @@ Provider message 和异常正文均未写入报告或文档。
 达标，且只有一次重复样本。RA-010C 继续保持 `Implemented for development`，不能提升为
 `Enabled` 或 `Operational`；下一步应增加重复 campaign、分析失败断言并改善 JD 覆盖率。
 
+随后在同一 `atomic-requirements-v3` prompt/runtime 配置下进行了 2 次重复（共 6 次执行）：
+
+- `passed = 4`、`failed = 2`、`scored = 4`，`passRate = 0.6667`；
+- `failureCodeCounts` 为 `execution_failed = 2`，没有 assertion 或 invalid-result 失败；
+- Wilson 95% 区间为 `[0.3, 0.9032]`，平均 requirement coverage `0.565`，must-have coverage
+  `0.605`；
+- Anthropic case 两次均通过，Grafana 和 Cloudflare 各一次 Provider/执行失败。
+
+这组重复样本显示匹配器修复消除了上一轮两个确定性的 coverage assertion failure，但 Provider
+执行稳定性仍不足以宣称生产质量；当前证据适合指导下一轮诊断，不适合作为成功率门槛。
+
 ## 10. 验收门禁
 
 ```text
