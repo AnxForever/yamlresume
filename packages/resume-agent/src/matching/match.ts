@@ -38,6 +38,38 @@ function normalize(value: string): string {
     .trim()
 }
 
+const GENERIC_KEYWORD_TOKENS = new Set([
+  'a',
+  'an',
+  'and',
+  'build',
+  'building',
+  'data',
+  'engineer',
+  'engineering',
+  'experience',
+  'for',
+  'in',
+  'of',
+  'on',
+  'skill',
+  'skills',
+  'strong',
+  'system',
+  'systems',
+  'team',
+  'the',
+  'to',
+  'using',
+  'with',
+])
+
+function meaningfulKeywordTokens(value: string): string[] {
+  return normalize(value)
+    .split(' ')
+    .filter((token) => token.length >= 3 && !GENERIC_KEYWORD_TOKENS.has(token))
+}
+
 function keywordMatches(
   requirement: JobRequirement,
   evidence: Evidence[]
@@ -45,11 +77,14 @@ function keywordMatches(
   const candidates = [requirement.text, ...requirement.keywords]
     .map(normalize)
     .filter((value) => value.length > 1)
+  const keywordTokens = requirement.keywords.flatMap(meaningfulKeywordTokens)
 
   return evidence.filter((item) => {
     const text = normalize(item.text)
-    return candidates.some(
-      (candidate) => text.includes(candidate) || candidate.includes(text)
+    return (
+      candidates.some(
+        (candidate) => text.includes(candidate) || candidate.includes(text)
+      ) || keywordTokens.some((token) => text.includes(token))
     )
   })
 }

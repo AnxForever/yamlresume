@@ -64,7 +64,8 @@ export function buildJobAnalysisPrompt(
   return `${SAFETY_RULES}
 Analyze the following job description for resume tailoring.
 Extract the target title, seniority, company if present, a short summary, and requirements.
-Split requirements into must-have and nice-to-have. Each requirement needs concise keywords.
+Split requirements into atomic must-have and nice-to-have capabilities; do not combine unrelated clauses.
+Keep each requirement text concise (one capability, ideally under 120 characters) and provide 1 to 5 canonical keywords that can be matched literally against resume evidence.
 
 JOB DESCRIPTION START
 ${jobDescription}
