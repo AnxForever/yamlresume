@@ -12,6 +12,8 @@ servers:
     description: Local development
 tags:
   - name: System
+  - name: Authentication
+  - name: Provider Credentials
   - name: Resume Agent
 paths:
   /healthz:
@@ -48,10 +50,173 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/Capabilities'
+  /v1/auth/register:
+    post:
+      tags: [Authentication]
+      operationId: registerUser
+      summary: Create a local account and issue an opaque session cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthCredentials'
+      responses:
+        '201':
+          description: Account created and HttpOnly session cookie issued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthSession'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '409':
+          description: An account already exists for the canonical email
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/auth/login:
+    post:
+      tags: [Authentication]
+      operationId: loginUser
+      summary: Verify credentials and issue a new opaque session cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthCredentials'
+      responses:
+        '200':
+          description: Credentials accepted and HttpOnly session cookie issued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthSession'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '429':
+          description: Too many failed attempts for this canonical email
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/auth/me:
+    get:
+      tags: [Authentication]
+      operationId: getCurrentUser
+      summary: Return the user represented by the session cookie
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Current authenticated user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthUser'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+  /v1/auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logoutUser
+      summary: Revoke the current session and clear its cookie
+      responses:
+        '204':
+          description: Session absent or revoked
+  /v1/provider-credentials:
+    get:
+      tags: [Provider Credentials]
+      operationId: listProviderCredentials
+      summary: List configured Provider IDs and timestamps without key material
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Credential metadata owned by the current user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ProviderCredentialSummary'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+  /v1/provider-credentials/{providerId}:
+    parameters:
+      - name: providerId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
+    put:
+      tags: [Provider Credentials]
+      operationId: putProviderCredential
+      summary: Encrypt and replace one Provider API key
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderCredentialWrite'
+      responses:
+        '200':
+          description: Credential encrypted and stored; plaintext is never returned
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProviderCredentialSummary'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+    delete:
+      tags: [Provider Credentials]
+      operationId: deleteProviderCredential
+      summary: Delete one Provider API key owned by the current user
+      security:
+        - sessionCookie: []
+      responses:
+        '204':
+          description: Credential absent or deleted
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
   /v1/tailor-resume:
     post:
       tags: [Resume Agent]
       operationId: tailorResume
+      security:
+        - sessionCookie: []
       summary: Generate grounded resume variants for a job description
       description: |
         Runs input extraction, optional candidate normalization, JD analysis,
@@ -103,6 +268,8 @@ paths:
     post:
       tags: [Resume Agent]
       operationId: createResumeRun
+      security:
+        - sessionCookie: []
       summary: Queue an asynchronous resume-tailoring run
       description: |
         Validates the request before creating a run, then returns the queued
@@ -142,6 +309,8 @@ paths:
     get:
       tags: [Resume Agent]
       operationId: getResumeRun
+      security:
+        - sessionCookie: []
       summary: Get the latest public snapshot of a resume-tailoring run
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -172,6 +341,8 @@ paths:
     post:
       tags: [Resume Agent]
       operationId: answerResumeRunInteraction
+      security:
+        - sessionCookie: []
       summary: Answer the currently active structured interaction
       description: |
         Validates the answer, applies it to the stored checkpoint, and either
@@ -223,6 +394,12 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: yamlresume_session
+      description: HttpOnly opaque session token; production uses the __Host- prefix
   parameters:
     RequestId:
       name: X-Request-Id
@@ -233,6 +410,12 @@ components:
         type: string
         maxLength: 128
   responses:
+    AuthenticationRequired:
+      description: A valid, unexpired session cookie is required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
     InvalidRequest:
       description: Request body, multipart form, file, or schema is invalid
       content:
@@ -270,6 +453,67 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
   schemas:
+    AuthCredentials:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+          writeOnly: true
+    AuthUser:
+      type: object
+      additionalProperties: false
+      required: [id, email, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        createdAt:
+          type: string
+          format: date-time
+    AuthSession:
+      type: object
+      additionalProperties: false
+      required: [user, expiresAt]
+      properties:
+        user:
+          $ref: '#/components/schemas/AuthUser'
+        expiresAt:
+          type: string
+          format: date-time
+    ProviderCredentialWrite:
+      type: object
+      additionalProperties: false
+      required: [apiKey]
+      properties:
+        apiKey:
+          type: string
+          minLength: 1
+          maxLength: 8192
+          writeOnly: true
+    ProviderCredentialSummary:
+      type: object
+      additionalProperties: false
+      required: [providerId, createdAt, updatedAt]
+      properties:
+        providerId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     ApiMeta:
       type: object
       required: [apiVersion, requestId]
@@ -306,6 +550,15 @@ components:
               type: string
               enum:
                 - invalid_request
+                - invalid_registration
+                - user_exists
+                - invalid_credentials
+                - login_rate_limited
+                - not_authenticated
+                - invalid_provider_credential
+                - authentication_disabled
+                - authentication_failed
+                - origin_not_allowed
                 - invalid_answer
                 - not_found
                 - run_not_found
@@ -879,7 +1132,7 @@ components:
           $ref: '#/components/schemas/AgentRunFailure'
     Capabilities:
       type: object
-      required: [apiVersion, endpoints, input, output]
+      required: [apiVersion, endpoints, input, output, runtime]
       properties:
         apiVersion: { type: string }
         endpoints:
@@ -891,3 +1144,10 @@ components:
         output:
           type: object
           additionalProperties: true
+        runtime:
+          type: object
+          required: [providerConfigured, runStore, authentication]
+          properties:
+            providerConfigured: { type: boolean }
+            runStore: { type: string, enum: [memory, sqlite] }
+            authentication: { type: string, enum: [enabled, disabled] }

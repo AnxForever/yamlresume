@@ -22,15 +22,20 @@
  * IN THE SOFTWARE.
  */
 
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import type { LlmClient } from '@yamlresume/resume-agent'
 import {
   ResumeAgentRunService,
   ResumeTailoringAgent,
   renderResumeVariant,
+  SqliteRunStore,
 } from '@yamlresume/resume-agent'
 import { describe, expect, it } from 'vitest'
 
-import { createAgentApiServer } from './server'
+import { createAgentApiServer, startAgentApiServer } from './server'
 
 const candidate = {
   content: {
@@ -97,6 +102,224 @@ async function withServer<T>(
 }
 
 describe('agent API', () => {
+  it('recovers a committed SQLite task when the local runtime starts', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'resume-agent-recovery-'))
+    const databasePath = join(directory, 'runs.sqlite')
+    const now = new Date(Date.now() - 1_000).toISOString()
+    const store = await SqliteRunStore.open(databasePath)
+    try {
+      await store.createWithTask(
+        {
+          revision: 0,
+          snapshot: {
+            id: 'run-recovered-by-api',
+            status: 'queued',
+            createdAt: now,
+            updatedAt: now,
+          },
+          request: {
+            jobDescription:
+              'We need a TypeScript Engineer to build reliable systems.',
+            candidate: { resume: candidate },
+          },
+        },
+        {
+          id: 'run-recovered-by-api:prepare:0',
+          runId: 'run-recovered-by-api',
+          kind: 'prepare',
+          createdAt: now,
+        }
+      )
+    } finally {
+      store.close()
+    }
+
+    const runtime = await startAgentApiServer({
+      agent: fakeAgent(),
+      env: {
+        RESUME_AGENT_RUN_DB_PATH: databasePath,
+        RESUME_AGENT_AUTH_MODE: 'disabled',
+      },
+      port: 0,
+      logger: () => undefined,
+    })
+    try {
+      expect(runtime.recoveredTasks).toBe(1)
+      let status: string | undefined
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        const response = await fetch(
+          `${runtime.url}/v1/runs/run-recovered-by-api`
+        )
+        const payload = (await response.json()) as {
+          data?: { status?: string }
+        }
+        status = payload.data?.status
+        if (status === 'completed') break
+      }
+      expect(status).toBe('completed')
+    } finally {
+      await runtime.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('persists runs across local API runtime restarts by default', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'resume-agent-api-'))
+    const env = {
+      RESUME_AGENT_RUN_DB_PATH: join(directory, 'runs.sqlite'),
+      RESUME_AGENT_AUTH_MODE: 'disabled',
+    }
+    let firstRuntime:
+      | Awaited<ReturnType<typeof startAgentApiServer>>
+      | undefined
+    let secondRuntime:
+      | Awaited<ReturnType<typeof startAgentApiServer>>
+      | undefined
+
+    try {
+      firstRuntime = await startAgentApiServer(
+        {
+          agent: fakeAgent(),
+          env,
+          port: 0,
+          logger: () => undefined,
+        },
+        0
+      )
+      const createResponse = await fetch(`${firstRuntime.url}/v1/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobDescription:
+            'We need a TypeScript Engineer to build reliable systems.',
+          candidate: { resume: candidate },
+        }),
+      })
+      const created = (await createResponse.json()) as {
+        data?: { id?: string }
+      }
+      expect(createResponse.status).toBe(202)
+      expect(created.data?.id).toBeTypeOf('string')
+
+      let status: string | undefined
+      for (let attempt = 0; attempt < 20 && created.data?.id; attempt += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        const response = await fetch(
+          `${firstRuntime.url}/v1/runs/${created.data.id}`
+        )
+        const payload = (await response.json()) as {
+          data?: { status?: string }
+        }
+        status = payload.data?.status
+        if (status === 'completed') break
+      }
+      expect(status).toBe('completed')
+
+      await firstRuntime.close()
+      firstRuntime = undefined
+      secondRuntime = await startAgentApiServer(
+        {
+          agent: fakeAgent(),
+          env,
+          port: 0,
+          logger: () => undefined,
+        },
+        0
+      )
+
+      const restoredResponse = await fetch(
+        `${secondRuntime.url}/v1/runs/${created.data?.id}`
+      )
+      const restored = (await restoredResponse.json()) as {
+        data?: { status?: string; result?: { status?: string } }
+      }
+      expect(restoredResponse.status).toBe(200)
+      expect(restored.data?.status).toBe('completed')
+      expect(restored.data?.result?.status).toBe('completed')
+    } finally {
+      await firstRuntime?.close()
+      await secondRuntime?.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('stays discoverable without provider credentials and fails work safely', async () => {
+    const server = createAgentApiServer({ env: {} })
+    await new Promise<void>((resolve) => server.listen(0, resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') {
+      throw new Error('Server did not start')
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`
+
+    try {
+      const healthResponse = await fetch(`${baseUrl}/healthz`)
+      expect(healthResponse.status).toBe(200)
+
+      const capabilitiesResponse = await fetch(`${baseUrl}/v1/capabilities`)
+      const capabilitiesPayload = (await capabilitiesResponse.json()) as {
+        data?: { runtime?: { providerConfigured?: boolean } }
+      }
+      expect(capabilitiesPayload.data?.runtime?.providerConfigured).toBe(false)
+
+      const request = {
+        jobDescription:
+          'We need a TypeScript Engineer to build reliable systems.',
+        candidate: { resume: candidate },
+      }
+      const syncResponse = await fetch(`${baseUrl}/v1/tailor-resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      })
+      const syncPayload = (await syncResponse.json()) as {
+        error?: { code?: string; message?: string }
+      }
+      expect(syncResponse.status).toBe(503)
+      expect(syncPayload.error).toEqual({
+        code: 'llm_not_configured',
+        message: 'LLM provider is not configured.',
+      })
+
+      const createResponse = await fetch(`${baseUrl}/v1/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      })
+      const created = (await createResponse.json()) as {
+        data?: { id?: string }
+      }
+      expect(createResponse.status).toBe(202)
+
+      let run:
+        | { status?: string; error?: { code?: string; message?: string } }
+        | undefined
+      for (let attempt = 0; attempt < 20 && created.data?.id; attempt += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        const runResponse = await fetch(`${baseUrl}/v1/runs/${created.data.id}`)
+        const payload = (await runResponse.json()) as {
+          data?: typeof run
+        }
+        run = payload.data
+        if (run?.status === 'failed') break
+      }
+      expect(run).toMatchObject({
+        status: 'failed',
+        error: {
+          code: 'llm_not_configured',
+          message: 'LLM provider is not configured.',
+        },
+      })
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((closeError) =>
+          closeError ? reject(closeError) : resolve()
+        )
+      )
+    }
+  })
+
   it('documents backend capabilities for frontend clients', async () => {
     await withServer(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/v1/capabilities`, {

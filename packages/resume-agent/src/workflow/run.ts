@@ -35,6 +35,7 @@ import type {
   TailorResumeResult,
 } from '@/contracts'
 import { ArtifactInputError } from '@/input/errors'
+import { LlmConfigurationError } from '@/llm/openai-compatible'
 import type { ResumeTailoringAgent } from '@/workflow/agent'
 import {
   applyInteractionAnswer,
@@ -52,9 +53,16 @@ export type RunAnswerErrorCode =
   | 'run_checkpoint_missing'
 
 function publicRunFailure(error: unknown): AgentRunFailure | undefined {
-  return error instanceof ArtifactInputError
-    ? { code: error.code, message: error.message }
-    : undefined
+  if (error instanceof ArtifactInputError) {
+    return { code: error.code, message: error.message }
+  }
+  if (error instanceof LlmConfigurationError) {
+    return {
+      code: 'llm_not_configured',
+      message: 'LLM provider is not configured.',
+    }
+  }
+  return undefined
 }
 
 export class RunAnswerError extends Error {

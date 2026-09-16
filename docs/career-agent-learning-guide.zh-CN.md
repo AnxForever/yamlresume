@@ -79,6 +79,7 @@
 | 事实和 Schema 防线 | `packages/resume-agent/src/validation/resume.ts` | 模型草稿必须通过简历 Schema、不可变事实和领域规则 |
 | 透明结果 | `packages/resume-agent/src/transparency/` | 用 Diff 和 QualityReport 告诉用户改了什么、覆盖了什么、缺了什么 |
 | 产物边界 | `packages/resume-agent/src/rendering/` | 让确定性渲染器生成多种格式，而不是让模型直接写 PDF 或 HTML |
+| 身份与 secrets 边界 | `packages/resume-agent-api/src/auth.ts` | 区分密码单向 hash、可撤销 session、Run 授权关系和可轮换 Provider secret；学习 fail-closed、AEAD 与跨用户对抗测试 |
 | 可替换测试 | 相邻的 `*.test.ts` | 用 fake LLM 稳定复现成功、畸形输出、Repair 和拒绝路径 |
 
 当前工作流的主要数据流可以简化为：
@@ -441,8 +442,9 @@ telemetry 仍是明确缺口。完整证据与 RED → GREEN 记录见
 6. [`resume-agent-input-output.zh-CN.md`](./resume-agent-input-output.zh-CN.md)：理解输入、输出和文件能力；
 7. [`resume-agent-common-document-ingestion.zh-CN.md`](./resume-agent-common-document-ingestion.zh-CN.md)：用不可信上传、内容签名、fatal 解码、有界 ZIP、稳定错误和对抗 fixture 学习安全 parser seam；
 8. [`resume-agent-common-document-export.zh-CN.md`](./resume-agent-common-document-export.zh-CN.md)：用 TXT/RTF/ODT 的证据台账、共享语义模型、逐行为 TDD、确定性 ZIP/XML 和真实 reader/schema 实验学习 exporter 开发；
-9. [`resume-agent-implementation-plan.md`](./resume-agent-implementation-plan.md)：理解实现顺序和遗留缺口；
-10. 按本文第 3 节的顺序阅读源代码和相邻测试。
+9. [`resume-agent-authentication-provider-credentials.zh-CN.md`](./resume-agent-authentication-provider-credentials.zh-CN.md)：学习密码、session、授权和可逆 Provider secrets 为什么必须分成独立生命周期，以及每条安全决策如何映射到失败测试；
+10. [`resume-agent-implementation-plan.md`](./resume-agent-implementation-plan.md)：理解实现顺序和遗留缺口；
+11. 按本文第 3 节的顺序阅读源代码和相邻测试。
 
 ### 10.2 再读外部一手资料
 

@@ -116,4 +116,38 @@ describe('OpenAPI contract', () => {
     expect(multiChoice?.properties?.options?.maxItems).toBe(5)
     expect(multiChoice?.properties?.maxSelections?.maximum).toBe(5)
   })
+
+  it('documents cookie authentication without exposing password or API key fields', async () => {
+    const path = join(process.cwd(), '../../docs/api/resume-agent.openapi.yaml')
+    const document = parse(await readFile(path, 'utf8')) as {
+      paths?: Record<
+        string,
+        Record<string, { security?: Array<Record<string, unknown>> }>
+      >
+      components?: {
+        securitySchemes?: Record<string, unknown>
+        schemas?: {
+          AuthCredentials?: {
+            properties?: { password?: { writeOnly?: boolean } }
+          }
+          ProviderCredentialWrite?: {
+            properties?: { apiKey?: { writeOnly?: boolean } }
+          }
+        }
+      }
+    }
+
+    expect(document.components?.securitySchemes?.sessionCookie).toBeDefined()
+    expect(document.paths?.['/v1/runs']?.post?.security).toEqual([
+      { sessionCookie: [] },
+    ])
+    expect(
+      document.components?.schemas?.AuthCredentials?.properties?.password
+        ?.writeOnly
+    ).toBe(true)
+    expect(
+      document.components?.schemas?.ProviderCredentialWrite?.properties?.apiKey
+        ?.writeOnly
+    ).toBe(true)
+  })
 })
