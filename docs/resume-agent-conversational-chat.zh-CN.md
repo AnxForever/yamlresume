@@ -46,6 +46,8 @@ anonymous -> authenticated chat -> readyToGenerate hint
    明确 `Agent build -> API test` 顺序，并在提交门禁中记录该依赖。
 4. 2026-09-16 验证：Agent 17 files / 251 tests、API 4 files / 43 tests，Agent/API
    TypeScript、build、目标 Biome 和 `git diff --check` 通过。
+5. 同日使用专用 DeepSeek 配置做一次真实 chat 调用，返回合法 `ChatResponse`，
+   `readyToGenerate = false`，回复长度为 120 字符；只记录摘要，不保存回复正文、Prompt 或 key。
 
 ## Evidence ledger
 
