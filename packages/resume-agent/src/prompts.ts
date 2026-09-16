@@ -90,7 +90,10 @@ export function buildDraftPrompt(
   return `${SAFETY_RULES}
 Create a targeted YAMLResume object for this job.
 Preserve the candidate's name, contact information, canonical organization/project names, and dates unless the source is missing them.
-Prioritize the most relevant evidence and keep the resume concise. Do not add facts that are not in the candidate data.
+Preserve every supported candidate section needed for a usable resume, including basics and education (use an empty education array only when no education fact is supported).
+Prioritize the most relevant evidence and keep the resume concise, but do not drop supported skills, tools, languages, or project keywords merely to shorten it.
+For each must-have requirement with matching candidate evidence, surface that evidence in the appropriate resume section and include its evidence ID in selectedEvidenceIds. If a requirement has no support, leave it unmatched and ask a question instead of guessing.
+Do not add facts that are not in the candidate data.
 The resume field must be a complete YAMLResume object with a top-level content property.
 selectedEvidenceIds must contain only evidence IDs from the evidence index.
 questions should capture missing information that would materially improve the resume.

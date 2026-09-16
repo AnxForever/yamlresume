@@ -250,7 +250,16 @@ export function prepareDraftResume(
   source: Resume,
   preferences: TailorPreferences = {}
 ): Resume {
-  const result = ResumeSchema.safeParse(value)
+  const draftRecord = asRecord(value)
+  const draftContent = asRecord(draftRecord?.content)
+  const normalizedValue =
+    draftRecord && draftContent && !('education' in draftContent)
+      ? {
+          ...draftRecord,
+          content: { ...draftContent, education: [] },
+        }
+      : value
+  const result = ResumeSchema.safeParse(normalizedValue)
   if (!result.success) {
     const issue = result.error.issues[0]
     const path = issue?.path.length ? ` (${issue.path.join('.')})` : ''

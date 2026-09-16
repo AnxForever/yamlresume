@@ -35,7 +35,12 @@ const candidate = {
     basics: { name: 'Ada Lovelace', email: 'ada@example.com' },
     education: [],
     projects: [
-      { name: 'Compiler', startDate: '2024', endDate: '', summary: 'Built it' },
+      {
+        name: 'Compiler',
+        startDate: '2024',
+        endDate: '2024',
+        summary: 'Built a reliable compiler service',
+      },
     ],
   },
   layouts: [
@@ -62,6 +67,17 @@ describe('parseCandidateResume', () => {
 })
 
 describe('prepareDraftResume', () => {
+  it('defaults an omitted education collection without inventing entries', () => {
+    const { education: _education, ...contentWithoutEducation } =
+      candidate.content
+    const draft = {
+      ...candidate,
+      content: contentWithoutEducation,
+    }
+
+    expect(prepareDraftResume(draft, candidate).content.education).toEqual([])
+  })
+
   it('rejects generated entries that have no candidate source', () => {
     expect(() =>
       prepareDraftResume(
