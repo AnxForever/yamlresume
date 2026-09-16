@@ -209,8 +209,8 @@ Known limits:
 
 - in-memory runs do not survive restarts and are not shared across instances;
 - the opt-in SQLite adapter persists checkpoints and task rows and supports
-  explicit restart drain, but there is no automatic worker, cancellation or
-  retention policy;
+  explicit restart drain plus execution-time heartbeat/fencing, but there is
+  no automatic worker, claim-ahead lifecycle, cancellation or retention policy;
 - these limits must be addressed before calling the protocol operational.
 
 ### Unit 7B — Structured human-in-the-loop interaction
@@ -333,8 +333,8 @@ Known limits:
   or network filesystems;
 - persisted private inputs are not encrypted by this adapter;
 - the RA-015B historical adapter had separate state CAS and scheduling; current
-  schema v2 adds Unit 7E transactional task rows, while heartbeat, automatic
-  polling and production operation remain out of scope.
+  schema v2 adds Unit 7E transactional task rows and Unit 7G heartbeat/fencing,
+  while automatic polling and production operation remain out of scope.
 
 The research, schema, error model and evidence ledger are recorded in
 [`resume-agent-durable-run-store.zh-CN.md`](./resume-agent-durable-run-store.zh-CN.md).
@@ -368,11 +368,11 @@ Verified tests:
 
 Known limits:
 
-- there is no automatic poller, heartbeat, lease extension, DLQ/redrive, retry
+- Unit 7G subsequently supplies heartbeat, lease extension and Store-side Run
+  mutation fencing; there is still no automatic poller, DLQ/redrive, retry
   backoff or jitter;
-- a long LLM call can outlive its lease and be executed concurrently after
-  takeover; unfinished non-terminal stages may therefore call the model more
-  than once;
+- Provider calls remain at-least-once even with Unit 7G because an already sent
+  external request cannot join the SQLite transaction;
 - `recoverPendingTasks(limit)` claims before scheduled execution, so queued
   callbacks consume lease time;
 - SQLite remains a synchronous, same-host development adapter; no multi-host
@@ -415,7 +415,8 @@ Known limits:
 
 - fencing protects task acknowledgement, not an already-running Provider call
   or other external side effect;
-- no heartbeat means a long call can exceed lease and overlap a takeover;
+- Unit 7G subsequently prevents a healthy long call from passively expiring and
+  rejects stale Run writes, but cannot make Provider calls exactly-once;
 - exhausted tasks are acknowledged after a safe Run failure; there is no
   inspectable DLQ, redrive workflow, backoff or operator alert;
 - SQLite and injected fake-clock evidence remain same-host development proof,
@@ -423,6 +424,55 @@ Known limits:
 
 Research, failure semantics, RED → GREEN evidence and reversal criteria are in
 [`resume-agent-run-worker-concurrency.zh-CN.md`](./resume-agent-run-worker-concurrency.zh-CN.md).
+
+### Unit 7G — Lease heartbeat and lost-lease Run mutation fencing
+
+**Status:** implemented for development on one host; not enabled or
+operational.
+
+Delivered:
+
+- generation-safe `renewTaskLease` matching task ID, Run ID, owner, attempt and
+  a strictly unexpired lease;
+- non-shortening expiry `max(oldExpiry, now + leaseDuration)` under the explicit
+  same-host wall-clock assumption;
+- `compareAndSetForTask` with atomic revision + current-claim predicates and
+  stable `updated` / `revision_conflict` / `lease_lost` outcomes;
+- task-local, non-overlapping heartbeat with an immediate execution-start
+  renewal, default interval `lease / 3`, `clearInterval()` and `unref()`;
+- all durable worker status, checkpoint, pause, result and failure mutations
+  routed through leased CAS, while user answer CAS remains unchanged;
+- async service `close()` that clears active timers, waits/isolates in-flight
+  renewal and prevents later Provider results from mutating Runs.
+
+Verified tests:
+
+- current renewal advances expiry; wrong/missing/stale/expired identities fail,
+  including exact-expiry and post-takeover cases;
+- a deferred fake Provider crosses multiple original lease periods while a
+  second SQLite connection remains unable to claim;
+- renewal false or raw storage error becomes lease lost without status/result/
+  error writes or stale ack/release;
+- revision conflicts retain bounded recompute semantics;
+- success, Provider error, lease loss, ack false, shutdown and in-flight renewal
+  all clear fake timers; tests close every SQLite connection and temp directory;
+- invalid lease/heartbeat bounds and injected private markers fail safely.
+
+Known limits:
+
+- Provider requests already sent may complete or repeat; delivery remains
+  at-least-once and no exactly-once claim is made;
+- `recoverPendingTasks(limit)` still claims a batch before schedule callbacks
+  execute. The callback-start renewal prevents a stale callback from entering
+  Provider work, but does not fix early lease consumption, fairness or
+  backpressure; that lifecycle is RA-015F;
+- no automatic poller, DLQ/redrive, backoff/jitter, production metrics/runbook,
+  multi-host adapter or clock-skew tolerance;
+- `node:sqlite` remains synchronous, same-host and Stability 1.1.
+
+Research, interface/state decisions, RED → GREEN evidence and exact verification
+results are in
+[`resume-agent-run-lease-heartbeat.zh-CN.md`](./resume-agent-run-lease-heartbeat.zh-CN.md).
 
 ### Unit 8 — Backend documentation and completion audit
 
@@ -453,8 +503,9 @@ pnpm check:ci
 - authentication and multi-user tenancy;
 - production database and encrypted object storage;
 - production-grade OCR for image-only PDFs;
-- automatic durable worker lifecycle, heartbeat/fencing, cancellation and
-  operational restart recovery;
+- RA-015F automatic durable worker/claim-ahead lifecycle, cancellation and
+  operational restart recovery; Provider exactly-once remains explicitly
+  rejected rather than deferred as a heartbeat outcome;
 - binary file answers and candidate re-normalization after upload;
 - automated web browsing or job application;
 - PDF compilation sandbox and page-count optimization;

@@ -3,7 +3,7 @@
 > Feature ID：RA-015D
 > 状态：Implemented for development（同主机故障注入；不是 Enabled 或 Operational）
 > 最后审阅：2026-09-16
-> 范围：在 RA-015C 同主机 SQLite outbox 上补强 claim generation、多 worker 竞争、lease 接管与故障注入；不实现 heartbeat、自动 poller、跨主机队列或生产运维。
+> 范围：在 RA-015C 同主机 SQLite outbox 上补强 claim generation、多 worker 竞争、lease 接管与故障注入；RA-015D 本身未实现 heartbeat，后续 RA-015E 已补上；自动 poller、跨主机队列与生产运维仍未实现。
 
 ## 1. 问题与用户结果
 
@@ -37,7 +37,7 @@ RA-015D 的开发级结果是：
 | 同一 Run 最多一个 active lease | Adopt | Run 是串行状态机；并行 prepare/completion 会产生无意义的重复模型调用和 CAS 竞争 |
 | fake clock + 两个真实 SQLite 连接 | Adopt | 可重复验证 expiry/takeover，无真实 sleep |
 | lease = exactly-once | Reject | expiry 前后可重叠执行，外部模型调用没有分布式事务 |
-| 自动 heartbeat | Defer | 需要可靠 timer、shutdown 和延长失败策略；应独立设计 |
+| 自动 heartbeat | Defer from RA-015D; implemented by RA-015E | RA-015E 独立验证 timer、shutdown、renewal failure 与失租 Run 写隔离 |
 | 自动后台 poller | Defer | 当前包没有 worker 生命周期/关闭接口，隐藏 timer 会制造句柄和部署歧义 |
 | 仅加大固定 lease | Reject | 降低重复概率但放大 crash 恢复延迟，不能解决长尾或卡死 |
 | 有界 delivery attempts | Adapt | 默认允许 3 次执行；第 4 次 claim 终止仍活跃的 Run，避免无限 poison loop |
@@ -127,19 +127,19 @@ claim(attempt > maxTaskAttempts)
 | bounded recovery/config | Implemented | limit 与 worker/lease/attempt boundary tests | Covered | Inherited-unassessed → Backfilled | 无自动 polling/backpressure |
 | privacy/cleanup | Implemented | task-row/public/error marker test；afterEach close/rm | Covered for tests | None | 静态加密/retention 未实现 |
 | poison delivery bound | Implemented | SQS maxReceiveCount guidance；active/stale attempt tests | Partial | None | 无 DLQ、redrive、backoff 或 operator alert |
-| long-task safety | Deferred | 官方建议 extend visibility；本地无 heartbeat | Gap | None | heartbeat/extendLease 与 side-effect idempotency |
+| long-task safety | Implemented for development by RA-015E | 官方建议 extend visibility；本地 renewal、deferred Provider、takeover 与 fenced-CAS tests | Partial | RA-015D 明确延期，RA-015E backfilled | Provider side-effect idempotency 与 RA-015F lifecycle |
 | operational multi-host worker | Deferred | 无部署、队列、指标或 runbook | Gap | None | production adapter and operations |
 
 ## 9. 会推翻方案的证据
 
 - 若业务允许同一 Run 的 task 并行且每个 stage 已完全隔离，同 Run serialization 可能造成不必要的 head-of-line blocking；应以吞吐测量和状态机证据推翻，而不是猜测。
 - 若 attempt 会被清零、回绕或跨 migration 丢失，它不能作为 generation；应改用随机 receipt token/fencing column。
-- 若模型调用时长经常接近或超过 lease，只有 ack fencing 不够，必须加入可验证的 heartbeat/extendLease 或 stage-specific idempotency。
+- RA-015E 已为接近或超过 lease 的模型调用加入可验证 heartbeat/extendLease 与 Store-side mutation fencing；Provider 请求本身仍需 stage/effect-specific idempotency 才可能进一步减少重复。
 - 若部署要求多主机，SQLite WAL 与本地时钟不再满足协调假设，应替换为服务端数据库/队列并复跑同一契约测试。
 
 ## 10. 明确不在本切片
 
-- heartbeat/lease extension、自动 poller、backoff/jitter、DLQ/redrive；
+- heartbeat/lease extension 已由 RA-015E 交付开发级证据；自动 poller、RA-015F claim-ahead lifecycle、backoff/jitter、DLQ/redrive仍不在 RA-015D/RA-015E；
 - 跨主机/多区域部署、clock-skew 容忍和 leader election；
 - exactly-once Provider 调用或 workflow side effect；
 - 生产 metrics、alerts、容量/延迟压测与 runbook。

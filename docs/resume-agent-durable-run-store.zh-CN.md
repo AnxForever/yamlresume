@@ -15,7 +15,7 @@ RA-015A 已阻止单个 `InMemoryRunStore` 内的 stale overwrite，但进程退
 - adapter 继续满足 clone 隔离和公开 Run 隐私边界；
 - 数据库 schema 有明确版本，连接可显式关闭，测试不会遗留文件或句柄。
 
-RA-015B 提交时只解决 durable state，未解决“状态已提交但任务未调度”的双写窗口。该历史缺口已由 RA-015C transactional outbox 在当前 schema v2 中补上；heartbeat、自动 poller 与生产 worker 仍未实现。
+RA-015B 提交时只解决 durable state，未解决“状态已提交但任务未调度”的双写窗口。该历史缺口已由 RA-015C transactional outbox 在当前 schema v2 中补上；RA-015E 又在不改变 schema 的前提下加入 generation-safe renewal 与 lease-fenced Run CAS。自动 poller、claim-ahead 生命周期与生产 worker 仍未实现。
 
 ## 2. 研究证据与技术选择
 
@@ -151,7 +151,7 @@ ready + compareAndSet(expected r)
 | migration | schema v1 初始化、重复打开、future version 拒绝；RA-015C v1→v2 保留 Run test | Covered through current v2 | 更复杂的多步/回滚 migration 尚无 production evidence |
 | safe errors | 私密路径、循环正文、损坏记录注入 tests | Covered | 磁盘满/权限变化故障未注入 |
 | public privacy | SQLite service 关闭/重建 test | Covered | API 进程自动装配未启用 |
-| outbox / crash dispatch | RA-015C 同事务 task 与显式 restart drain tests | Implemented after RA-015B | heartbeat、自动 poller 与 operational worker |
+| outbox / crash dispatch | RA-015C 同事务 task 与显式 restart drain；RA-015E renewal、heartbeat 与 fenced mutation tests | Implemented for one-host development | RA-015F claim-ahead/自动 poller 与 operational worker |
 | multi-host / production DB | 无 | Not implemented | 独立 adapter 与部署验证 |
 
 ## 9. 可能推翻方案的证据
@@ -165,7 +165,8 @@ ready + compareAndSet(expected r)
 ## 10. 明确延期
 
 - RA-015C 已实现：transactional outbox、lease、owner-only ack/release、answer CAS 与 completion enqueue 同事务、显式进程重启 drain。
-- RA-015D 已实现开发级多 worker 故障注入、claim-generation fencing、same-Run serialization 与有界 delivery attempts；heartbeat、DLQ、自动 worker 和生产多主机调度仍延期。
+- RA-015D 已实现开发级多 worker 故障注入、claim-generation fencing、same-Run serialization 与有界 delivery attempts。
+- RA-015E 已实现未过期 generation renewal、heartbeat、lease-fenced Run mutation 与 timer cleanup；Provider exactly-once、RA-015F claim-ahead/自动 worker、DLQ 和生产多主机调度仍延期。
 - 生产 adapter：PostgreSQL/托管数据库、连接池、加密、备份、retention 和 runbook。
 
 ## 11. 验证记录

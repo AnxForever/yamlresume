@@ -156,26 +156,26 @@ drain
 | --- | --- | --- | --- |
 | dual-write 风险 | AWS transactional outbox；schedule-hint-loss restart tests | Covered for local SQLite | OS/power-loss fault injection 未执行 |
 | atomic Run + task | SQLite transaction 语义；success/stale/collision rollback tests | Covered for current statements | 磁盘满与 COMMIT I/O fault 未注入 |
-| lease | SQS visibility timeout/receipt handle 类比；SQLite RETURNING；双连接、generation、过期接管 tests | Covered for one host | 无 heartbeat/执行 side-effect fencing；长任务可越过 lease |
+| lease | SQS visibility timeout/receipt handle 类比；SQLite RETURNING；RA-015D generation/takeover 与 RA-015E renewal/fenced-mutation tests | Covered for one-host application lifecycle | Provider side effect 仍可重复；无 RA-015F worker lifecycle |
 | idempotent replay | RA-015A revision/idempotency；terminal replay test | Partial | 非 terminal LLM 阶段仍可能重复调用 |
 | exactly-once | 无法证明 | Rejected claim | 保持 at-least-once 文档 |
 | automatic polling | 无 | Deferred | 需要外部生命周期显式调用 drain；尚无 production worker/runbook |
 
 ## 10. 会推翻方案的证据
 
-- 若单个 LLM 阶段时长经常超过固定 lease，应增加安全 heartbeat/extendLease；不能仅把 timeout 无限调大。
+- RA-015E 已因长 LLM 阶段补上安全 heartbeat/extendLease；若 event-loop blocking 仍经常错过续租窗口，应迁移独立 worker/异步 adapter 或调整经测量的 lease，而不能允许 expired renewal。
 - 若多个 task kind 需要严格全局顺序或优先级，应引入显式 sequence/partition，而不是依赖时间戳碰巧排序。
 - 若工作流外部 side effect 无法幂等，必须增加 effect-specific idempotency key 或拆出 saga；outbox 本身不提供 exactly-once。
 - 若需要跨主机 worker，SQLite 文件 adapter 必须替换为服务端数据库/队列，并复跑同一契约测试。
 
 ## 11. 明确延期
 
-- 自动常驻 poller、heartbeat、dead-letter storage/redrive、backoff/jitter 和运维指标；
+- RA-015E 已补上 heartbeat 与 leased Run mutation fencing；自动常驻 poller、claim-ahead lifecycle、dead-letter storage/redrive、backoff/jitter 和运维指标仍延期；
 - 完整 stage checkpoint，避免 crash 时重复未完成的 LLM 调用；
 - PostgreSQL task claim（例如 `FOR UPDATE SKIP LOCKED`）与多主机部署；
 - exactly-once 外部 side effect 声明。
 
-此外，`recoverPendingTasks(limit)` 会先取得至多 `limit` 个 lease，再把执行交给注入的 schedule seam。队列拥塞时，后排 task 可能在真正执行前消耗部分 lease；本切片用有界 limit 控制风险，但没有把它描述成公平或长任务安全的生产 worker。ack 返回 `false` 时 task 仍保留当前 lease，要等 lease 过期后恢复；不会把“未删除”误报为 exactly-once 成功。
+此外，`recoverPendingTasks(limit)` 会先取得至多 `limit` 个 lease，再把执行交给注入的 schedule seam。队列拥塞时，后排 task 可能在真正执行前消耗部分 lease；RA-015E 会在 callback 启动时先 conditional renew，使已经失租的 callback 不进入 Provider，但不能消除提前占用、吞吐或公平性问题。完整 lifecycle 延期到 RA-015F，不能把 heartbeat 描述成已解决 claim-ahead。ack 返回 `false` 时 task 仍保留当前 lease，要等 lease 过期后恢复；不会把“未删除”误报为 exactly-once 成功。
 
 ## 12. 验证记录
 

@@ -28,8 +28,11 @@ import type {
   ClaimedRunTask,
   ClaimRunTaskOptions,
   DurableRunStore,
+  RenewRunTaskLeaseOptions,
   RunTask,
+  RunTaskClaimIdentity,
   StoredResumeAgentRun,
+  TaskFencedRunUpdateResult,
 } from '@/workflow/run'
 
 const SCHEMA_VERSION = 2
@@ -123,6 +126,28 @@ function claimTimes(options: ClaimRunTaskOptions): {
   const leaseExpiresAt = now + options.leaseDurationMs
   if (
     !options.workerId.trim() ||
+    !Number.isSafeInteger(now) ||
+    !Number.isSafeInteger(options.leaseDurationMs) ||
+    options.leaseDurationMs <= 0 ||
+    !Number.isSafeInteger(leaseExpiresAt)
+  ) {
+    throw new RunStoreError('invalid_task')
+  }
+  return { now, leaseExpiresAt }
+}
+
+function renewalTimes(options: RenewRunTaskLeaseOptions): {
+  now: number
+  leaseExpiresAt: number
+} {
+  const now = options.now.getTime()
+  const leaseExpiresAt = now + options.leaseDurationMs
+  if (
+    !options.id.trim() ||
+    !options.runId.trim() ||
+    !options.leaseOwner.trim() ||
+    !Number.isSafeInteger(options.attempt) ||
+    options.attempt < 1 ||
     !Number.isSafeInteger(now) ||
     !Number.isSafeInteger(options.leaseDurationMs) ||
     options.leaseDurationMs <= 0 ||
@@ -432,6 +457,95 @@ export class SqliteRunStore implements DurableRunStore {
     }
   }
 
+  async compareAndSetForTask(
+    run: StoredResumeAgentRun,
+    claim: RunTaskClaimIdentity,
+    now: Date
+  ): Promise<TaskFencedRunUpdateResult> {
+    this.ensureOpen()
+    if (
+      !Number.isSafeInteger(run.revision) ||
+      run.revision < 0 ||
+      run.revision >= Number.MAX_SAFE_INTEGER
+    ) {
+      throw new RunStoreError('serialization_failed')
+    }
+    const nowMs = now.getTime()
+    if (
+      !claim.id.trim() ||
+      !claim.runId.trim() ||
+      !claim.leaseOwner.trim() ||
+      !Number.isSafeInteger(claim.attempt) ||
+      claim.attempt < 1 ||
+      !Number.isSafeInteger(nowMs)
+    ) {
+      throw new RunStoreError('invalid_task')
+    }
+    const nextRevision = run.revision + 1
+    const recordJson = serializeRecord({ ...run, revision: nextRevision })
+    try {
+      this.database.exec('BEGIN IMMEDIATE')
+      const updated = this.database
+        .prepare(
+          `UPDATE resume_agent_runs
+           SET revision = ?, record_json = ?
+           WHERE id = ?
+             AND revision = ?
+             AND EXISTS (
+               SELECT 1
+               FROM resume_agent_tasks AS task
+               WHERE task.id = ?
+                 AND task.run_id = resume_agent_runs.id
+                 AND task.run_id = ?
+                 AND task.lease_owner = ?
+                 AND task.attempts = ?
+                 AND task.lease_expires_at > ?
+             )
+           RETURNING revision`
+        )
+        .get(
+          nextRevision,
+          recordJson,
+          run.snapshot.id,
+          run.revision,
+          claim.id,
+          claim.runId,
+          claim.leaseOwner,
+          claim.attempt,
+          nowMs
+        )
+      if (updated) {
+        this.database.exec('COMMIT')
+        return 'updated'
+      }
+      const activeClaim = this.database
+        .prepare(
+          `SELECT 1
+           FROM resume_agent_tasks
+           WHERE id = ?
+             AND run_id = ?
+             AND run_id = ?
+             AND lease_owner = ?
+             AND attempts = ?
+             AND lease_expires_at > ?`
+        )
+        .get(
+          claim.id,
+          claim.runId,
+          run.snapshot.id,
+          claim.leaseOwner,
+          claim.attempt,
+          nowMs
+        )
+      this.database.exec('COMMIT')
+      return activeClaim ? 'revision_conflict' : 'lease_lost'
+    } catch (error) {
+      this.rollback()
+      if (error instanceof RunStoreError) throw error
+      throw new RunStoreError('storage_failed')
+    }
+  }
+
   async claimNextTask(
     options: ClaimRunTaskOptions
   ): Promise<ClaimedRunTask | undefined> {
@@ -502,6 +616,45 @@ export class SqliteRunStore implements DurableRunStore {
         .run(taskId, leaseOwner, attempt)
       return Number(result.changes) === 1
     } catch {
+      throw new RunStoreError('storage_failed')
+    }
+  }
+
+  async renewTaskLease(
+    options: RenewRunTaskLeaseOptions
+  ): Promise<ClaimedRunTask | undefined> {
+    this.ensureOpen()
+    const { now, leaseExpiresAt } = renewalTimes(options)
+    try {
+      const row = this.database
+        .prepare(
+          `UPDATE resume_agent_tasks
+           SET lease_expires_at = MAX(lease_expires_at, ?)
+           WHERE id = ?
+             AND run_id = ?
+             AND lease_owner = ?
+             AND attempts = ?
+             AND lease_expires_at > ?
+           RETURNING
+             id,
+             run_id,
+             kind,
+             created_at,
+             attempts,
+             lease_owner,
+             lease_expires_at`
+        )
+        .get(
+          leaseExpiresAt,
+          options.id,
+          options.runId,
+          options.leaseOwner,
+          options.attempt,
+          now
+        ) as unknown as TaskRow | undefined
+      return row ? parseClaimedTask(row) : undefined
+    } catch (error) {
+      if (error instanceof RunStoreError) throw error
       throw new RunStoreError('storage_failed')
     }
   }

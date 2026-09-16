@@ -111,15 +111,18 @@ uses an in-memory revision and atomic compare-and-set within one Node.js
 process. An opt-in SQLite adapter persists the same versioned Store contract
 across restarts, coordinates connections on one host, and transactionally
 stores workflow tasks with Run mutations, but uses Node's active-development
-synchronous SQLite API. It provides explicit bounded restart drain, not an
-automatic worker, heartbeat, authentication, retention, or a binary
-file-answer loop. Completed public snapshots intentionally contain
+synchronous SQLite API. It provides explicit bounded restart drain plus
+generation-safe heartbeat and Run mutation fencing while a claimed callback is
+executing, but not an automatic worker, claim-ahead lifecycle, authentication,
+retention, or a binary file-answer loop. Completed public snapshots intentionally contain
 the generated resume and artifacts for the user; revisions, source requests,
 checkpoints, answer receipts, raw answers, and raw model completions remain
 private. See the
 [`concurrency`](./resume-agent-run-store-concurrency.zh-CN.md) and
 [`durable Store`](./resume-agent-durable-run-store.zh-CN.md), and
-[`transactional outbox`](./resume-agent-run-outbox-recovery.zh-CN.md) briefs.
+[`transactional outbox`](./resume-agent-run-outbox-recovery.zh-CN.md),
+[`worker concurrency`](./resume-agent-run-worker-concurrency.zh-CN.md), and
+[`lease heartbeat`](./resume-agent-run-lease-heartbeat.zh-CN.md) briefs.
 
 ## Feature evidence ledger
 
@@ -132,8 +135,8 @@ private. See the
 | RA-004 | Requirement matching | Implemented | Deterministic lexical matcher | Gap | Inherited-unassessed | Compare lexical, embedding, and LLM reranking on eval set |
 | RA-005 | Evidence-constrained drafting | Implemented | Prompt policy, evidence-ID validation and Repair workflow test | Partial | Backfilled | Hallucination and omission evaluation suite |
 | RA-006 | Immutable-fact guard | Implemented | Rejects unsupported entries in tests | Partial | None | Add date/contact mutation cases and translated-name policy |
-| RA-007 | Multi-style YAML/JSON/Markdown/HTML/LaTeX/PDF/DOCX rendering | Implemented for development | Preset metadata, real renderer/DOCX and fake PDF compiler system tests | Partial | Backfilled | Real compiler sandbox, page-count/visual checks and cross-reader compatibility |
-| RA-007C | Common document export expansion | Planned | User requirement and RA-007B format matrix | Gap | None | Separate TXT, RTF and ODT Feature Briefs, exporters, fixtures and compatibility tests |
+| RA-007 | Multi-style YAML/JSON/Markdown/HTML/LaTeX/PDF/DOCX/TXT/RTF rendering | Implemented for development | Preset metadata, real renderer/DOCX, fake PDF compiler tests and TXT/RTF semantic/reader tests | Partial | Backfilled | ODT, real PDF sandbox, page-count/visual checks and broader cross-reader compatibility |
+| RA-007C | Common document export expansion | Partial: TXT/RTF implemented for development; ODT planned | Shared full-section document model, artifact tests, safe RTF escaping and LibreOffice 24.2.7.2 TXT/PDF conversion | Partial | None | ODT package/tests; Word/WPS/Google Docs, download, performance and visual matrix |
 | RA-008 | HTTP API | Implemented | End-to-end HTTP tests | Partial | None | Authentication, rate limits, request IDs, cancellation |
 | RA-009 | Asynchronous runs, persistence and resume versions | Implemented for development; durable adapter opt-in | In-memory default, SQLite Run/task persistence and explicit restart drain, stage state machine, `POST/GET /v1/runs` and package/API tests | Partial | None | Wire a production worker, cancellation, retention and operational recovery |
 | RA-010 | Agent evaluation and operational observability | Implemented for development | Deterministic runner, public-JD-derived synthetic corpus, required-keyword gold assertions, safe repeated campaign aggregation and structured-output telemetry | Partial | Backfilled | Valid Provider credentials/configuration, authorized anonymized candidate set, token/cost statistics and human calibration |
@@ -141,8 +144,9 @@ private. See the
 | RA-012 | Structured-output validation and bounded repair | Implemented | Shared module, three-boundary workflow tests, safe API error test | Covered | Backfilled | Operational provider comparison is tracked by RA-010 |
 | RA-015A | Revision-safe RunStore and atomic answer acceptance | Implemented for development | Atomic in-memory create/CAS, deterministic concurrent answer tests, clone and privacy tests; durable realization tracked by RA-015B/C | Covered for one process | Backfilled | Operational multi-instance evidence remains RA-015D |
 | RA-015B | Durable versioned RunStore | Implemented for development; not operational | SQLite schema introduced at v1, disk reopen, SQL CAS across connections, safe failure and privacy tests; current adapter migrated to v2 | Covered for one host | None | Async production driver, encryption and retention |
-| RA-015C | Transactional Run outbox and restart recovery | Implemented for development; explicit drain only | Run + task atomic transactions, v1→v2 migration, lease/ack/release, lost-hint restart and terminal replay tests | Partial | None | No heartbeat, automatic poller, DLQ/backoff, long-task fencing or operational evidence |
-| RA-015D | Multi-worker lease takeover and fault verification | Implemented for development; same-host only | Claim-generation fencing, same-Run serialization, crash takeover, bounded batch/attempts and privacy tests | Partial | Reopened-by-change | No heartbeat, execution fencing, DLQ/redrive, automatic worker or multi-host evidence |
+| RA-015C | Transactional Run outbox and restart recovery | Implemented for development; explicit drain only | Run + task atomic transactions, v1→v2 migration, lease/ack/release, lost-hint restart and terminal replay tests | Partial | None | Heartbeat/fencing supplied by RA-015E; no automatic poller, DLQ/backoff or operational evidence |
+| RA-015D | Multi-worker lease takeover and fault verification | Implemented for development; same-host only | Claim-generation fencing, same-Run serialization, crash takeover, bounded batch/attempts and privacy tests | Partial | Reopened-by-change | Long-task heartbeat/fencing supplied by RA-015E; no DLQ/redrive, automatic worker or multi-host evidence |
+| RA-015E | Run task lease heartbeat and lost-lease write isolation | Implemented for development; same-host only | Exact-generation renewal, Store-side leased CAS, deferred Provider/fake-clock takeover, renewal failure, shutdown and timer cleanup tests | Partial | Reopened-by-change | At-least-once Provider calls; RA-015F claim-ahead/automatic worker, metrics and multi-host adapter remain |
 
 ### RA-010C evidence detail
 
@@ -192,8 +196,25 @@ private. See the
 | Acceptance | 18 focused tests across rendering/styles/workflow; complete Resume Agent package suite; TypeScript, Biome and diff checks |
 | Coverage | Covered for application-side contracts in RA-007B; RA-007 aggregate remains partial |
 | Historical gap | Backfilled; inherited rendering lacked adjacent tests and previously returned incorrect public metadata/raw error messages |
-| Remaining gap | Common TXT/RTF/ODT and legacy DOC ingestion are RA-001B/RA-007C; real PDF sandbox/page count and cross-reader DOCX/style fidelity are unverified |
+| Remaining gap | ODT output and legacy RTF/ODT/DOC ingestion remain RA-007C/RA-001B; real PDF sandbox/page count and cross-reader DOCX/style fidelity are unverified |
 | Last reviewed | 2026-09-16, Node 22, `@yamlresume/core@0.12.2`, `docx@9.7.1` |
+
+### RA-007C evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | Resume semantic content → TXT/RTF writer → artifact metadata → reader compatibility |
+| User outcome | Users can copy a markup-free resume or download a traditional editable exchange document without losing YAMLResume fields or allowing RTF control injection |
+| Current state | `txt`/`rtf` are accepted by schema, API capabilities and OpenAPI; both use the shared internal document model and only appear in authoritative `artifacts`; ODT remains planned |
+| Primary evidence | RFC 8118/IANA `application/rtf`, Microsoft RTF Unicode/control-word guidance and Node.js 22 Buffer semantics, reviewed 2026-09-16 |
+| Independent evidence | Full YAMLResume field inventory plus LibreOffice Writer 24.2.7.2 RTF→UTF-8 TXT/PDF conversion and UnRTF 0.21.10 structural parse |
+| Decision | Adapt the existing deep render module; combine TXT/RTF around one semantic model; reject Markdown stripping, external runtime conversion and new legacy result fields |
+| Edge cases | CJK, emoji surrogate pairs, braces, backslashes, fake object controls, detailed address, all section fields, URL, duplicate format, section order, byte size and source immutability |
+| Acceptance | Focused render/API/OpenAPI tests, package type/build/Biome gates and explicit LibreOffice conversion; exact commands/results are in `resume-agent-common-document-export.zh-CN.md` |
+| Coverage | Covered for TXT development contract; partial for RTF because only LibreOffice plus one limited independent parser were exercised; aggregate RA-007C remains partial while ODT is absent |
+| Historical gap | None; feature was planned with a ledger before implementation |
+| Remaining gap | ODT; Word/WPS/Google Docs matrix; real browser download, ATS paste, visual/accessibility and large-resume performance evidence |
+| Last reviewed | 2026-09-16, LibreOffice Writer 24.2.7.2, UnRTF 0.21.10, Node 22 |
 
 ### RA-015A evidence detail
 
@@ -226,7 +247,7 @@ private. See the
 | Acceptance | 20 focused SQLite tests, 18 Run tests, 149-test package suite, TypeScript, build, Biome and diff checks |
 | Coverage | Partial: covered for explicit same-host development recovery; not for long-running leases or production operation |
 | Historical gap | None; RA-015B explicitly recorded the dual-write gap before RA-015C |
-| Remaining gap | Claim-generation fencing is supplied by RA-015D; no heartbeat/external-effect fencing, automatic poller, DLQ/backoff, multi-host adapter, power-loss injection, metrics or runbook |
+| Remaining gap | Claim-generation fencing is supplied by RA-015D and heartbeat/Run-write fencing by RA-015E; no Provider effect fencing, automatic poller, DLQ/backoff, multi-host adapter, power-loss injection, metrics or runbook |
 | Last reviewed | 2026-09-16, Node 22.21.1 `node:sqlite`, schema v2 |
 
 ### RA-015D evidence detail
@@ -243,7 +264,23 @@ private. See the
 | Acceptance | Focused SQLite/Run tests plus package TypeScript, build, Biome and diff gates; exact final counts in the Feature Brief |
 | Coverage | Partial: covered for same-host development contention and injected lifecycle failures, not long-running execution or operations |
 | Historical gap | Reopened-by-change; RA-015C owner-only ack did not distinguish repeated claims by the same worker ID |
-| Remaining gap | No heartbeat/extendLease, external side-effect fencing, automatic polling, DLQ/redrive, metrics, multi-host adapter or OS/power-loss test |
+| Remaining gap | Heartbeat/leased Run CAS is supplied by RA-015E; no external side-effect fencing, automatic polling, DLQ/redrive, metrics, multi-host adapter or OS/power-loss test |
+
+### RA-015E evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | durable task claim → callback start → renew → workflow mutation → ack/release → lease loss/shutdown |
+| User outcome | A long task keeps its lease while healthy; after renewal failure or takeover, the stale worker cannot overwrite status, checkpoint, result or failure |
+| Current state | SQLite renewal matches task/run/owner/attempt and unexpired lease; leased CAS atomically checks revision and current claim; task-local heartbeat serializes renewal and mutations |
+| Primary evidence | AWS SQS visibility timeout, ChangeMessageVisibility and latest ReceiptHandle semantics; Node 22.21.1 timers; SQLite transactions/UPDATE/RETURNING, reviewed 2026-09-16 |
+| Independent evidence | Real local SQLite connections, fake clock/timers, deferred fake Provider, forced renewal conflict/error, takeover, ack-loss and close tests |
+| Decision | Adapt heartbeat to `max(oldExpiry, now + duration)`; reject expired revival, memory-only fencing and exactly-once; defer claim-ahead lifecycle to RA-015F |
+| Edge cases | missing/wrong identity, exact expiry, same owner old attempt, revision conflict, storage uncertainty, Provider in flight, ack false, close during renewal, invalid timer bounds, privacy markers |
+| Acceptance | Focused Store/service and Run tests plus package TypeScript, build, Biome and diff gates; exact final results live in the Feature Brief |
+| Coverage | Partial: covered for one-host development lifecycle, not Provider exactly-once or production operation |
+| Historical gap | Reopened-by-change; RA-015C/D explicitly documented fixed-lease and mutation-fencing gaps |
+| Remaining gap | RA-015F worker polling/claim-ahead/backpressure, Provider cancellation/idempotency, DLQ/backoff, metrics, multi-host time/database and runbook |
 | Last reviewed | 2026-09-16, Node 22.21.1 `node:sqlite`, schema v2 |
 
 ## Learning roadmap
@@ -266,8 +303,9 @@ model-provider abstraction.
 - Development proof delivered: versioned durable conditional writes,
   transactional task dispatch, and explicit restart recovery on one host.
 - Claim-generation fencing, same-Run serialization and local failure injection
-  are delivered by RA-015D; next, design heartbeat/DLQ and the production worker
-  lifecycle without overclaiming operational readiness.
+  are delivered by RA-015D; RA-015E adds generation-safe heartbeat and lost-lease
+  Run-write isolation. Next, design RA-015F claim-ahead/automatic worker lifecycle
+  and DLQ without overclaiming operational readiness.
 - Extend interrupts only when a separately researched later-stage use case
   requires them.
 - Keep showing source-to-draft diff and evidence links in completed results.

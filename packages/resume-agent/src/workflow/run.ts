@@ -92,11 +92,28 @@ export interface ClaimedRunTask extends RunTask {
   leaseExpiresAt: string
 }
 
+export interface RunTaskClaimIdentity {
+  id: string
+  runId: string
+  attempt: number
+  leaseOwner: string
+}
+
 export interface ClaimRunTaskOptions {
   workerId: string
   now: Date
   leaseDurationMs: number
 }
+
+export interface RenewRunTaskLeaseOptions extends RunTaskClaimIdentity {
+  now: Date
+  leaseDurationMs: number
+}
+
+export type TaskFencedRunUpdateResult =
+  | 'updated'
+  | 'revision_conflict'
+  | 'lease_lost'
 
 export interface RunStore {
   get(id: string): Promise<StoredResumeAgentRun | undefined>
@@ -118,6 +135,19 @@ export interface DurableRunStore extends RunStore {
   claimNextTask(
     options: ClaimRunTaskOptions
   ): Promise<ClaimedRunTask | undefined>
+  /** Renews only the exact current generation while its lease is unexpired. */
+  renewTaskLease(
+    options: RenewRunTaskLeaseOptions
+  ): Promise<ClaimedRunTask | undefined>
+  /**
+   * Atomically checks the Run revision and an unexpired task generation before
+   * storing revision + 1.
+   */
+  compareAndSetForTask(
+    run: StoredResumeAgentRun,
+    claim: RunTaskClaimIdentity,
+    now: Date
+  ): Promise<TaskFencedRunUpdateResult>
   acknowledgeTask(
     taskId: string,
     leaseOwner: string,
@@ -159,6 +189,7 @@ type ScheduledTask = () => Promise<void>
 
 const MAX_RUN_UPDATE_ATTEMPTS = 3
 const DEFAULT_TASK_LEASE_MS = 60_000
+const MAX_TIMER_DELAY_MS = 2_147_483_647
 const DEFAULT_MAX_TASK_ATTEMPTS = 3
 const DEFAULT_RECOVERY_LIMIT = 100
 const TASK_ATTEMPTS_EXHAUSTED: AgentRunFailure = {
@@ -198,6 +229,7 @@ export interface ResumeAgentRunServiceOptions {
   schedule?: (task: ScheduledTask) => void
   workerId?: string
   taskLeaseMs?: number
+  taskHeartbeatMs?: number
   maxTaskAttempts?: number
 }
 
@@ -207,6 +239,8 @@ function isDurableRunStore(store: RunStore): store is DurableRunStore {
     typeof candidate.createWithTask === 'function' &&
     typeof candidate.compareAndSetWithTask === 'function' &&
     typeof candidate.claimNextTask === 'function' &&
+    typeof candidate.renewTaskLease === 'function' &&
+    typeof candidate.compareAndSetForTask === 'function' &&
     typeof candidate.acknowledgeTask === 'function' &&
     typeof candidate.releaseTask === 'function'
   )
@@ -231,6 +265,115 @@ function defaultSchedule(task: ScheduledTask): void {
     void task()
   })
 }
+
+class RunTaskLeaseHeartbeat {
+  private active = false
+  private leaseLost = false
+  private timer: ReturnType<typeof setInterval> | undefined
+  private operations: Promise<void> = Promise.resolve()
+  private renewalScheduled = false
+
+  constructor(
+    private readonly store: DurableRunStore,
+    private readonly task: ClaimedRunTask,
+    private readonly now: () => Date,
+    private readonly leaseDurationMs: number,
+    private readonly intervalMs: number
+  ) {}
+
+  async start(): Promise<boolean> {
+    this.active = true
+    await this.scheduleRenewal()
+    if (this.leaseLost) return false
+    this.timer = setInterval(() => {
+      if (!this.active || this.renewalScheduled) return
+      void this.scheduleRenewal()
+    }, this.intervalMs)
+    this.timer.unref()
+    return true
+  }
+
+  compareAndSet(run: StoredResumeAgentRun): Promise<TaskFencedRunUpdateResult> {
+    return this.runExclusive(async () => {
+      if (!this.active || this.leaseLost) return 'lease_lost'
+      try {
+        const result = await this.store.compareAndSetForTask(
+          run,
+          this.task,
+          this.now()
+        )
+        if (result === 'lease_lost') this.markLeaseLost()
+        return result
+      } catch {
+        this.markLeaseLost()
+        return 'lease_lost'
+      }
+    })
+  }
+
+  async stop(): Promise<boolean> {
+    this.active = false
+    this.clearTimer()
+    await this.operations
+    return !this.leaseLost
+  }
+
+  async abandon(): Promise<void> {
+    this.markLeaseLost()
+    await this.operations
+  }
+
+  private scheduleRenewal(): Promise<void> {
+    this.renewalScheduled = true
+    return this.runExclusive(async () => {
+      if (!this.active || this.leaseLost) return
+      await this.renewOnce()
+    }).finally(() => {
+      this.renewalScheduled = false
+    })
+  }
+
+  private async renewOnce(): Promise<void> {
+    try {
+      const renewed = await this.store.renewTaskLease({
+        id: this.task.id,
+        runId: this.task.runId,
+        leaseOwner: this.task.leaseOwner,
+        attempt: this.task.attempt,
+        now: this.now(),
+        leaseDurationMs: this.leaseDurationMs,
+      })
+      if (renewed) return
+    } catch {
+      // Storage uncertainty is treated as lease loss.
+    }
+    this.markLeaseLost()
+  }
+
+  private markLeaseLost(): void {
+    this.leaseLost = true
+    this.active = false
+    this.clearTimer()
+  }
+
+  private clearTimer(): void {
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = undefined
+    }
+  }
+
+  private runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operations.then(operation)
+    this.operations = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
+  }
+}
+
+class RunTaskLeaseLostError extends Error {}
 
 function answerFingerprint(answer: InteractionAnswer): string {
   return createHash('sha256')
@@ -266,7 +409,10 @@ export class ResumeAgentRunService {
   private readonly schedule: (task: ScheduledTask) => void
   private readonly workerId: string
   private readonly taskLeaseMs: number
+  private readonly taskHeartbeatMs: number
   private readonly maxTaskAttempts: number
+  private readonly activeHeartbeats = new Set<RunTaskLeaseHeartbeat>()
+  private closed = false
 
   constructor(
     private readonly agent: ResumeTailoringAgent,
@@ -279,11 +425,17 @@ export class ResumeAgentRunService {
     this.schedule = options.schedule ?? defaultSchedule
     this.workerId = options.workerId ?? randomUUID()
     this.taskLeaseMs = options.taskLeaseMs ?? DEFAULT_TASK_LEASE_MS
+    this.taskHeartbeatMs =
+      options.taskHeartbeatMs ?? Math.max(1, Math.floor(this.taskLeaseMs / 3))
     this.maxTaskAttempts = options.maxTaskAttempts ?? DEFAULT_MAX_TASK_ATTEMPTS
     if (
       !this.workerId.trim() ||
       !Number.isSafeInteger(this.taskLeaseMs) ||
-      this.taskLeaseMs <= 0 ||
+      this.taskLeaseMs < 2 ||
+      this.taskLeaseMs > MAX_TIMER_DELAY_MS ||
+      !Number.isSafeInteger(this.taskHeartbeatMs) ||
+      this.taskHeartbeatMs < 1 ||
+      this.taskHeartbeatMs >= this.taskLeaseMs ||
       !Number.isSafeInteger(this.maxTaskAttempts) ||
       this.maxTaskAttempts <= 0 ||
       this.maxTaskAttempts > 1_000
@@ -324,10 +476,17 @@ export class ResumeAgentRunService {
     return (await this.store.get(id))?.snapshot
   }
 
+  async close(): Promise<void> {
+    this.closed = true
+    await Promise.all(
+      [...this.activeHeartbeats].map((heartbeat) => heartbeat.abandon())
+    )
+  }
+
   async recoverPendingTasks(
     limit: number = DEFAULT_RECOVERY_LIMIT
   ): Promise<number> {
-    if (!this.durableStore) return 0
+    if (!this.durableStore || this.closed) return 0
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
       throw new Error('Run task recovery limit is invalid')
     }
@@ -346,7 +505,7 @@ export class ResumeAgentRunService {
   }
 
   private async claimAndExecuteNextTask(): Promise<void> {
-    if (!this.durableStore) return
+    if (!this.durableStore || this.closed) return
     try {
       const task = await this.durableStore.claimNextTask({
         workerId: this.workerId,
@@ -360,8 +519,17 @@ export class ResumeAgentRunService {
   }
 
   private async executeClaimedTask(task: ClaimedRunTask): Promise<void> {
-    if (!this.durableStore) return
+    if (!this.durableStore || this.closed) return
+    const heartbeat = new RunTaskLeaseHeartbeat(
+      this.durableStore,
+      task,
+      this.now,
+      this.taskLeaseMs,
+      this.taskHeartbeatMs
+    )
+    this.activeHeartbeats.add(heartbeat)
     try {
+      if (!(await heartbeat.start())) return
       if (task.attempt > this.maxTaskAttempts) {
         const stored = await this.store.get(task.runId)
         if (
@@ -370,32 +538,42 @@ export class ResumeAgentRunService {
           stored.snapshot.status !== 'completed' &&
           stored.snapshot.status !== 'failed'
         ) {
-          await this.fail(task.runId, TASK_ATTEMPTS_EXHAUSTED)
+          await this.fail(task.runId, TASK_ATTEMPTS_EXHAUSTED, heartbeat)
         }
       } else if (task.kind === 'prepare') {
-        await this.execute(task.runId)
+        await this.execute(task.runId, heartbeat)
       } else {
-        await this.executeCompletion(task.runId)
+        await this.executeCompletion(task.runId, heartbeat)
       }
-      await this.durableStore.acknowledgeTask(
-        task.id,
-        task.leaseOwner,
-        task.attempt
-      )
-    } catch {
-      try {
-        await this.durableStore.releaseTask(
+      if (await heartbeat.stop()) {
+        await this.durableStore.acknowledgeTask(
           task.id,
           task.leaseOwner,
           task.attempt
         )
-      } catch {
-        // A later lease expiry can make the task recoverable again.
       }
+    } catch {
+      if (await heartbeat.stop()) {
+        try {
+          await this.durableStore.releaseTask(
+            task.id,
+            task.leaseOwner,
+            task.attempt
+          )
+        } catch {
+          // A later lease expiry can make the task recoverable again.
+        }
+      }
+    } finally {
+      this.activeHeartbeats.delete(heartbeat)
+      await heartbeat.stop()
     }
   }
 
-  private async execute(id: string): Promise<void> {
+  private async execute(
+    id: string,
+    heartbeat?: RunTaskLeaseHeartbeat
+  ): Promise<void> {
     try {
       const stored = await this.store.get(id)
       if (!stored?.request) return
@@ -409,23 +587,24 @@ export class ResumeAgentRunService {
       let checkpoint = stored.checkpoint
       if (!checkpoint) {
         checkpoint = await this.agent.prepare(stored.request, {
-          onStatus: (status) => this.transition(id, status),
+          onStatus: (status) => this.transition(id, status, heartbeat),
         })
         const interactions = createInteractionRequests(
           checkpoint.questions
         ).filter((interaction) => interaction.severity !== 'optional')
         if (interactions[0]) {
-          await this.pause(id, checkpoint, interactions)
+          await this.pause(id, checkpoint, interactions, heartbeat)
           return
         }
-        await this.saveCheckpoint(id, checkpoint)
+        await this.saveCheckpoint(id, checkpoint, heartbeat)
       }
       const result = await this.agent.complete(checkpoint, {
-        onStatus: (status) => this.transition(id, status),
+        onStatus: (status) => this.transition(id, status, heartbeat),
       })
-      await this.finish(id, result)
-    } catch {
-      await this.fail(id)
+      await this.finish(id, result, heartbeat)
+    } catch (error) {
+      if (error instanceof RunTaskLeaseLostError) throw error
+      await this.fail(id, undefined, heartbeat)
     }
   }
 
@@ -581,7 +760,10 @@ export class ResumeAgentRunService {
     )
   }
 
-  private async executeCompletion(id: string): Promise<void> {
+  private async executeCompletion(
+    id: string,
+    heartbeat?: RunTaskLeaseHeartbeat
+  ): Promise<void> {
     try {
       const stored = await this.store.get(id)
       if (
@@ -592,87 +774,113 @@ export class ResumeAgentRunService {
         return
       }
       const result = await this.agent.complete(stored.checkpoint, {
-        onStatus: (status) => this.transition(id, status),
+        onStatus: (status) => this.transition(id, status, heartbeat),
       })
-      await this.finish(id, result)
-    } catch {
-      await this.fail(id)
+      await this.finish(id, result, heartbeat)
+    } catch (error) {
+      if (error instanceof RunTaskLeaseLostError) throw error
+      await this.fail(id, undefined, heartbeat)
     }
   }
 
   private async updateStoredRun(
     id: string,
-    derive: (current: StoredResumeAgentRun) => StoredResumeAgentRun | undefined
+    derive: (current: StoredResumeAgentRun) => StoredResumeAgentRun | undefined,
+    heartbeat?: RunTaskLeaseHeartbeat
   ): Promise<void> {
     for (let attempt = 0; attempt < MAX_RUN_UPDATE_ATTEMPTS; attempt += 1) {
       const current = await this.store.get(id)
       if (!current) return
       const next = derive(current)
       if (!next) return
-      if (await this.store.compareAndSet(next)) return
+      if (!heartbeat) {
+        if (await this.store.compareAndSet(next)) return
+        continue
+      }
+      const result = await heartbeat.compareAndSet(next)
+      if (result === 'updated') return
+      if (result === 'lease_lost') throw new RunTaskLeaseLostError()
     }
     throw new Error('Run update conflict')
   }
 
-  private async transition(id: string, status: AgentRunStatus): Promise<void> {
-    await this.updateStoredRun(id, (current) => {
-      if (current.snapshot.status === status) return undefined
-      const currentRank = ACTIVE_STATUS_RANK[current.snapshot.status]
-      const nextRank = ACTIVE_STATUS_RANK[status]
-      if (
-        currentRank !== undefined &&
-        nextRank !== undefined &&
-        nextRank < currentRank
-      ) {
-        return undefined
-      }
-      if (!NEXT_STATUS[current.snapshot.status].includes(status)) {
-        throw new Error(
-          `Invalid run transition from ${current.snapshot.status} to ${status}`
-        )
-      }
-      return {
-        ...current,
-        snapshot: {
-          ...current.snapshot,
-          status,
-          updatedAt: this.now().toISOString(),
-        },
-      }
-    })
+  private async transition(
+    id: string,
+    status: AgentRunStatus,
+    heartbeat?: RunTaskLeaseHeartbeat
+  ): Promise<void> {
+    await this.updateStoredRun(
+      id,
+      (current) => {
+        if (current.snapshot.status === status) return undefined
+        const currentRank = ACTIVE_STATUS_RANK[current.snapshot.status]
+        const nextRank = ACTIVE_STATUS_RANK[status]
+        if (
+          currentRank !== undefined &&
+          nextRank !== undefined &&
+          nextRank < currentRank
+        ) {
+          return undefined
+        }
+        if (!NEXT_STATUS[current.snapshot.status].includes(status)) {
+          throw new Error(
+            `Invalid run transition from ${current.snapshot.status} to ${status}`
+          )
+        }
+        return {
+          ...current,
+          snapshot: {
+            ...current.snapshot,
+            status,
+            updatedAt: this.now().toISOString(),
+          },
+        }
+      },
+      heartbeat
+    )
   }
 
   private async saveCheckpoint(
     id: string,
-    checkpoint: ResumeTailoringCheckpoint
+    checkpoint: ResumeTailoringCheckpoint,
+    heartbeat?: RunTaskLeaseHeartbeat
   ): Promise<void> {
-    await this.updateStoredRun(id, (current) => ({
-      ...current,
-      checkpoint,
-    }))
+    await this.updateStoredRun(
+      id,
+      (current) => ({
+        ...current,
+        checkpoint,
+      }),
+      heartbeat
+    )
   }
 
   private async pause(
     id: string,
     checkpoint: ResumeTailoringCheckpoint,
-    interactions: InteractionRequest[]
+    interactions: InteractionRequest[],
+    heartbeat?: RunTaskLeaseHeartbeat
   ): Promise<void> {
-    await this.updateStoredRun(id, (current) => {
-      if (!NEXT_STATUS[current.snapshot.status].includes('needs_input')) {
-        throw new Error(`Cannot pause run from ${current.snapshot.status}`)
-      }
-      return {
-        ...current,
-        snapshot: {
-          ...current.snapshot,
-          status: 'needs_input',
-          updatedAt: this.now().toISOString(),
-          interactions: [interactions[0]],
-        },
-        checkpoint,
-        pendingInteractions: interactions,
-      }
-    })
+    await this.updateStoredRun(
+      id,
+      (current) => {
+        if (!NEXT_STATUS[current.snapshot.status].includes('needs_input')) {
+          throw new Error(`Cannot pause run from ${current.snapshot.status}`)
+        }
+        return {
+          ...current,
+          snapshot: {
+            ...current.snapshot,
+            status: 'needs_input',
+            updatedAt: this.now().toISOString(),
+            interactions: [interactions[0]],
+          },
+          checkpoint,
+          pendingInteractions: interactions,
+        }
+      },
+      heartbeat
+    )
   }
 
   private async fail(
@@ -680,40 +888,53 @@ export class ResumeAgentRunService {
     error: AgentRunFailure = {
       code: 'agent_run_failed',
       message: 'The resume tailoring run failed.',
-    }
+    },
+    heartbeat?: RunTaskLeaseHeartbeat
   ): Promise<void> {
-    await this.updateStoredRun(id, (current) => {
-      if (!NEXT_STATUS[current.snapshot.status].includes('failed')) {
-        return undefined
-      }
-      return {
-        ...current,
-        snapshot: {
-          ...current.snapshot,
-          status: 'failed',
-          updatedAt: this.now().toISOString(),
-          interactions: undefined,
-          error,
-        },
-      }
-    })
+    await this.updateStoredRun(
+      id,
+      (current) => {
+        if (!NEXT_STATUS[current.snapshot.status].includes('failed')) {
+          return undefined
+        }
+        return {
+          ...current,
+          snapshot: {
+            ...current.snapshot,
+            status: 'failed',
+            updatedAt: this.now().toISOString(),
+            interactions: undefined,
+            error,
+          },
+        }
+      },
+      heartbeat
+    )
   }
 
-  private async finish(id: string, result: TailorResumeResult): Promise<void> {
-    await this.updateStoredRun(id, (current) => {
-      if (!NEXT_STATUS[current.snapshot.status].includes('completed')) {
-        throw new Error(`Cannot complete run from ${current.snapshot.status}`)
-      }
-      return {
-        ...current,
-        snapshot: {
-          ...current.snapshot,
-          status: 'completed',
-          updatedAt: this.now().toISOString(),
-          interactions: undefined,
-          result,
-        },
-      }
-    })
+  private async finish(
+    id: string,
+    result: TailorResumeResult,
+    heartbeat?: RunTaskLeaseHeartbeat
+  ): Promise<void> {
+    await this.updateStoredRun(
+      id,
+      (current) => {
+        if (!NEXT_STATUS[current.snapshot.status].includes('completed')) {
+          throw new Error(`Cannot complete run from ${current.snapshot.status}`)
+        }
+        return {
+          ...current,
+          snapshot: {
+            ...current.snapshot,
+            status: 'completed',
+            updatedAt: this.now().toISOString(),
+            interactions: undefined,
+            result,
+          },
+        }
+      },
+      heartbeat
+    )
   }
 }

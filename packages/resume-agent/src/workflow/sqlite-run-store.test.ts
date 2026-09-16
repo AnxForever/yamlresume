@@ -26,7 +26,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { LlmClient } from '@/contracts'
 import { ResumeTailoringAgent } from '@/workflow/agent'
@@ -185,7 +185,7 @@ function countingFailAgent(calls: { count: number }): ResumeTailoringAgent {
 class LostAcknowledgementStore implements DurableRunStore {
   private loseNextAcknowledgement = true
 
-  constructor(private readonly delegate: DurableRunStore) {}
+  constructor(protected readonly delegate: DurableRunStore) {}
 
   get(id: string): Promise<StoredResumeAgentRun | undefined> {
     return this.delegate.get(id)
@@ -208,6 +208,12 @@ class LostAcknowledgementStore implements DurableRunStore {
     task: RunTask
   ): Promise<boolean> {
     return this.delegate.compareAndSetWithTask(run, task)
+  }
+
+  compareAndSetForTask(
+    ...args: Parameters<DurableRunStore['compareAndSetForTask']>
+  ): ReturnType<DurableRunStore['compareAndSetForTask']> {
+    return this.delegate.compareAndSetForTask(...args)
   }
 
   claimNextTask(
@@ -235,9 +241,125 @@ class LostAcknowledgementStore implements DurableRunStore {
   ): Promise<boolean> {
     return this.delegate.releaseTask(taskId, leaseOwner, attempt)
   }
+
+  renewTaskLease(
+    options: Parameters<DurableRunStore['renewTaskLease']>[0]
+  ): ReturnType<DurableRunStore['renewTaskLease']> {
+    return this.delegate.renewTaskLease(options)
+  }
+}
+
+class FailedHeartbeatStore extends LostAcknowledgementStore {
+  renewalCalls = 0
+  acknowledgementCalls = 0
+  releaseCalls = 0
+
+  override renewTaskLease(
+    options: Parameters<DurableRunStore['renewTaskLease']>[0]
+  ): ReturnType<DurableRunStore['renewTaskLease']> {
+    this.renewalCalls += 1
+    if (this.renewalCalls === 2) return Promise.resolve(undefined)
+    return this.delegate.renewTaskLease(options)
+  }
+
+  override acknowledgeTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean> {
+    this.acknowledgementCalls += 1
+    return this.delegate.acknowledgeTask(taskId, leaseOwner, attempt)
+  }
+
+  override releaseTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean> {
+    this.releaseCalls += 1
+    return this.delegate.releaseTask(taskId, leaseOwner, attempt)
+  }
+}
+
+class DeferredHeartbeatStore extends LostAcknowledgementStore {
+  renewalCalls = 0
+  releaseRenewal: (() => void) | undefined
+
+  override renewTaskLease(
+    options: Parameters<DurableRunStore['renewTaskLease']>[0]
+  ): ReturnType<DurableRunStore['renewTaskLease']> {
+    this.renewalCalls += 1
+    const renewal = this.delegate.renewTaskLease(options)
+    if (this.renewalCalls !== 2) return renewal
+    return new Promise((resolve, reject) => {
+      void renewal.then((value) => {
+        this.releaseRenewal = () => resolve(value)
+      }, reject)
+    })
+  }
+
+  override acknowledgeTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean> {
+    return this.delegate.acknowledgeTask(taskId, leaseOwner, attempt)
+  }
+}
+
+class RevisionConflictStore extends LostAcknowledgementStore {
+  fencedCompareAndSets = 0
+
+  override compareAndSetForTask(
+    ...args: Parameters<DurableRunStore['compareAndSetForTask']>
+  ): ReturnType<DurableRunStore['compareAndSetForTask']> {
+    this.fencedCompareAndSets += 1
+    if (this.fencedCompareAndSets === 1) {
+      return Promise.resolve('revision_conflict')
+    }
+    return this.delegate.compareAndSetForTask(...args)
+  }
+
+  override acknowledgeTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean> {
+    return this.delegate.acknowledgeTask(taskId, leaseOwner, attempt)
+  }
+}
+
+class ErroredHeartbeatStore extends LostAcknowledgementStore {
+  renewalCalls = 0
+
+  constructor(
+    delegate: DurableRunStore,
+    private readonly privateErrorMarker: string
+  ) {
+    super(delegate)
+  }
+
+  override renewTaskLease(
+    options: Parameters<DurableRunStore['renewTaskLease']>[0]
+  ): ReturnType<DurableRunStore['renewTaskLease']> {
+    this.renewalCalls += 1
+    if (this.renewalCalls === 2) {
+      return Promise.reject(new Error(this.privateErrorMarker))
+    }
+    return this.delegate.renewTaskLease(options)
+  }
+
+  override acknowledgeTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean> {
+    return this.delegate.acknowledgeTask(taskId, leaseOwner, attempt)
+  }
 }
 
 afterEach(async () => {
+  vi.useRealTimers()
   for (const store of stores.splice(0).reverse()) store.close()
   for (const directory of temporaryDirectories.splice(0).reverse()) {
     await rm(directory, { recursive: true, force: true })
@@ -370,6 +492,55 @@ describe('SqliteRunStore', () => {
     }
   })
 
+  it('atomically fences run compare-and-set with the current claim', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const run = storedRun('run-task-fenced-cas')
+    await store.createWithTask(run, runTask(run.snapshot.id))
+    const firstClaim = await store.claimNextTask({
+      workerId: 'worker-before-takeover',
+      now: new Date('2026-09-16T12:00:00.000Z'),
+      leaseDurationMs: 30_000,
+    })
+    if (!firstClaim) throw new Error('Expected first claim')
+
+    expect(
+      await store.compareAndSetForTask(
+        {
+          ...run,
+          snapshot: { ...run.snapshot, status: 'ingesting_inputs' },
+        },
+        firstClaim,
+        new Date('2026-09-16T12:00:10.000Z')
+      )
+    ).toBe('updated')
+    expect(
+      await store.compareAndSetForTask(
+        { ...run, snapshot: { ...run.snapshot, status: 'failed' } },
+        firstClaim,
+        new Date('2026-09-16T12:00:10.000Z')
+      )
+    ).toBe('revision_conflict')
+
+    const takeover = await store.claimNextTask({
+      workerId: 'worker-after-takeover',
+      now: new Date('2026-09-16T12:00:30.000Z'),
+      leaseDurationMs: 30_000,
+    })
+    if (!takeover) throw new Error('Expected takeover claim')
+    const current = await store.get(run.snapshot.id)
+    if (!current) throw new Error('Expected current run')
+    expect(
+      await store.compareAndSetForTask(
+        { ...current, snapshot: { ...current.snapshot, status: 'failed' } },
+        firstClaim,
+        new Date('2026-09-16T12:00:30.000Z')
+      )
+    ).toBe('lease_lost')
+    expect((await store.get(run.snapshot.id))?.snapshot.status).toBe(
+      'ingesting_inputs'
+    )
+  })
+
   it('rolls back the run mutation when its task insert fails', async () => {
     const store = await openStore(await temporaryDatabasePath())
     const firstRun = storedRun('run-task-collision-a')
@@ -494,6 +665,16 @@ describe('SqliteRunStore', () => {
 
     expect(secondClaim.attempt).toBe(firstClaim.attempt + 1)
     expect(
+      await store.renewTaskLease({
+        id: firstClaim.id,
+        runId: firstClaim.runId,
+        leaseOwner: firstClaim.leaseOwner,
+        attempt: firstClaim.attempt,
+        now: new Date('2026-09-16T12:00:30.000Z'),
+        leaseDurationMs: 30_000,
+      })
+    ).toBeUndefined()
+    expect(
       await store.acknowledgeTask(
         firstClaim.id,
         firstClaim.leaseOwner,
@@ -514,6 +695,94 @@ describe('SqliteRunStore', () => {
         secondClaim.attempt
       )
     ).toBe(true)
+  })
+
+  it('renews the current unexpired claim without shortening its lease', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const run = storedRun('run-renew-current-claim')
+    await store.createWithTask(run, runTask(run.snapshot.id))
+    const claim = await store.claimNextTask({
+      workerId: 'renewing-worker',
+      now: new Date('2026-09-16T12:00:00.000Z'),
+      leaseDurationMs: 30_000,
+    })
+    if (!claim) throw new Error('Expected claimed task')
+
+    const renewed = await store.renewTaskLease({
+      id: claim.id,
+      runId: claim.runId,
+      leaseOwner: claim.leaseOwner,
+      attempt: claim.attempt,
+      now: new Date('2026-09-16T12:00:20.000Z'),
+      leaseDurationMs: 30_000,
+    })
+
+    expect(renewed).toEqual({
+      ...claim,
+      leaseExpiresAt: '2026-09-16T12:00:50.000Z',
+    })
+    expect(
+      await store.claimNextTask({
+        workerId: 'waiting-worker',
+        now: new Date('2026-09-16T12:00:30.000Z'),
+        leaseDurationMs: 30_000,
+      })
+    ).toBeUndefined()
+  })
+
+  it('renews only the exact current generation before its expiry', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const currentRun = storedRun('run-renew-identity')
+    await store.createWithTask(currentRun, runTask(currentRun.snapshot.id))
+    const currentClaim = await store.claimNextTask({
+      workerId: 'current-worker',
+      now: new Date('2026-09-16T12:00:00.000Z'),
+      leaseDurationMs: 30_000,
+    })
+    if (!currentClaim) throw new Error('Expected current claim')
+    const renewal = {
+      id: currentClaim.id,
+      runId: currentClaim.runId,
+      leaseOwner: currentClaim.leaseOwner,
+      attempt: currentClaim.attempt,
+      now: new Date('2026-09-16T12:00:29.999Z'),
+      leaseDurationMs: 30_000,
+    }
+
+    await expect(
+      store.renewTaskLease({ ...renewal, id: 'missing-task' })
+    ).resolves.toBeUndefined()
+    await expect(
+      store.renewTaskLease({ ...renewal, runId: 'wrong-run' })
+    ).resolves.toBeUndefined()
+    await expect(
+      store.renewTaskLease({ ...renewal, leaseOwner: 'old-worker' })
+    ).resolves.toBeUndefined()
+    await expect(
+      store.renewTaskLease({ ...renewal, attempt: currentClaim.attempt + 1 })
+    ).resolves.toBeUndefined()
+    await expect(store.renewTaskLease(renewal)).resolves.toMatchObject({
+      leaseExpiresAt: '2026-09-16T12:00:59.999Z',
+    })
+
+    const expiredRun = storedRun('run-renew-expired')
+    await store.createWithTask(expiredRun, runTask(expiredRun.snapshot.id))
+    const expiredClaim = await store.claimNextTask({
+      workerId: 'expired-worker',
+      now: new Date('2026-09-16T12:00:00.000Z'),
+      leaseDurationMs: 30_000,
+    })
+    if (!expiredClaim) throw new Error('Expected expiring claim')
+    expect(
+      await store.renewTaskLease({
+        id: expiredClaim.id,
+        runId: expiredClaim.runId,
+        leaseOwner: expiredClaim.leaseOwner,
+        attempt: expiredClaim.attempt,
+        now: new Date('2026-09-16T12:00:30.000Z'),
+        leaseDurationMs: 30_000,
+      })
+    ).toBeUndefined()
   })
 
   it('requires the lease owner to ack or release and supports expiry takeover', async () => {
@@ -977,6 +1246,29 @@ describe('SqliteRunStore', () => {
     expect(await secondService.recoverPendingTasks()).toBe(0)
   })
 
+  it('recomputes a worker mutation after a revision conflict', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const conflictStore = new RevisionConflictStore(store)
+    const scheduled: Array<() => Promise<void>> = []
+    const service = new ResumeAgentRunService(completingAgent(), {
+      store: conflictStore,
+      idFactory: () => 'run-fenced-revision-conflict',
+      schedule: (task) => scheduled.push(task),
+    })
+
+    await service.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    await scheduled[0]?.()
+
+    expect(conflictStore.fencedCompareAndSets).toBeGreaterThan(1)
+    expect((await service.get('run-fenced-revision-conflict'))?.status).toBe(
+      'completed'
+    )
+    expect(await service.recoverPendingTasks()).toBe(0)
+  })
+
   it('lets a second service take over when the first crashes before execution', async () => {
     const databasePath = await temporaryDatabasePath()
     const firstStore = await openStore(databasePath)
@@ -1023,6 +1315,532 @@ describe('SqliteRunStore', () => {
       'completed'
     )
     expect(await atExpiry.recoverPendingTasks()).toBe(0)
+  })
+
+  it('keeps a deferred task leased across multiple original lease periods', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-16T12:00:00.000Z'))
+    let resolveJobAnalysis: ((value: unknown) => void) | undefined
+    let markProviderStarted: (() => void) | undefined
+    const providerStarted = new Promise<void>((resolve) => {
+      markProviderStarted = resolve
+    })
+    const pendingJobAnalysis = new Promise<unknown>((resolve) => {
+      resolveJobAnalysis = resolve
+    })
+    let modelCalls = 0
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          markProviderStarted?.()
+          return {
+            data: (await pendingJobAnalysis) as T,
+            metadata: {
+              provider: 'fake',
+              model: 'fake-model',
+              durationMs: 1,
+              attempt: 1,
+            },
+          }
+        }
+        return {
+          data: {
+            resume: completeCandidate,
+            selectedEvidenceIds: [],
+            questions: [],
+            notes: [],
+          } as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const databasePath = await temporaryDatabasePath()
+    const workerStore = await openStore(databasePath)
+    const competingStore = await openStore(databasePath)
+    const scheduled: Array<() => Promise<void>> = []
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store: workerStore,
+      idFactory: () => 'run-heartbeat-long-task',
+      workerId: 'heartbeat-worker',
+      taskLeaseMs: 900,
+      taskHeartbeatMs: 300,
+      now: () => new Date(),
+      schedule: (task) => scheduled.push(task),
+    })
+    let execution: Promise<void> | undefined
+    try {
+      await service.start({
+        jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+        candidate: { resume: completeCandidate },
+      })
+      execution = scheduled[0]?.()
+      await providerStarted
+
+      for (let elapsed = 300; elapsed <= 2_700; elapsed += 300) {
+        await vi.advanceTimersByTimeAsync(300)
+        expect(
+          await competingStore.claimNextTask({
+            workerId: 'competing-worker',
+            now: new Date(),
+            leaseDurationMs: 900,
+          })
+        ).toBeUndefined()
+      }
+
+      resolveJobAnalysis?.({
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      })
+      await execution
+      expect((await service.get('run-heartbeat-long-task'))?.status).toBe(
+        'completed'
+      )
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      resolveJobAnalysis?.({
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      })
+      await execution
+      vi.useRealTimers()
+    }
+  })
+
+  it('discards a deferred result after heartbeat loss and takeover', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-16T12:00:00.000Z'))
+    let resolveJobAnalysis: ((value: unknown) => void) | undefined
+    let markProviderStarted: (() => void) | undefined
+    const providerStarted = new Promise<void>((resolve) => {
+      markProviderStarted = resolve
+    })
+    const pendingJobAnalysis = new Promise<unknown>((resolve) => {
+      resolveJobAnalysis = resolve
+    })
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        markProviderStarted?.()
+        return {
+          data: (await pendingJobAnalysis) as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const databasePath = await temporaryDatabasePath()
+    const workerStore = await openStore(databasePath)
+    const heartbeatStore = new FailedHeartbeatStore(workerStore)
+    const competingStore = await openStore(databasePath)
+    const scheduled: Array<() => Promise<void>> = []
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store: heartbeatStore,
+      idFactory: () => 'run-heartbeat-lost-result',
+      workerId: 'stale-heartbeat-worker',
+      taskLeaseMs: 900,
+      taskHeartbeatMs: 300,
+      now: () => new Date(),
+      schedule: (task) => scheduled.push(task),
+    })
+    let execution: Promise<void> | undefined
+    try {
+      await service.start({
+        jobDescription: 'Private deferred job description marker.',
+        candidate: { resume: completeCandidate },
+      })
+      execution = scheduled[0]?.()
+      await providerStarted
+
+      await vi.advanceTimersByTimeAsync(300)
+      expect(heartbeatStore.renewalCalls).toBe(2)
+      await vi.advanceTimersByTimeAsync(600)
+      const takeover = await competingStore.claimNextTask({
+        workerId: 'takeover-worker',
+        now: new Date(),
+        leaseDurationMs: 900,
+      })
+      expect(takeover).toMatchObject({ attempt: 2 })
+
+      resolveJobAnalysis?.({
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      })
+      await execution
+
+      const stored = await workerStore.get('run-heartbeat-lost-result')
+      expect(stored?.snapshot.status).toBe('analyzing_jd')
+      expect(stored?.snapshot).not.toHaveProperty('result')
+      expect(stored?.snapshot).not.toHaveProperty('error')
+      expect(heartbeatStore.acknowledgementCalls).toBe(0)
+      expect(heartbeatStore.releaseCalls).toBe(0)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(
+        await competingStore.acknowledgeTask(
+          takeover?.id ?? '',
+          takeover?.leaseOwner ?? '',
+          takeover?.attempt ?? 0
+        )
+      ).toBe(true)
+    } finally {
+      resolveJobAnalysis?.({
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      })
+      await execution
+      vi.useRealTimers()
+    }
+  })
+
+  it('treats a heartbeat storage error as data-safe lease loss', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-16T12:00:00.000Z'))
+    const privateErrorMarker = 'PRIVATE_HEARTBEAT_STORAGE_ERROR_MARKER'
+    let resolveJobAnalysis: ((value: unknown) => void) | undefined
+    let markProviderStarted: (() => void) | undefined
+    const providerStarted = new Promise<void>((resolve) => {
+      markProviderStarted = resolve
+    })
+    const pendingJobAnalysis = new Promise<unknown>((resolve) => {
+      resolveJobAnalysis = resolve
+    })
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        markProviderStarted?.()
+        return {
+          data: (await pendingJobAnalysis) as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const store = await openStore(await temporaryDatabasePath())
+    const heartbeatStore = new ErroredHeartbeatStore(store, privateErrorMarker)
+    const scheduled: Array<() => Promise<void>> = []
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store: heartbeatStore,
+      idFactory: () => 'run-heartbeat-storage-error',
+      taskLeaseMs: 900,
+      taskHeartbeatMs: 300,
+      now: () => new Date(),
+      schedule: (task) => scheduled.push(task),
+    })
+    let execution: Promise<void> | undefined
+    try {
+      await service.start({
+        jobDescription: `Private JD ${privateErrorMarker}`,
+        candidate: { resume: completeCandidate },
+      })
+      execution = scheduled[0]?.()
+      await providerStarted
+      await vi.advanceTimersByTimeAsync(300)
+      expect(heartbeatStore.renewalCalls).toBe(2)
+
+      resolveJobAnalysis?.({
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      })
+      await execution
+      const publicRun = await service.get('run-heartbeat-storage-error')
+      expect(publicRun?.status).toBe('analyzing_jd')
+      expect(publicRun).not.toHaveProperty('result')
+      expect(publicRun).not.toHaveProperty('error')
+      expect(JSON.stringify(publicRun)).not.toContain(privateErrorMarker)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      resolveJobAnalysis?.({
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      })
+      await execution
+      await service.close()
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears heartbeat and fences a pending result when the service closes', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-16T12:00:00.000Z'))
+    let resolveJobAnalysis: ((value: unknown) => void) | undefined
+    let markProviderStarted: (() => void) | undefined
+    const providerStarted = new Promise<void>((resolve) => {
+      markProviderStarted = resolve
+    })
+    const pendingJobAnalysis = new Promise<unknown>((resolve) => {
+      resolveJobAnalysis = resolve
+    })
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        markProviderStarted?.()
+        return {
+          data: (await pendingJobAnalysis) as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const databasePath = await temporaryDatabasePath()
+    const workerStore = await openStore(databasePath)
+    const competingStore = await openStore(databasePath)
+    const scheduled: Array<() => Promise<void>> = []
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store: workerStore,
+      idFactory: () => 'run-heartbeat-service-close',
+      workerId: 'closing-worker',
+      taskLeaseMs: 900,
+      taskHeartbeatMs: 300,
+      now: () => new Date(),
+      schedule: (task) => scheduled.push(task),
+    })
+    let execution: Promise<void> | undefined
+    try {
+      await service.start({
+        jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+        candidate: { resume: completeCandidate },
+      })
+      execution = scheduled[0]?.()
+      await providerStarted
+      expect(vi.getTimerCount()).toBe(1)
+
+      await service.close()
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(900)
+      const takeover = await competingStore.claimNextTask({
+        workerId: 'worker-after-close',
+        now: new Date(),
+        leaseDurationMs: 900,
+      })
+      expect(takeover).toMatchObject({ attempt: 2 })
+
+      resolveJobAnalysis?.({
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      })
+      await execution
+      const stored = await workerStore.get('run-heartbeat-service-close')
+      expect(stored?.snapshot.status).toBe('analyzing_jd')
+      expect(stored?.snapshot).not.toHaveProperty('result')
+      expect(stored?.snapshot).not.toHaveProperty('error')
+    } finally {
+      resolveJobAnalysis?.({
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      })
+      await execution
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not overlap renewal and waits for an in-flight renewal on close', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-16T12:00:00.000Z'))
+    let resolveJobAnalysis: ((value: unknown) => void) | undefined
+    let markProviderStarted: (() => void) | undefined
+    const providerStarted = new Promise<void>((resolve) => {
+      markProviderStarted = resolve
+    })
+    const pendingJobAnalysis = new Promise<unknown>((resolve) => {
+      resolveJobAnalysis = resolve
+    })
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        markProviderStarted?.()
+        return {
+          data: (await pendingJobAnalysis) as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const store = await openStore(await temporaryDatabasePath())
+    const heartbeatStore = new DeferredHeartbeatStore(store)
+    const scheduled: Array<() => Promise<void>> = []
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store: heartbeatStore,
+      idFactory: () => 'run-heartbeat-in-flight-close',
+      taskLeaseMs: 900,
+      taskHeartbeatMs: 300,
+      now: () => new Date(),
+      schedule: (task) => scheduled.push(task),
+    })
+    let execution: Promise<void> | undefined
+    try {
+      await service.start({
+        jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+        candidate: { resume: completeCandidate },
+      })
+      execution = scheduled[0]?.()
+      await providerStarted
+
+      await vi.advanceTimersByTimeAsync(300)
+      expect(heartbeatStore.renewalCalls).toBe(2)
+      await vi.advanceTimersByTimeAsync(600)
+      expect(heartbeatStore.renewalCalls).toBe(2)
+
+      let closeSettled = false
+      const closing = service.close().then(() => {
+        closeSettled = true
+      })
+      await Promise.resolve()
+      expect(closeSettled).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+      heartbeatStore.releaseRenewal?.()
+      await closing
+      expect(closeSettled).toBe(true)
+
+      resolveJobAnalysis?.({
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      })
+      await execution
+      expect((await service.get('run-heartbeat-in-flight-close'))?.status).toBe(
+        'analyzing_jd'
+      )
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      heartbeatStore.releaseRenewal?.()
+      resolveJobAnalysis?.({
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      })
+      await execution
+      await service.close()
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears heartbeat after a provider failure is stored safely', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-16T12:00:00.000Z'))
+    const privateErrorMarker = 'PRIVATE_PROVIDER_HEARTBEAT_ERROR_MARKER'
+    const llm: LlmClient = {
+      async completeJson() {
+        throw new Error(privateErrorMarker)
+      },
+    }
+    const store = await openStore(await temporaryDatabasePath())
+    const scheduled: Array<() => Promise<void>> = []
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store,
+      idFactory: () => 'run-heartbeat-provider-error',
+      taskLeaseMs: 900,
+      taskHeartbeatMs: 300,
+      now: () => new Date(),
+      schedule: (task) => scheduled.push(task),
+    })
+    try {
+      await service.start({
+        jobDescription: 'Private job description.',
+        candidate: { resume: completeCandidate },
+      })
+      await scheduled[0]?.()
+
+      const failed = await service.get('run-heartbeat-provider-error')
+      expect(failed).toMatchObject({
+        status: 'failed',
+        error: {
+          code: 'agent_run_failed',
+          message: 'The resume tailoring run failed.',
+        },
+      })
+      expect(JSON.stringify(failed)).not.toContain(privateErrorMarker)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(await service.recoverPendingTasks()).toBe(0)
+    } finally {
+      await service.close()
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears heartbeat before a lost acknowledgement is recovered', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-16T12:00:00.000Z'))
+    const databasePath = await temporaryDatabasePath()
+    const workerStore = await openStore(databasePath)
+    const competingStore = await openStore(databasePath)
+    const scheduled: Array<() => Promise<void>> = []
+    const service = new ResumeAgentRunService(completingAgent(), {
+      store: new LostAcknowledgementStore(workerStore),
+      idFactory: () => 'run-heartbeat-lost-ack',
+      workerId: 'worker-with-lost-ack',
+      taskLeaseMs: 900,
+      taskHeartbeatMs: 300,
+      now: () => new Date(),
+      schedule: (task) => scheduled.push(task),
+    })
+    try {
+      await service.start({
+        jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+        candidate: { resume: completeCandidate },
+      })
+      await scheduled[0]?.()
+
+      expect((await service.get('run-heartbeat-lost-ack'))?.status).toBe(
+        'completed'
+      )
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(900)
+      expect(
+        await competingStore.claimNextTask({
+          workerId: 'worker-recovering-lost-ack',
+          now: new Date(),
+          leaseDurationMs: 900,
+        })
+      ).toMatchObject({ attempt: 2 })
+    } finally {
+      await service.close()
+      vi.useRealTimers()
+    }
   })
 
   it('claims no more than the requested recovery batch limit', async () => {
@@ -1072,7 +1890,43 @@ describe('SqliteRunStore', () => {
       () =>
         new ResumeAgentRunService(unusedAgent(), {
           store,
+          taskLeaseMs: 1,
+        })
+    ).toThrow('Run task worker configuration is invalid')
+    expect(
+      () =>
+        new ResumeAgentRunService(unusedAgent(), {
+          store,
+          taskLeaseMs: 2_147_483_648,
+        })
+    ).toThrow('Run task worker configuration is invalid')
+    expect(
+      () =>
+        new ResumeAgentRunService(unusedAgent(), {
+          store,
           taskLeaseMs: 1.5,
+        })
+    ).toThrow('Run task worker configuration is invalid')
+    expect(
+      () =>
+        new ResumeAgentRunService(unusedAgent(), {
+          store,
+          taskHeartbeatMs: 0,
+        })
+    ).toThrow('Run task worker configuration is invalid')
+    expect(
+      () =>
+        new ResumeAgentRunService(unusedAgent(), {
+          store,
+          taskHeartbeatMs: 1.5,
+        })
+    ).toThrow('Run task worker configuration is invalid')
+    expect(
+      () =>
+        new ResumeAgentRunService(unusedAgent(), {
+          store,
+          taskLeaseMs: 1_000,
+          taskHeartbeatMs: 1_000,
         })
     ).toThrow('Run task worker configuration is invalid')
     expect(
@@ -1139,6 +1993,20 @@ describe('SqliteRunStore', () => {
     expect(`${String(safeError)}${JSON.stringify(safeError)}`).not.toContain(
       privateMarker
     )
+    const renewalError = await store
+      .renewTaskLease({
+        id: '',
+        runId: 'run-worker-privacy',
+        leaseOwner: privateMarker,
+        attempt: 1,
+        now: new Date('2026-09-16T12:00:00.000Z'),
+        leaseDurationMs: 30_000,
+      })
+      .catch((error: unknown) => error)
+    expect(renewalError).toEqual(new RunStoreError('invalid_task'))
+    expect(
+      `${String(renewalError)}${JSON.stringify(renewalError)}`
+    ).not.toContain(privateMarker)
   })
 
   it('acks an expired replay without rerunning a terminal workflow', async () => {
