@@ -60,7 +60,21 @@ function fakeAgent(): ResumeTailoringAgent {
     { resume: candidate, selectedEvidenceIds: [], questions: [], notes: [] },
   ]
   const llm: LlmClient = {
-    async completeJson() {
+    async completeJson(request) {
+      if (request.schemaName === 'ResumeAgentChatResponse') {
+        return {
+          data: {
+            reply: '可以，先告诉我你的目标职位。',
+            readyToGenerate: false,
+          },
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      }
       return {
         data: responses.shift(),
         metadata: {
@@ -102,6 +116,23 @@ async function withServer<T>(
 }
 
 describe('agent API', () => {
+  it('accepts a chat message without requiring uploads', async () => {
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: '你好，我想做一份简历' }),
+      })
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toMatchObject({
+        data: {
+          reply: '可以，先告诉我你的目标职位。',
+          readyToGenerate: false,
+        },
+      })
+    })
+  })
+
   it('recovers a committed SQLite task when the local runtime starts', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'resume-agent-recovery-'))
     const databasePath = join(directory, 'runs.sqlite')

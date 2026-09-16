@@ -635,6 +635,26 @@ export interface JsonCompletionRequest {
   images?: LlmImageAttachment[]
 }
 
+export const ChatMessageSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  content: z.string().trim().min(1).max(20_000),
+})
+
+export const ChatRequestSchema = z.object({
+  message: z.string().trim().min(1).max(20_000),
+  history: z.array(ChatMessageSchema).max(50).default([]),
+  context: z.string().trim().max(100_000).optional(),
+})
+
+export const ChatResponseSchema = z.object({
+  reply: z.string().trim().min(1).max(20_000),
+  readyToGenerate: z.boolean(),
+})
+
+export type ChatMessage = z.infer<typeof ChatMessageSchema>
+export type ChatRequest = z.input<typeof ChatRequestSchema>
+export type ChatResponse = z.infer<typeof ChatResponseSchema>
+
 export interface LlmUsage {
   inputTokens?: number
   outputTokens?: number

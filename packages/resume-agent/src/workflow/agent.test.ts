@@ -52,6 +52,21 @@ const candidate = {
 }
 
 describe('ResumeTailoringAgent', () => {
+  it('supports direct chat without uploaded context', async () => {
+    const llm: LlmClient = {
+      async completeJson(request) {
+        expect(request.schemaName).toBe('ResumeAgentChatResponse')
+        return {
+          data: { reply: '先告诉我你的目标职位。', readyToGenerate: false },
+          metadata: { provider: 'fake', model: 'fake', durationMs: 1, attempt: 1 },
+        }
+      },
+    }
+    await expect(
+      new ResumeTailoringAgent(llm).chat({ message: '你好' })
+    ).resolves.toEqual({ reply: '先告诉我你的目标职位。', readyToGenerate: false })
+  })
+
   it('runs the tailoring workflow and renders a schema-valid resume', async () => {
     const responses = [
       {

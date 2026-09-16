@@ -25,6 +25,8 @@
 import type {
   AgentRunStatus,
   AgentTraceEvent,
+  ChatRequest,
+  ChatResponse,
   DraftResponse,
   JobSpec,
   LlmClient,
@@ -33,7 +35,11 @@ import type {
   TailorResumeRequest,
   TailorResumeResult,
 } from '@/contracts'
-import { DraftResponseSchema, JobSpecSchema } from '@/contracts'
+import {
+  ChatResponseSchema,
+  DraftResponseSchema,
+  JobSpecSchema,
+} from '@/contracts'
 import { extractArtifacts } from '@/input/artifacts'
 import { artifactEvidence, normalizeCandidateInput } from '@/input/candidate'
 import { completeStructuredOutput } from '@/llm/structured-output'
@@ -233,6 +239,26 @@ function normalizeJobSpec(value: unknown): unknown {
 
 export class ResumeTailoringAgent {
   constructor(private readonly llm: LlmClient) {}
+
+  async chat(request: ChatRequest): Promise<ChatResponse> {
+    const history = (request.history ?? [])
+      .map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`)
+      .join('\n')
+    const completion = await this.llm.completeJson<ChatResponse>({
+      schemaName: 'ResumeAgentChatResponse',
+      system:
+        'You are a friendly resume assistant. Chat naturally in the user language. Do not require uploads. Ask for missing resume details conversationally. Set readyToGenerate true only when the user has provided enough information to draft a resume.',
+      user: [
+        history ? `CONVERSATION:\n${history}` : '',
+        request.context ? `CONTEXT:\n${request.context}` : '',
+        `USER: ${request.message}`,
+        'Return JSON with reply and readyToGenerate.',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    })
+    return ChatResponseSchema.parse(completion.data)
+  }
 
   async run(
     request: TailorResumeRequest,

@@ -211,6 +211,39 @@ paths:
           description: Credential absent or deleted
         '401':
           $ref: '#/components/responses/AuthenticationRequired'
+  /v1/chat:
+    post:
+      tags: [Resume Agent]
+      operationId: chatWithResumeAgent
+      security:
+        - sessionCookie: []
+      summary: Chat with the resume agent without uploading files
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Assistant reply
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ChatResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '502':
+          $ref: '#/components/responses/LlmRequestFailed'
+        '503':
+          $ref: '#/components/responses/LlmNotConfigured'
   /v1/tailor-resume:
     post:
       tags: [Resume Agent]
@@ -453,6 +486,46 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
   schemas:
+    ChatMessage:
+      type: object
+      additionalProperties: false
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+          minLength: 1
+          maxLength: 20000
+    ChatRequest:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        history:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        context:
+          type: string
+          maxLength: 100000
+    ChatResponse:
+      type: object
+      additionalProperties: false
+      required: [reply, readyToGenerate]
+      properties:
+        reply:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        readyToGenerate:
+          type: boolean
     AuthCredentials:
       type: object
       additionalProperties: false

@@ -15,6 +15,15 @@ maps those concerns to the current code, exercises, and planned stages.
 
 ## Architecture
 
+### Direct conversation (development)
+
+`POST /v1/chat` accepts a message, optional conversation history, and optional
+text context. It does not require a resume or uploaded file. The response
+contains the assistant reply and a `readyToGenerate` hint; generation still
+uses the existing tailor/run contract until the conversational draft is
+complete. Authentication and an LLM provider remain required when the API is
+running in its default secure mode.
+
 ```text
 POST /v1/tailor-resume or POST /v1/runs → GET /v1/runs/{id}
                               │

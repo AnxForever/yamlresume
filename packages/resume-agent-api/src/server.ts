@@ -34,6 +34,7 @@ import { dirname, resolve } from 'node:path'
 import {
   ArtifactInputError,
   CandidateValidationError,
+  ChatRequestSchema,
   createOpenAICompatibleClientFromEnv,
   DraftValidationError,
   InMemoryRunStore,
@@ -70,6 +71,7 @@ export const API_ROUTES = [
   { method: 'post', path: '/v1/auth/login' },
   { method: 'get', path: '/v1/auth/me' },
   { method: 'post', path: '/v1/auth/logout' },
+  { method: 'post', path: '/v1/chat' },
   { method: 'get', path: '/v1/provider-credentials' },
   { method: 'put', path: '/v1/provider-credentials/{providerId}' },
   { method: 'delete', path: '/v1/provider-credentials/{providerId}' },
@@ -871,6 +873,57 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
     const isAsynchronousRun =
       request.method === 'POST' && url.pathname === '/v1/runs'
     if (!isSynchronousRun && !isAsynchronousRun) {
+      if (request.method === 'POST' && url.pathname === '/v1/chat') {
+        const identity = options.auth
+          ? await requireAuthenticatedRequest(
+              request,
+              response,
+              options.auth,
+              requestId
+            )
+          : undefined
+        if (options.auth && !identity) return
+        let payload: unknown
+        try {
+          payload = await readPayload(request)
+        } catch (requestError) {
+          error(
+            response,
+            400,
+            'invalid_request',
+            getErrorMessage(requestError),
+            requestId
+          )
+          return
+        }
+        const parsed = ChatRequestSchema.safeParse(payload)
+        if (!parsed.success) {
+          const issue = parsed.error.issues[0]
+          error(
+            response,
+            400,
+            'invalid_request',
+            issue?.message ?? 'Invalid chat request',
+            requestId
+          )
+          return
+        }
+        try {
+          success(response, 200, await agent.chat(parsed.data), requestId)
+        } catch (chatError) {
+          const message = getErrorMessage(chatError)
+          if (chatError instanceof LlmConfigurationError) {
+            error(response, 503, 'llm_not_configured', message, requestId)
+            return
+          }
+          if (chatError instanceof LlmRequestError) {
+            error(response, 502, 'llm_request_failed', message, requestId)
+            return
+          }
+          error(response, 500, 'agent_failed', message, requestId)
+        }
+        return
+      }
       error(response, 404, 'not_found', 'Route not found', requestId)
       return
     }
