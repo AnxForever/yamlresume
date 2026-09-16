@@ -270,10 +270,7 @@ describe('ResumeTailoringAgent', () => {
 
     const result = await new ResumeTailoringAgent(llm).run({
       jobFiles: [
-        {
-          filename: 'role.rtf',
-          contentBase64: jobRtf.toString('base64'),
-        },
+        { filename: 'role.rtf', contentBase64: jobRtf.toString('base64') },
       ],
       candidate: {
         files: [
@@ -299,7 +296,10 @@ describe('ResumeTailoringAgent', () => {
         resume: {
           content: {
             basics: candidate.content.basics,
-            skills: [{ name: 'TypeScript' }],
+            skills: [
+              { name: 'TypeScript' },
+              { name: 'Python', level: 'Advanced' },
+            ],
             projects: candidate.content.projects,
           },
           layouts: candidate.layouts,
@@ -316,7 +316,13 @@ describe('ResumeTailoringAgent', () => {
         keywords: ['TypeScript'],
       },
       {
-        resume: candidate,
+        resume: {
+          ...candidate,
+          content: {
+            ...candidate.content,
+            skills: [{ name: 'Python', level: 'Advanced' }],
+          },
+        },
         selectedEvidenceIds: [],
         questions: [],
         notes: [],
@@ -346,7 +352,12 @@ describe('ResumeTailoringAgent', () => {
 
     expect(result.status).toBe('completed')
     expect(result.resume.content.education).toEqual([])
-    expect(result.resume.content.skills).toBeUndefined()
+    expect(result.resume.content.skills).toEqual([
+      { name: 'Python', level: 'Advanced' },
+    ])
+    expect(result.warnings).toContain(
+      'Some incomplete optional candidate entries were omitted; confirm missing details before submitting.'
+    )
   })
 
   it('reports metadata from each rendered style preset', async () => {

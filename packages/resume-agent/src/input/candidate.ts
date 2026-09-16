@@ -22,6 +22,7 @@
  * IN THE SOFTWARE.
  */
 
+import { ResumeSchema } from '@yamlresume/core'
 import type {
   CandidateInput,
   CandidateNormalizationResult,
@@ -33,6 +34,21 @@ import { CandidateNormalizationResponseSchema } from '@/contracts'
 import { completeStructuredOutput } from '@/llm/structured-output'
 import { INTERACTION_CONTROL_EXPECTED_SHAPE } from '@/prompts'
 import { asRecord } from '@/resume-sections'
+
+const OPTIONAL_RESUME_COLLECTIONS = new Set([
+  'awards',
+  'certificates',
+  'interests',
+  'languages',
+  'profiles',
+  'projects',
+  'publications',
+  'references',
+  'skills',
+  'volunteer',
+  'work',
+])
+
 import {
   CandidateValidationError,
   DraftValidationError,
@@ -92,10 +108,19 @@ function imageAttachments(artifacts: ExtractedArtifact[]) {
     }))
 }
 
-function normalizeCandidateResumeShape(value: unknown): unknown {
+interface CandidateShapeNormalization {
+  value: unknown
+  omittedOptionalEntries: boolean
+}
+
+function normalizeCandidateResumeShape(
+  value: unknown
+): CandidateShapeNormalization {
   const resume = asRecord(value)
   const content = asRecord(resume?.content)
-  if (!resume || !content) return value
+  if (!resume || !content) {
+    return { value, omittedOptionalEntries: false }
+  }
 
   let changed = false
   const normalizedContent = { ...content }
@@ -103,23 +128,40 @@ function normalizeCandidateResumeShape(value: unknown): unknown {
     normalizedContent.education = []
     changed = true
   }
-  const skills = Array.isArray(content.skills)
-    ? content.skills.filter((item) => {
-        const skill = asRecord(item)
-        return (
-          typeof skill?.name === 'string' &&
-          typeof skill.level === 'string' &&
-          skill.level.trim().length > 0
-        )
-      })
-    : undefined
+  let omittedOptionalEntries = false
+  const shape = { ...resume, content: normalizedContent }
+  const parsed = ResumeSchema.safeParse(shape)
+  if (!parsed.success) {
+    const invalidEntries = new Map<string, Set<number>>()
+    for (const issue of parsed.error.issues) {
+      const [root, section, index] = issue.path
+      if (
+        root === 'content' &&
+        typeof section === 'string' &&
+        OPTIONAL_RESUME_COLLECTIONS.has(section) &&
+        typeof index === 'number'
+      ) {
+        const indices = invalidEntries.get(section) ?? new Set<number>()
+        indices.add(index)
+        invalidEntries.set(section, indices)
+      }
+    }
 
-  if (skills !== undefined) {
-    normalizedContent.skills = skills.length > 0 ? skills : undefined
-    changed = true
+    for (const [section, indices] of invalidEntries) {
+      const items = normalizedContent[section]
+      if (!Array.isArray(items)) continue
+      normalizedContent[section] = items.filter(
+        (_item, index) => !indices.has(index)
+      )
+      changed = true
+      omittedOptionalEntries = true
+    }
   }
 
-  return changed ? { ...resume, content: normalizedContent } : value
+  return {
+    value: changed ? { ...resume, content: normalizedContent } : value,
+    omittedOptionalEntries,
+  }
 }
 
 export async function normalizeCandidateInput(
@@ -163,10 +205,11 @@ export async function normalizeCandidateInput(
     )
   }
 
+  const normalizedShape = normalizeCandidateResumeShape(parsed.resume)
   let normalized: ReturnType<typeof parseCandidateResume>
   try {
     normalized = parseCandidateResume({
-      resume: normalizeCandidateResumeShape(parsed.resume),
+      resume: normalizedShape.value,
       files: [],
     })
   } catch (error) {
@@ -197,6 +240,11 @@ export async function normalizeCandidateInput(
     questions,
     warnings: [
       'Candidate profile was normalized from uploaded files; review extracted facts before submitting.',
+      ...(normalizedShape.omittedOptionalEntries
+        ? [
+            'Some incomplete optional candidate entries were omitted; confirm missing details before submitting.',
+          ]
+        : []),
       ...parsed.warnings,
     ],
     telemetry: completion.telemetry,
