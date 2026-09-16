@@ -24,7 +24,11 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { EvalCaseSchema } from '@/evaluation/contracts'
+import {
+  EvalCaseSchema,
+  type EvalExecutionResult,
+  EvalExecutionResultSchema,
+} from '@/evaluation/contracts'
 import { fictionalPlatformEngineerCase } from '@/evaluation/fixtures/fictional-platform-engineer'
 import { runEvaluation } from '@/evaluation/runner'
 
@@ -43,6 +47,10 @@ const validCase = {
       },
     },
   },
+}
+
+function unvalidatedExecutionResult(value: unknown): EvalExecutionResult {
+  return value as EvalExecutionResult
 }
 
 describe('EvalCaseSchema', () => {
@@ -81,6 +89,102 @@ describe('EvalCaseSchema', () => {
   })
 })
 
+describe('EvalExecutionResultSchema', () => {
+  it('parses a valid result into the minimal safe observation shape', () => {
+    const parsed: EvalExecutionResult = EvalExecutionResultSchema.parse({
+      jobSpec: {
+        targetTitle: 'Platform Engineer',
+        company: 'PRIVATE_COMPANY_VALUE',
+      },
+      quality: {
+        requirementCoverage: 0.8,
+        mustHaveCoverage: 1,
+        warnings: [
+          {
+            code: 'missing_job_keywords',
+            message: 'PRIVATE_WARNING_MESSAGE',
+          },
+        ],
+        missingKeywords: ['PRIVATE_KEYWORD'],
+      },
+      resume: 'PRIVATE_RESUME_VALUE',
+    })
+
+    expect(parsed).toEqual({
+      jobSpec: { targetTitle: 'Platform Engineer' },
+      quality: {
+        requirementCoverage: 0.8,
+        mustHaveCoverage: 1,
+        warnings: [{ code: 'missing_job_keywords' }],
+      },
+    })
+  })
+
+  it.each(['', '   ', 'x'.repeat(201)])(
+    'rejects an empty or oversized target title',
+    (targetTitle) => {
+      const result = EvalExecutionResultSchema.safeParse({
+        jobSpec: { targetTitle },
+        quality: {
+          requirementCoverage: 1,
+          mustHaveCoverage: 1,
+          warnings: [],
+        },
+      })
+
+      expect(result.success).toBe(false)
+    }
+  )
+
+  it.each([
+    ['requirementCoverage', Number.NaN],
+    ['requirementCoverage', Number.POSITIVE_INFINITY],
+    ['requirementCoverage', -0.1],
+    ['requirementCoverage', 1.1],
+    ['mustHaveCoverage', Number.NaN],
+    ['mustHaveCoverage', Number.POSITIVE_INFINITY],
+    ['mustHaveCoverage', -0.1],
+    ['mustHaveCoverage', 1.1],
+  ] as const)('rejects invalid %s value %s', (field, value) => {
+    const result = EvalExecutionResultSchema.safeParse({
+      jobSpec: { targetTitle: 'Platform Engineer' },
+      quality: {
+        requirementCoverage: 1,
+        mustHaveCoverage: 1,
+        warnings: [],
+        [field]: value,
+      },
+    })
+
+    expect(result.success).toBe(false)
+  })
+
+  it.each([
+    ['an unstable code', [{ code: 'Invalid Warning Code' }]],
+    [
+      'duplicate codes',
+      [{ code: 'missing_job_keywords' }, { code: 'missing_job_keywords' }],
+    ],
+    [
+      'too many warnings',
+      Array.from({ length: 51 }, (_value, index) => ({
+        code: `warning_${index}`,
+      })),
+    ],
+  ])('rejects warnings with %s', (_description, warnings) => {
+    const result = EvalExecutionResultSchema.safeParse({
+      jobSpec: { targetTitle: 'Platform Engineer' },
+      quality: {
+        requirementCoverage: 1,
+        mustHaveCoverage: 1,
+        warnings,
+      },
+    })
+
+    expect(result.success).toBe(false)
+  })
+})
+
 describe('runEvaluation', () => {
   it('passes a case when the execution satisfies every expectation', async () => {
     const report = await runEvaluation(
@@ -111,6 +215,7 @@ describe('runEvaluation', () => {
       failureCodeCounts: {
         assertion_failed: 0,
         execution_failed: 0,
+        invalid_execution_result: 0,
       },
       results: [
         {
@@ -162,6 +267,7 @@ describe('runEvaluation', () => {
       failureCodeCounts: {
         assertion_failed: 1,
         execution_failed: 0,
+        invalid_execution_result: 0,
       },
       results: [
         {
@@ -213,6 +319,7 @@ describe('runEvaluation', () => {
       failureCodeCounts: {
         assertion_failed: 0,
         execution_failed: 1,
+        invalid_execution_result: 0,
       },
       results: [
         {
@@ -232,7 +339,47 @@ describe('runEvaluation', () => {
     expect(serializedReport).not.toContain('Imaginary Queue Simulator')
   })
 
-  it('aggregates passed, assertion-failed, and execution-failed cases', async () => {
+  it('classifies a resolved invalid result without scoring or leaking it', async () => {
+    const sensitiveInvalidValue = 'RAW_INVALID_RESULT_82416'
+    const report = await runEvaluation(
+      [fictionalPlatformEngineerCase],
+      async () =>
+        unvalidatedExecutionResult({
+          jobSpec: { targetTitle: 'Platform Engineer' },
+          providerCompletion: sensitiveInvalidValue,
+        })
+    )
+
+    expect(report).toMatchObject({
+      total: 1,
+      passed: 0,
+      failed: 1,
+      passRate: 0,
+      scored: 0,
+      averageRequirementCoverage: 0,
+      averageMustHaveCoverage: 0,
+      failureCodeCounts: {
+        assertion_failed: 0,
+        execution_failed: 0,
+        invalid_execution_result: 1,
+      },
+      results: [
+        {
+          caseId: 'fictional-platform-engineer',
+          passed: false,
+          assertions: [],
+          failureCode: 'invalid_execution_result',
+        },
+      ],
+    })
+
+    const serializedReport = JSON.stringify(report)
+    expect(serializedReport).not.toContain(sensitiveInvalidValue)
+    expect(serializedReport).not.toContain('candidate@example.invalid')
+    expect(serializedReport).not.toContain('Imaginary Queue Simulator')
+  })
+
+  it('aggregates valid, assertion-failed, invalid, and rejected executions', async () => {
     const assertionFailureCase = EvalCaseSchema.parse({
       ...fictionalPlatformEngineerCase,
       id: 'fictional-assertion-failure',
@@ -255,16 +402,41 @@ describe('runEvaluation', () => {
         },
       },
     })
+    const invalidExecutionCase = EvalCaseSchema.parse({
+      ...fictionalPlatformEngineerCase,
+      id: 'fictional-invalid-execution-result',
+      request: {
+        ...fictionalPlatformEngineerCase.request,
+        preferences: {
+          ...fictionalPlatformEngineerCase.request.preferences,
+          targetTitle: 'Invalid Result Input',
+        },
+      },
+    })
+    const sensitiveInvalidValue = 'RAW_INVALID_AGGREGATE_RESULT_93147'
+    const sensitiveException = 'PRIVATE_PROVIDER_EXCEPTION_27580'
 
     const report = await runEvaluation(
       [
         fictionalPlatformEngineerCase,
         assertionFailureCase,
+        invalidExecutionCase,
         executionFailureCase,
       ],
       async (request) => {
         if (request.preferences?.targetTitle === 'Execution Failure Input') {
-          throw new Error('A raw provider error that must not be reported')
+          throw new Error(sensitiveException)
+        }
+        if (request.preferences?.targetTitle === 'Invalid Result Input') {
+          return unvalidatedExecutionResult({
+            jobSpec: { targetTitle: 'Platform Engineer' },
+            quality: {
+              requirementCoverage: Number.NaN,
+              mustHaveCoverage: 1,
+              warnings: [],
+            },
+            rawCompletion: sensitiveInvalidValue,
+          })
         }
         if (request.preferences?.targetTitle === 'Assertion Failure Input') {
           return {
@@ -289,23 +461,31 @@ describe('runEvaluation', () => {
     )
 
     expect(report).toMatchObject({
-      total: 3,
+      total: 4,
       passed: 1,
-      failed: 2,
-      passRate: 0.3333,
+      failed: 3,
+      passRate: 0.25,
       scored: 2,
       averageRequirementCoverage: 0.6,
       averageMustHaveCoverage: 0.75,
       failureCodeCounts: {
         assertion_failed: 1,
         execution_failed: 1,
+        invalid_execution_result: 1,
       },
     })
     expect(report.results.map((result) => result.failureCode)).toEqual([
       null,
       'assertion_failed',
+      'invalid_execution_result',
       'execution_failed',
     ])
+
+    const serializedReport = JSON.stringify(report)
+    expect(serializedReport).not.toContain(sensitiveInvalidValue)
+    expect(serializedReport).not.toContain(sensitiveException)
+    expect(serializedReport).not.toContain('candidate@example.invalid')
+    expect(serializedReport).not.toContain('Imaginary Queue Simulator')
   })
 
   it('returns deterministic zero values for an empty dataset', async () => {
@@ -325,6 +505,7 @@ describe('runEvaluation', () => {
       failureCodeCounts: {
         assertion_failed: 0,
         execution_failed: 0,
+        invalid_execution_result: 0,
       },
       results: [],
     })

@@ -30,11 +30,21 @@ import {
   EvalDatasetSchema,
   type EvalExecute,
   type EvalExecutionResult,
+  EvalExecutionResultSchema,
   type EvalReport,
 } from '@/evaluation/contracts'
 
 function roundMetric(value: number): number {
   return Math.round(value * 10_000) / 10_000
+}
+
+function parseExecutionResult(value: unknown): EvalExecutionResult | null {
+  try {
+    const result = EvalExecutionResultSchema.safeParse(value)
+    return result.success ? result.data : null
+  } catch {
+    return null
+  }
 }
 
 function evaluateAssertions(
@@ -103,21 +113,9 @@ export async function runEvaluation(
 
   for (const evalCase of parsedCases) {
     const startedAt = performance.now()
+    let rawExecution: unknown
     try {
-      const execution = await execute(evalCase.request)
-      const assertions = evaluateAssertions(evalCase, execution)
-      const passed = assertions.every((assertion) => assertion.passed)
-
-      totalRequirementCoverage += execution.quality.requirementCoverage
-      totalMustHaveCoverage += execution.quality.mustHaveCoverage
-      scored += 1
-      results.push({
-        caseId: evalCase.id,
-        passed,
-        assertions,
-        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
-        failureCode: passed ? null : 'assertion_failed',
-      })
+      rawExecution = await execute(evalCase.request)
     } catch {
       results.push({
         caseId: evalCase.id,
@@ -126,7 +124,34 @@ export async function runEvaluation(
         durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
         failureCode: 'execution_failed',
       })
+      continue
     }
+
+    const execution = parseExecutionResult(rawExecution)
+    if (!execution) {
+      results.push({
+        caseId: evalCase.id,
+        passed: false,
+        assertions: [],
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        failureCode: 'invalid_execution_result',
+      })
+      continue
+    }
+
+    const assertions = evaluateAssertions(evalCase, execution)
+    const passed = assertions.every((assertion) => assertion.passed)
+
+    totalRequirementCoverage += execution.quality.requirementCoverage
+    totalMustHaveCoverage += execution.quality.mustHaveCoverage
+    scored += 1
+    results.push({
+      caseId: evalCase.id,
+      passed,
+      assertions,
+      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      failureCode: passed ? null : 'assertion_failed',
+    })
   }
 
   const total = results.length
@@ -150,6 +175,9 @@ export async function runEvaluation(
       ).length,
       execution_failed: results.filter(
         (result) => result.failureCode === 'execution_failed'
+      ).length,
+      invalid_execution_result: results.filter(
+        (result) => result.failureCode === 'invalid_execution_result'
       ).length,
     },
     results,

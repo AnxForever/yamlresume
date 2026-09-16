@@ -1,12 +1,14 @@
 # Resume Agent 确定性评估框架 Feature Brief
 
-> 功能 ID：RA-010 / 第一个纵向切片
+> 功能 ID：RA-010 / RA-010B
 >
 > 状态：Implemented（development-only；非 Enabled / Operational）
 >
 > 证据覆盖：Partial
 >
-> 调研基线：2026-09-16，`7a723fa`
+> RA-010B 状态：Implemented（development-only）
+>
+> 调研基线：2026-09-16，`ce7decd`
 
 ## 1. 用户问题与成功结果
 
@@ -21,6 +23,7 @@ Resume Agent 目前有确定性单元测试和安全 telemetry，但没有一套
 - 版本为 `1`、有稳定 case ID 的 `EvalCase` Schema；
 - 可选断言：目标职位、最低 requirement coverage、最低 must-have coverage、必须出现和禁止出现的 quality warning code；
 - 仅依赖函数注入的执行 seam；
+- 对 execute 输出做运行时验证，并安全区分执行异常与无效返回值；
 - 安全的逐案例结果和多案例聚合；
 - 一份完全虚构的开发 fixture；
 - 通过 fake 验证 runner 的确定性行为与脱敏边界。
@@ -53,6 +56,17 @@ OpenAI《Evaluation best practices》（2026-09-16 查阅）建议采用任务�
 
 当前 OpenAI 文档还说明其托管 Evals 平台正在弃用。RA-010 的持久需求是可移植案例和结果契约，因此不绑定某个托管评估产品。
 
+### 3.3 RA-010B：execute 输出不能只靠 TypeScript
+
+RA-010 初版把 `execute` 的返回类型声明为 `EvalExecutionResult`，但 runner 在运行时直接读取该值。TypeScript 类型会在编译后消失，Provider adapter、JavaScript 调用方、反序列化数据或不安全类型断言仍可返回 NaN、Infinity、越界 coverage、缺字段或非法 warning code。RA-010B 开始时的基线实现会把其中一部分误归为执行异常，另一部分写入 `scored` 和平均值。
+
+Zod 4.3.6 的维护者源码与测试给出两项直接证据：
+
+- `z.number()` 已拒绝 NaN 和正负 Infinity；`.finite()` 在 Zod 4 是兼容 no-op。RA-010B 仍显式写出 `.finite().min(0).max(1)`，同时表达有限数值与领域范围；
+- `z.object()` 默认剥离未知字段。执行结果 Schema 因此不使用 `strict()`：完整 `TailorResumeResult` 可以进入 seam，但解析后只留下 target title、coverage 和 warning code，不把 resume、artifact 或 warning message 带进评分。
+
+决策：在 `execute` resolve 与任何断言/聚合之间增加 `EvalExecutionResultSchema.safeParse`。Promise 抛错或拒绝继续归为 `execution_failed`；resolve 后未通过 Schema 的值归为 `invalid_execution_result`。两者都不进入 `scored`，且报告不保存 Zod issue、无效原值或异常正文。
+
 ## 4. 契约与深模块 seam
 
 模块只有一个调用接口：
@@ -61,9 +75,9 @@ OpenAI《Evaluation best practices》（2026-09-16 查阅）建议采用任务�
 runEvaluation(cases, execute) -> EvalReport
 ```
 
-`execute(request)` 返回 runner 实际需要的最小观察面：目标职位、两项 coverage 和 quality warning code。完整的 `TailorResumeResult` 结构兼容该观察面，因此真实 Agent 可直接注入；其他 runtime 也只需返回相同观察结果。
+`execute(request)` 返回 runner 实际需要的最小观察面：目标职位、两项 coverage 和 quality warning code。完整的 `TailorResumeResult` 结构兼容该观察面，因此真实 Agent 可直接注入；其他 runtime 也只需返回相同观察结果。`EvalExecutionResultSchema` 是这个观察面的运行时真相源，输出类型直接由 Schema 推导，避免类型与验证规则漂移。
 
-复杂性留在 runner 内：case 的运行时校验、顺序执行、断言生成、异常归一化、计时和聚合都不泄漏给调用方。删除该模块会迫使每个 prompt/model/runtime 比较者重复这些规则，因而这个 seam 具有足够深度。
+复杂性留在 runner 内：case 与 execute 输出的运行时校验、顺序执行、断言生成、失败分类、计时和聚合都不泄漏给调用方。删除该模块会迫使每个 prompt/model/runtime 比较者重复这些规则，因而这个 seam 具有足够深度。
 
 确定性含义有明确边界：相同的已验证 case 和相同 execute 输出会产生相同断言、failure code 与聚合数值；`durationMs` 是观测值，本身不承诺逐次相等；真实模型输出也不属于本切片的确定性保证。
 
@@ -73,18 +87,22 @@ runEvaluation(cases, execute) -> EvalReport
 dataset
   -> validate every case
   -> execute sequentially
-     -> returned -> evaluate all configured assertions
-        -> all pass -> passed
-        -> any fail -> assertion_failed
      -> throws/rejects -> execution_failed
+     -> returned -> validate minimal observation
+        -> invalid -> invalid_execution_result
+        -> valid -> evaluate all configured assertions
+           -> all pass -> passed
+           -> any fail -> assertion_failed
   -> aggregate
 ```
 
-- `targetTitle` 使用精确匹配；
+- execute 输出的 `targetTitle` 会 trim，并限制为 1–200 个字符；解析后的 title 使用精确匹配；
+- 两项 execute coverage 必须是 finite 且位于 `[0, 1]`；
+- execute warnings 最多 50 项，code 必须符合稳定 code 规则且不可重复；额外的 warning message 会被剥离；
 - 最低 coverage 使用包含阈值的 `>=`；
 - warning 断言读取 `quality.warnings[].code`，不读取 message；
-- 未配置期望时，只要 execute 成功且返回观察结果，该 case 即通过；
-- execute 失败时没有 coverage 观察值；平均 coverage 只对成功返回的 case 计算，若没有可评分 case 则为 `0`；
+- 未配置期望时，只要 execute 成功且返回合法观察结果，该 case 即通过；
+- execute 抛错与无效返回值都没有 coverage 观察值；平均 coverage 只对合法返回的 case 计算，若没有可评分 case 则为 `0`；
 - pass rate 与 coverage 平均值统一保留四位小数，避免把浮点噪声写入比较报告；
 - 空数据集固定返回全零计数和全零比率，不产生 `NaN`；
 - failure code 只允许稳定枚举，报告不包含捕获到的异常正文。
@@ -115,10 +133,12 @@ dataset
 2. required 与 forbidden warning code 冲突：Schema 拒绝自相矛盾的 case；
 3. 一个 case 多个断言失败：保留每个布尔断言，case failure code 归一为 `assertion_failed`；
 4. execute 抛出包含简历、密钥或 completion 的异常：只返回 `execution_failed`；
-5. 部分 case 执行失败：pass rate 仍以全部 case 为分母，coverage 平均值不伪造失败 case 的分数；
-6. 空集合：返回定义好的零值，不除零；
-7. case ID 重复：数据集校验拒绝，避免结果归属含糊；
-8. warning message 含敏感文本：runner 只观察 code，报告不复制 message。
+5. execute resolve 后缺字段，或包含 NaN、Infinity、越界 coverage、空 title、非法/重复 warning code：只返回 `invalid_execution_result`；
+6. 无效输出带有原始 Provider 字段或 Zod issue：runner 丢弃原值和校验详情，不写入报告；
+7. 部分 case 执行失败：pass rate 仍以全部 case 为分母，coverage 平均值不伪造失败 case 的分数；
+8. 空集合：返回定义好的零值，不除零；
+9. case ID 重复：数据集校验拒绝，避免结果归属含糊；
+10. warning message 含敏感文本：Schema 只输出 code，报告不复制 message。
 
 ## 9. 验收与 TDD 记录
 
@@ -140,16 +160,28 @@ pnpm agent test src/evaluation/runner.test.ts
 
 结果：1 个测试文件、11 个测试通过。测试只通过公开 Schema 和 runner seam，使用内存 fake，没有 mock 内部模块。
 
+### RA-010B RED -> GREEN
+
+1. **Schema 与安全观察面**：RED 时 `EvalExecutionResultSchema` 不存在；GREEN 后合法完整结果被解析成最小观察面，额外 resume、company、keyword 与 warning message 被剥离，`EvalExecutionResult` 直接由 Schema 输出类型推导。
+2. **目标职位约束**：空字符串、纯空白和 201 字符 title 三项均先 RED；加入 trim、非空和 200 字符上限后 GREEN。
+3. **coverage 约束**：Zod 4 已使 NaN/Infinity 用例直接通过拒绝断言，但 `-0.1` 与 `1.1` 的四个字段用例先 RED；共享 finite `[0,1]` Schema 后全部 GREEN。
+4. **warning 约束**：非法 code、重复 code 和 51 项数组三项先 RED；复用稳定 code 规则、50 项上限与唯一性检查后 GREEN。
+5. **runner 失败分类**：缺少 `quality` 的已 resolve 值先被误归为 `execution_failed`；在断言/聚合前安全解析后 GREEN，改为 `invalid_execution_result`，不进入 `scored`，也不保留原值或 Zod issue。
+6. **混合聚合回归**：在同一报告混合通过、断言失败、无效输出和 execute 拒绝。该测试因前一步采用通用分类与计分规则而首次即 GREEN；它是对前一行为的聚合验收，不另造实现分支。
+
+RA-010B 实现后的目标测试结果：1 个测试文件、27 个测试通过。新增测试覆盖 NaN、Infinity、`-0.1`、`1.1`、缺少 quality、空/超长 title、非法/重复/超量 warning，以及四类结果聚合和报告脱敏。
+
 提交前验证：
 
 ```text
 pnpm agent test src/evaluation/runner.test.ts
 pnpm --filter @yamlresume/resume-agent exec tsc --noEmit
-pnpm check:ci
+pnpm biome check packages/resume-agent/src/evaluation
 git diff --check
+pnpm license:check
 ```
 
-2026-09-16 验证记录：
+RA-010 首片在 2026-09-16 的验证记录：
 
 - `pnpm agent test src/evaluation/runner.test.ts`：通过，1 个文件、11 个测试；
 - `pnpm --filter @yamlresume/resume-agent exec tsc --noEmit`：通过；
@@ -157,6 +189,14 @@ git diff --check
 - `git diff --check`：通过；
 - `pnpm license:check`：命令成功，但环境没有 `addlicense` binary，脚本跳过实际扫描；四个新增 `.ts` 文件已人工确认具有完整 MIT header；
 - `pnpm check:ci`：首次运行在共享工作区中其他线程尚未完成的 `packages/agent-web/**`、`packages/resume-agent/src/workflow/**`、`packages/resume-agent/src/index.ts` 与 `packages/resume-agent-api/**` 格式/类型问题处失败；这些文件不属于 RA-010 允许修改范围，未由本任务改动。
+
+RA-010B 在 2026-09-16 的验证记录：
+
+- `pnpm agent test src/evaluation/runner.test.ts`：通过，1 个文件、27 个测试；
+- `pnpm --filter @yamlresume/resume-agent exec tsc --noEmit`：通过；
+- `pnpm biome check packages/resume-agent/src/evaluation`：通过，检查 4 个文件；
+- `git diff --check`：通过；
+- `pnpm license:check`：命令成功，但环境没有 `addlicense` binary，脚本跳过实际扫描；本轮没有新增 `.ts` 文件，修改的三个既有 `.ts` 文件均保留完整 MIT header。
 
 ## 10. 后续真实评估路线
 
@@ -175,16 +215,16 @@ git diff --check
 | Parent / lifecycle | Resume Agent 质量评估：案例验证 -> 执行 -> 确定性断言 -> 安全汇总 |
 | Feature | 用同一批匿名案例比较 prompt、模型和 runtime 的基础设施 |
 | Delivery state | Implemented（development-only；非 Enabled / Operational） |
-| Current state | 版本化 EvalCase/数据集 Schema、顺序 runner、安全逐案例结果、聚合和一份虚构 fixture 已实现 |
-| Primary evidence | OpenAI Evaluation best practices，2026-09-16 查阅 |
+| Current state | 版本化 EvalCase/数据集/execute 输出 Schema、顺序 runner、三类安全失败、聚合和一份虚构 fixture 已实现 |
+| Primary evidence | OpenAI Evaluation best practices 与 Zod 4.3.6 维护者源码/测试，2026-09-16 查阅 |
 | Independent evidence | 本地 `TailorResumeRequestSchema`、`TailorResumeResult`、quality warning 与 fake workflow tests |
-| Decision | Adapt 任务特定 deterministic checks；暂缓托管平台、真实模型与 LLM judge |
-| Edge cases | 非法/冲突 case、断言失败、敏感异常、部分失败聚合、空集合、重复 ID、敏感 warning message |
-| Acceptance | 七个纵向 TDD 行为、11 个测试和四条提交前命令 |
+| Decision | Adapt 任务特定 deterministic checks；在 execute 与评分之间验证最小观察面；暂缓托管平台、真实模型与 LLM judge |
+| Edge cases | 非法/冲突 case、断言失败、敏感异常、无效 execute 输出、部分失败聚合、空集合、重复 ID、敏感 warning message |
+| Acceptance | RA-010 七个纵向行为、RA-010B 五个 RED -> GREEN 行为与混合聚合回归，共 27 个测试 |
 | Coverage | Partial |
-| Historical gap | None；该行此前明确为 Planned/Partial |
-| Remaining gap | 真实匿名数据、真实模型、重复采样、方差/成本、人工标注与 judge 校准均未实现 |
-| Last reviewed | 2026-09-16，基线 `7a723fa`，Zod 4.3.6、Vitest 4.0.16 |
+| Historical gap | Backfilled；RA-010 初版只依赖 TypeScript 返回类型，曾缺少 execute 输出的运行时验证 |
+| Remaining gap | Schema 只证明观察值结构有效，不证明模型语义质量；真实匿名数据、真实模型、重复采样、方差/成本、人工标注与 judge 校准均未实现 |
+| Last reviewed | 2026-09-16，基线 `ce7decd`，Zod 4.3.6、Vitest 4.0.16 |
 
 ## 12. 参考资料
 

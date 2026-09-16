@@ -39,11 +39,22 @@ const WarningCodesSchema = z
     message: 'Warning codes must be unique',
   })
 
+const CoverageSchema = z.number().finite().min(0).max(1)
+
+const ExecutionWarningsSchema = z
+  .array(z.object({ code: StableCodeSchema }))
+  .max(50)
+  .refine(
+    (warnings) =>
+      new Set(warnings.map((warning) => warning.code)).size === warnings.length,
+    { message: 'Execution warning codes must be unique' }
+  )
+
 export const EvalExpectationsSchema = z
   .object({
     targetTitle: z.string().trim().min(1).max(200).optional(),
-    minimumRequirementCoverage: z.number().min(0).max(1).optional(),
-    minimumMustHaveCoverage: z.number().min(0).max(1).optional(),
+    minimumRequirementCoverage: CoverageSchema.optional(),
+    minimumMustHaveCoverage: CoverageSchema.optional(),
     requiredWarningCodes: WarningCodesSchema.optional(),
     forbiddenWarningCodes: WarningCodesSchema.optional(),
   })
@@ -91,18 +102,18 @@ export type EvalCaseData = z.output<typeof EvalCaseSchema>
 export type EvalDataset = z.input<typeof EvalDatasetSchema>
 export type EvalExpectations = z.output<typeof EvalExpectationsSchema>
 
-export interface EvalExecutionResult {
-  jobSpec: {
-    targetTitle: string
-  }
-  quality: {
-    requirementCoverage: number
-    mustHaveCoverage: number
-    warnings: readonly {
-      code: string
-    }[]
-  }
-}
+export const EvalExecutionResultSchema = z.object({
+  jobSpec: z.object({
+    targetTitle: z.string().trim().min(1).max(200),
+  }),
+  quality: z.object({
+    requirementCoverage: CoverageSchema,
+    mustHaveCoverage: CoverageSchema,
+    warnings: ExecutionWarningsSchema,
+  }),
+})
+
+export type EvalExecutionResult = z.output<typeof EvalExecutionResultSchema>
 
 export type EvalExecute = (
   request: EvalCaseData['request']
@@ -121,7 +132,10 @@ export interface EvalAssertionResult {
   passed: boolean
 }
 
-export type EvalFailureCode = 'assertion_failed' | 'execution_failed'
+export type EvalFailureCode =
+  | 'assertion_failed'
+  | 'execution_failed'
+  | 'invalid_execution_result'
 
 export interface EvalCaseResult {
   caseId: string
