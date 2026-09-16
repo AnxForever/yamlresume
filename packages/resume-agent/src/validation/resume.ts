@@ -259,7 +259,41 @@ export function prepareDraftResume(
           content: { ...draftContent, education: [] },
         }
       : value
-  const result = ResumeSchema.safeParse(normalizedValue)
+  let candidateValue = normalizedValue
+  let result = ResumeSchema.safeParse(candidateValue)
+  if (!result.success) {
+    const content = asRecord(asRecord(candidateValue)?.content)
+    const invalidEntries = new Map<string, Set<number>>()
+    for (const issue of result.error.issues) {
+      const [root, section, index] = issue.path
+      if (
+        root === 'content' &&
+        typeof section === 'string' &&
+        section === 'skills' &&
+        typeof index === 'number'
+      ) {
+        const indices = invalidEntries.get(section) ?? new Set<number>()
+        indices.add(index)
+        invalidEntries.set(section, indices)
+      }
+    }
+    if (content && invalidEntries.size > 0) {
+      const normalizedContent = { ...content }
+      for (const [section, indices] of invalidEntries) {
+        const items = normalizedContent[section]
+        if (Array.isArray(items)) {
+          normalizedContent[section] = items.filter(
+            (_item, index) => !indices.has(index)
+          )
+        }
+      }
+      candidateValue = {
+        ...asRecord(candidateValue),
+        content: normalizedContent,
+      }
+      result = ResumeSchema.safeParse(candidateValue)
+    }
+  }
   if (!result.success) {
     const issue = result.error.issues[0]
     const path = issue?.path.length ? ` (${issue.path.join('.')})` : ''
