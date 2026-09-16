@@ -42,3 +42,14 @@ Request body:
 
 The response includes the structured job analysis, match report, follow-up
 questions, generated YAMLResume, HTML, LaTeX, and workflow trace.
+
+### `POST /v1/runs`
+
+Accepts the same JSON or multipart request and returns `202 Accepted` with a
+queued run snapshot. Use this endpoint for long-running clients.
+
+### `GET /v1/runs/{id}`
+
+Returns the latest workflow stage and, after termination, either the completed
+result or a data-safe failure. The default store is in-memory: runs do not
+survive process restarts and are not shared across server instances.

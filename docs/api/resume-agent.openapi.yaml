@@ -57,8 +57,8 @@ paths:
         Runs input extraction, optional candidate normalization, JD analysis,
         evidence matching, drafting, deterministic validation, quality checks,
         and multi-format rendering. Use JSON for API clients and multipart for
-        browser uploads. This synchronous endpoint is intended for the MVP;
-        a run-oriented asynchronous protocol is planned for long workflows.
+        browser uploads. This synchronous endpoint is retained for development
+        and simple clients; use the run-oriented protocol for long workflows.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -99,6 +99,75 @@ paths:
           $ref: '#/components/responses/LlmNotConfigured'
         '500':
           $ref: '#/components/responses/InternalError'
+  /v1/runs:
+    post:
+      tags: [Resume Agent]
+      operationId: createResumeRun
+      summary: Queue an asynchronous resume-tailoring run
+      description: |
+        Validates the request before creating a run, then returns the queued
+        run immediately. Poll GET /v1/runs/{id} for stage changes and the
+        terminal result. The current in-memory store is intended for local
+        development and does not survive process restarts.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TailorResumeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TailorResumeMultipartRequest'
+      responses:
+        '202':
+          description: Run accepted and queued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ResumeAgentRun'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/runs/{id}:
+    get:
+      tags: [Resume Agent]
+      operationId: getResumeRun
+      summary: Get the latest public snapshot of a resume-tailoring run
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Latest run stage, terminal result, or safe failure
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ResumeAgentRun'
+        '404':
+          description: No run exists for this ID in the current store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 components:
   parameters:
     RequestId:
@@ -184,6 +253,7 @@ components:
               enum:
                 - invalid_request
                 - not_found
+                - run_not_found
                 - agent_validation_failed
                 - llm_not_configured
                 - llm_request_failed
@@ -573,6 +643,46 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentTraceEvent'
+    AgentRunStatus:
+      type: string
+      enum:
+        - queued
+        - ingesting_inputs
+        - normalizing_candidate
+        - analyzing_jd
+        - matching_evidence
+        - drafting
+        - validating
+        - rendering
+        - completed
+        - failed
+    AgentRunFailure:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+          description: Stable, data-safe message without source content or raw model output
+    ResumeAgentRun:
+      type: object
+      required: [id, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/AgentRunStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        result:
+          $ref: '#/components/schemas/TailorResumeResult'
+        error:
+          $ref: '#/components/schemas/AgentRunFailure'
     Capabilities:
       type: object
       required: [apiVersion, endpoints, input, output]

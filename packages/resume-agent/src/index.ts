@@ -23,6 +23,7 @@
  */
 
 export type {
+  AgentRunFailure,
   AgentRunStatus,
   AgentTraceEvent,
   CandidateInput,
@@ -46,6 +47,7 @@ export type {
   QualityWarning,
   RenderedResume,
   RequirementMatch,
+  ResumeAgentRun,
   ResumeChange,
   ResumeChangeType,
   ResumeDiff,
@@ -108,4 +110,10 @@ export {
   prepareDraftResume,
   validateNormalizationFacts,
 } from './validation/resume'
+export type { ResumeTailoringRunOptions } from './workflow/agent'
 export { ResumeTailoringAgent } from './workflow/agent'
+export type {
+  ResumeAgentRunServiceOptions,
+  RunStore,
+} from './workflow/run'
+export { InMemoryRunStore, ResumeAgentRunService } from './workflow/run'

@@ -235,6 +235,8 @@ export interface MatchReport {
 
 export type AgentRunStatus =
   | 'queued'
+  | 'ingesting_inputs'
+  | 'normalizing_candidate'
   | 'analyzing_jd'
   | 'matching_evidence'
   | 'drafting'
@@ -328,6 +330,20 @@ export interface TailorResumeResult {
   questions: FollowUpQuestion[]
   warnings: string[]
   trace: AgentTraceEvent[]
+}
+
+export interface AgentRunFailure {
+  code: string
+  message: string
+}
+
+export interface ResumeAgentRun {
+  id: string
+  status: AgentRunStatus
+  createdAt: string
+  updatedAt: string
+  result?: TailorResumeResult
+  error?: AgentRunFailure
 }
 
 export interface LlmImageAttachment {

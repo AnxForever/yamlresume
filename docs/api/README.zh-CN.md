@@ -57,6 +57,10 @@ issue code 与调用计数等安全摘要，不返回 JD、候选人资料、图
 | GET | `/healthz` | 进程健康检查 |
 | GET | `/v1/capabilities` | 获取文件、输出格式、样式和限制 |
 | POST | `/v1/tailor-resume` | 同步执行完整简历定制工作流 |
+| POST | `/v1/runs` | 创建异步简历定制 Run，返回 `202` 和 `queued` 快照 |
+| GET | `/v1/runs/{id}` | 查询 Run 的当前阶段、完成结果或安全失败 |
+
+当前 `RunStore` 是开发和测试用的内存 adapter：进程重启会丢失运行，多实例之间也不共享状态。持久化 checkpoint、取消、保留策略和 `needs_input` 恢复仍未实现，不能把当前协议当作生产级任务队列。
 
 ## JSON 与 multipart
 
@@ -77,4 +81,5 @@ JSON 适合服务间调用和已经转换为 Base64 的文件。浏览器上传�
 5. 一个格式失败时读取 `variants[].failures`，不要把整个运行直接视为失败；
 6. Base64 二进制通过 `mediaType` 和 `filename` 下载；
 7. 不在浏览器持久化 API Key；
-8. 后续异步运行 API 上线后，长任务应迁移到 Run 状态机，而不是无限增加 HTTP 超时时间。
+8. 长任务使用异步 Run API 和合理的轮询退避，不要无限增加同步 HTTP 超时时间；
+9. 在持久化 RunStore 完成前，不向用户承诺刷新服务后仍能恢复运行。

@@ -9,14 +9,16 @@ is concise, schema-valid, renderable, and traceable to candidate evidence.
 
 The project is also designed as a learning vehicle. Each milestone exposes a
 real agent engineering concern instead of hiding the whole system behind one
-large prompt.
+large prompt. The Chinese
+[`Career Agent engineering learning guide`](./career-agent-learning-guide.zh-CN.md)
+maps those concerns to the current code, exercises, and planned stages.
 
 ## Architecture
 
 ```text
-POST /v1/tailor-resume
-          │
-          ▼
+POST /v1/tailor-resume or POST /v1/runs → GET /v1/runs/{id}
+                              │
+                              ▼
  Request, file extraction, candidate normalization
           │
           ▼
@@ -100,7 +102,7 @@ structured-output modes, and token accounting can evolve inside adapters.
 | RA-006 | Immutable-fact guard | Implemented | Rejects unsupported entries in tests | Partial | None | Add date/contact mutation cases and translated-name policy |
 | RA-007 | YAML/HTML/LaTeX rendering | Implemented | Uses `@yamlresume/core`; package tests | Partial | None | Add PDF compilation and page-count checks |
 | RA-008 | HTTP API | Implemented | End-to-end HTTP tests | Partial | None | Authentication, rate limits, request IDs, cancellation |
-| RA-009 | Run persistence and resume versions | Planned | No implementation | Gap | None | Define storage model and retention policy |
+| RA-009 | Asynchronous runs, persistence and resume versions | Implemented for development; not durable | In-memory `RunStore`, stage state machine, `POST/GET /v1/runs` and package/API tests | Partial | None | Add durable checkpoint storage, cancellation, retention and restart recovery |
 | RA-010 | Agent evaluation and operational observability | Planned | Safe per-run structured-output telemetry now exists | Partial | None | Dataset, aggregated metrics and cost telemetry |
 | RA-011 | Human-in-the-loop clarification | Planned | Questions exist in output only | Gap | None | Resume a run after answers without redoing unrelated stages |
 | RA-012 | Structured-output validation and bounded repair | Implemented | Shared module, three-boundary workflow tests, safe API error test | Covered | Backfilled | Operational provider comparison is tracked by RA-010 |

@@ -23,6 +23,7 @@
  */
 
 import type {
+  AgentRunStatus,
   AgentTraceEvent,
   DraftResponse,
   JobSpec,
@@ -108,6 +109,22 @@ function structuredOutputMetadata(
       ? {}
       : { reasoningTokens: telemetry.reasoningTokens }),
   }
+}
+
+type ActiveAgentRunStatus = Exclude<
+  AgentRunStatus,
+  'queued' | 'completed' | 'failed'
+>
+
+export interface ResumeTailoringRunOptions {
+  onStatus?: (status: ActiveAgentRunStatus) => Promise<void> | void
+}
+
+async function reportStatus(
+  options: ResumeTailoringRunOptions,
+  status: ActiveAgentRunStatus
+): Promise<void> {
+  await options.onStatus?.(status)
 }
 
 function enumValue(
@@ -207,12 +224,16 @@ function normalizeJobSpec(value: unknown): unknown {
 export class ResumeTailoringAgent {
   constructor(private readonly llm: LlmClient) {}
 
-  async run(request: TailorResumeRequest): Promise<TailorResumeResult> {
+  async run(
+    request: TailorResumeRequest,
+    options: ResumeTailoringRunOptions = {}
+  ): Promise<TailorResumeResult> {
     const trace: AgentTraceEvent[] = []
     const preferences = request.preferences ?? {}
     const candidateFiles = request.candidate.files ?? []
     const jobFiles = request.jobFiles ?? []
 
+    await reportStatus(options, 'ingesting_inputs')
     addTrace(trace, 'ingest_inputs', 'started', {
       candidateFiles: candidateFiles.length,
       jobFiles: jobFiles.length,
@@ -238,6 +259,7 @@ export class ResumeTailoringAgent {
       jobArtifacts: jobArtifacts.length,
     })
 
+    await reportStatus(options, 'normalizing_candidate')
     addTrace(trace, 'normalize_candidate', 'started')
     const normalizedCandidate = await normalizeCandidateInput(
       this.llm,
@@ -257,6 +279,7 @@ export class ResumeTailoringAgent {
         : {}),
     })
 
+    await reportStatus(options, 'analyzing_jd')
     addTrace(trace, 'analyze_job', 'started')
     let jobSpec: JobSpec
     try {
@@ -291,6 +314,7 @@ export class ResumeTailoringAgent {
       throw error
     }
 
+    await reportStatus(options, 'matching_evidence')
     addTrace(trace, 'match_evidence', 'started', {
       evidence: evidence.length,
     })
@@ -303,6 +327,7 @@ export class ResumeTailoringAgent {
 
     const evidenceIds = new Set(evidence.map((item) => item.id))
 
+    await reportStatus(options, 'drafting')
     addTrace(trace, 'draft_resume', 'started')
     let draftResponse: DraftResponse
     try {
@@ -345,6 +370,7 @@ export class ResumeTailoringAgent {
       throw error
     }
 
+    await reportStatus(options, 'validating')
     addTrace(trace, 'validate_resume', 'started')
     const resume = prepareDraftResume(
       draftResponse.resume,
@@ -362,6 +388,7 @@ export class ResumeTailoringAgent {
       keywordCoverage: quality.keywordCoverage,
     })
 
+    await reportStatus(options, 'rendering')
     addTrace(trace, 'render_resume', 'started')
     const styleIDs = resolveStyleIDs(preferences)
     const formats = preferences.formats ?? [

@@ -40,8 +40,8 @@ user-confirmed truth.
 - deterministic quality report.
 - follow-up questions and warnings.
 - trace events for every workflow stage.
-- trace metadata for synchronous runs; asynchronous status is planned for
-  future Agent UI integration.
+- trace metadata for synchronous runs and stage-driven status for in-memory
+  asynchronous runs; durable status and checkpoint recovery remain planned.
 
 ## Execution plan
 
@@ -177,24 +177,31 @@ Tests:
 
 ### Unit 7A — Asynchronous run protocol
 
-**Status:** planned.
+**Status:** implemented for development with an in-memory adapter; durable
+persistence and cancellation remain planned.
 
-Deliverables:
+Delivered:
 
-- `RunStore` port and `InMemoryRunStore` implementation;
-- run state machine;
-- `POST /v1/runs` and `GET /v1/runs/:id`;
-- stage-driven status updates;
-- request IDs and terminal error state;
+- `RunStore` port, `InMemoryRunStore` adapter, and public run snapshots that do
+  not expose source requests or raw errors;
+- explicit queued, stage-driven, completed, and failed state transitions;
+- `POST /v1/runs` and `GET /v1/runs/{id}`;
+- request IDs and a data-safe terminal error state;
 - synchronous endpoint retained for development and tests.
 
-Tests:
+Verified tests:
 
 - state transitions;
 - successful background run;
 - failed background run;
 - unknown run;
 - API returns `202` then reaches a terminal state.
+
+Known limits:
+
+- in-memory runs do not survive restarts and are not shared across instances;
+- there is no cancellation, durable queue, retention policy, or checkpoint yet;
+- these limits must be addressed before calling the protocol operational.
 
 ### Unit 7B — Structured human-in-the-loop interaction
 

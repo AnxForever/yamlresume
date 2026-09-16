@@ -35,6 +35,7 @@ import {
   DraftValidationError,
   LlmConfigurationError,
   LlmRequestError,
+  ResumeAgentRunService,
   ResumeTailoringAgent,
   STYLE_PRESETS,
   StructuredOutputValidationError,
@@ -51,6 +52,8 @@ export const API_ROUTES = [
   { method: 'get', path: '/healthz' },
   { method: 'get', path: '/v1/capabilities' },
   { method: 'post', path: '/v1/tailor-resume' },
+  { method: 'post', path: '/v1/runs' },
+  { method: 'get', path: '/v1/runs/{id}' },
 ] as const
 
 interface ApiMeta {
@@ -205,6 +208,8 @@ function capabilities() {
       health: 'GET /healthz',
       capabilities: 'GET /v1/capabilities',
       tailorResume: 'POST /v1/tailor-resume',
+      createRun: 'POST /v1/runs',
+      getRun: 'GET /v1/runs/:id',
     },
     input: {
       requestContentTypes: ['application/json', 'multipart/form-data'],
@@ -243,10 +248,12 @@ function capabilities() {
 
 export interface AgentApiOptions {
   agent?: ResumeTailoringAgent
+  runService?: ResumeAgentRunService
 }
 
 export function createAgentApiServer(options: AgentApiOptions = {}): Server {
   const agent = options.agent ?? createDefaultAgent()
+  const runService = options.runService ?? new ResumeAgentRunService(agent)
 
   return createServer(async (request, response) => {
     const requestId = getRequestId(request)
@@ -271,7 +278,22 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
       return
     }
 
-    if (request.method !== 'POST' || url.pathname !== '/v1/tailor-resume') {
+    const runMatch = url.pathname.match(/^\/v1\/runs\/([^/]+)$/)
+    if (request.method === 'GET' && runMatch) {
+      const run = await runService.get(runMatch[1])
+      if (!run) {
+        error(response, 404, 'run_not_found', 'Run not found', requestId)
+        return
+      }
+      success(response, 200, run, requestId)
+      return
+    }
+
+    const isSynchronousRun =
+      request.method === 'POST' && url.pathname === '/v1/tailor-resume'
+    const isAsynchronousRun =
+      request.method === 'POST' && url.pathname === '/v1/runs'
+    if (!isSynchronousRun && !isAsynchronousRun) {
       error(response, 404, 'not_found', 'Route not found', requestId)
       return
     }
@@ -309,6 +331,11 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
     }
 
     try {
+      if (isAsynchronousRun) {
+        const run = await runService.start(parsed.data)
+        success(response, 202, run, requestId)
+        return
+      }
       const result = await agent.run(parsed.data)
       success(response, 200, result, requestId)
     } catch (runError) {

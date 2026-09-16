@@ -54,6 +54,7 @@ describe('OpenAPI contract', () => {
     expect(schemas.OutputArtifact).toBeDefined()
     expect(schemas.RenderedVariant).toBeDefined()
     expect(schemas.TailorResumeMultipartRequest).toBeDefined()
+    expect(schemas.ResumeAgentRun).toBeDefined()
   })
 
   it('documents structured-output validation failures', async () => {

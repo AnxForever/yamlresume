@@ -2,6 +2,8 @@
 
 > 当前代码从 YAMLResume 和简历定制能力起步，但产品本体是面向求职与职业成长全过程的 Career Agent。本文记录长期产品方向，不代表当前迭代必须一次完成。每个能力都必须单独经过：问题定义 → 调研 → 方案 → 验收标准 → 实现 → 单元/集成/Eval → 文档更新，测试通过后才能进入下一阶段。
 
+如果你正在通过本项目学习 Agent 开发，请先阅读 [`career-agent-learning-guide.zh-CN.md`](./career-agent-learning-guide.zh-CN.md)。它解释工作流与 Agent、Runtime、Capability、Tool、State、Checkpoint、HITL、Eval 等概念，并把它们映射到当前代码和后续练习。
+
 ## 1. 产品愿景
 
 Career Agent 不是一个“根据 JD 改几句话”的工具，而是一套围绕求职全过程工作的个人职业 Agent：
@@ -57,7 +59,7 @@ P0 已经具备可运行的后端骨架，但尚未达到“完成”状态。�
 | ID | 用户结果 | 交付状态 | 当前证据 | 证据覆盖 | 下一道门禁 |
 | --- | --- | --- | --- | --- | --- |
 | RP-000 | Career Agent 理解长期目标、规划任务、选择能力并维护可恢复运行 | Planned | 产品边界和目标架构已记录，尚无顶层运行时 | Gap | 独立调研 Agent runtime、能力协议、状态模型、权限和 Eval；不得以简历工作流代替 |
-| RP-001 | 简历能力针对真实 JD 生成可信、可追溯的定制简历 | Implemented，尚未 operational | 后端工作流、API、单元/集成测试 | Partial | 完成渲染硬化、匿名真实模型 Eval、HITL 和生产安全边界 |
+| RP-001 | 简历能力针对真实 JD 生成可信、可追溯的定制简历 | Implemented，尚未 operational | 后端工作流、同步与内存异步 Run API、单元/集成测试 | Partial | 完成持久化、渲染硬化、匿名真实模型 Eval、HITL 和生产安全边界 |
 | RP-002 | Agent 主动提出必要问题，并让用户通过选项或合适的输入控件回答 | Planned | 已有 `FollowUpQuestion` 输出和本路线图交互原则，没有暂停/恢复 | Gap | 单独编写交互协议 Feature Brief，验证状态机、可访问性、隐私和恢复测试 |
 | RP-003 | 根据目标岗位差距生成可执行、可动态调整的学习计划 | Idea | 用户需求和本路线图问题定义 | Gap | 调研学习闭环与衡量方法，定义能力矩阵、里程碑和 Eval |
 | RP-004 | 搜集可靠学习资料并辅导练习、项目和复盘 | Idea | 用户需求和来源/新鲜度原则 | Gap | 调研检索、引用、版权、新鲜度、难度匹配和反馈质量 |

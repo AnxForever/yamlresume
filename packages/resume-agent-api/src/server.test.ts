@@ -129,6 +129,57 @@ describe('agent API', () => {
     })
   })
 
+  it('creates an asynchronous run and exposes its terminal result', async () => {
+    await withServer(async (baseUrl) => {
+      const createdResponse = await fetch(`${baseUrl}/v1/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobDescription:
+            'We need a TypeScript Engineer to build reliable systems.',
+          candidate: { resume: candidate },
+        }),
+      })
+      const createdPayload = (await createdResponse.json()) as {
+        data?: { id?: string; status?: string }
+      }
+
+      expect(createdResponse.status).toBe(202)
+      expect(createdPayload.data?.id).toBeTypeOf('string')
+      expect(createdPayload.data?.status).toBe('queued')
+
+      const runId = createdPayload.data?.id
+      let terminalPayload:
+        | { data?: { status?: string; result?: { status?: string } } }
+        | undefined
+      for (let attempt = 0; attempt < 20 && runId; attempt += 1) {
+        const runResponse = await fetch(`${baseUrl}/v1/runs/${runId}`)
+        terminalPayload = (await runResponse.json()) as {
+          data?: { status?: string; result?: { status?: string } }
+        }
+        if (terminalPayload.data?.status === 'completed') break
+      }
+
+      expect(terminalPayload?.data?.status).toBe('completed')
+      expect(terminalPayload?.data?.result?.status).toBe('completed')
+    })
+  })
+
+  it('returns a stable not-found error for an unknown run', async () => {
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/runs/run-that-does-not-exist`)
+      const payload = (await response.json()) as {
+        error?: { code?: string; message?: string }
+      }
+
+      expect(response.status).toBe(404)
+      expect(payload.error).toEqual({
+        code: 'run_not_found',
+        message: 'Run not found',
+      })
+    })
+  })
+
   it('accepts multipart job files for browser uploads', async () => {
     await withServer(async (baseUrl) => {
       const form = new FormData()
