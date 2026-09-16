@@ -54,7 +54,7 @@ Nginx 配置必须在 reload 前通过 `nginx -t`。新服务至少验收：Basi
 
 ## 实际部署与验收记录
 
-- release：`/opt/yamlresume-agent/releases/20260916T085710Z`，`current` 使用原子 symlink 指向该版本；API/Web 均由独立 systemd unit 管理并设为开机启动。
+- current release：`/opt/yamlresume-agent/releases/20260916T094702Z`，`current` 使用原子 symlink 指向该版本；API/Web 均由独立 systemd unit 管理并设为开机启动。
 - API/Web 只监听 `127.0.0.1:8787` 与 `127.0.0.1:3100`；公网只开放既有 Nginx 80/443。
 - Provider 环境文件 mode 0600、owner root；SQLite 目录 mode 0700、数据库 mode 0600、owner 为隔离服务用户。
 - Nginx 未认证访问返回 401；认证后的 Web、health、capabilities 均为 200，capabilities 报告 Provider configured + SQLite RunStore。
