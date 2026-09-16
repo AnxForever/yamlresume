@@ -304,7 +304,7 @@ describe('ResumeTailoringAgent', () => {
           },
           layouts: candidate.layouts,
         },
-        sourceArtifactIds: ['artifact.candidate.txt'],
+        sourceArtifactIds: ['candidate.txt'],
         questions: [],
         warnings: [],
       },

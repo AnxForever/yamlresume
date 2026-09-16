@@ -196,7 +196,13 @@ export async function normalizeCandidateInput(
   const parsed = completion.data
 
   const artifactIds = new Set(artifacts.map((artifact) => artifact.id))
-  const unknownArtifactId = parsed.sourceArtifactIds.find(
+  const artifactIdByFilename = new Map(
+    artifacts.map((artifact) => [artifact.filename, artifact.id])
+  )
+  const normalizedSourceArtifactIds = parsed.sourceArtifactIds.map(
+    (id) => artifactIdByFilename.get(id) ?? id
+  )
+  const unknownArtifactId = normalizedSourceArtifactIds.find(
     (id) => !artifactIds.has(id)
   )
   if (unknownArtifactId) {
@@ -236,7 +242,7 @@ export async function normalizeCandidateInput(
   const questions = parsed.questions as FollowUpQuestion[]
   return {
     resume: normalized,
-    sourceArtifactIds: parsed.sourceArtifactIds,
+    sourceArtifactIds: normalizedSourceArtifactIds,
     questions,
     warnings: [
       'Candidate profile was normalized from uploaded files; review extracted facts before submitting.',
