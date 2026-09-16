@@ -210,7 +210,32 @@ Feature Brief 完成后按下列顺序逐个加入行为测试，并在每个 RE
 | 5 | renewal failure 后不提交 status/result/failure、不 ack/release 新 generation | 注入第二次 renewal 返回 `undefined`，expiry 后 B claim `attempt=2`；旧 Provider 后续使 Run 从 `analyzing_jd` 被普通 CAS 写成 `failed`，focused suite 1 failed / 32 passed | heartbeat renewal 与 leased CAS 共用 task-local 串行门；所有 durable worker transition/checkpoint/pause/result/failure/poison 写走三态 fenced CAS；lease lost 抛内部终止信号且跳过普通 fail/ack/release；Run 保持 `analyzing_jd`，B generation 可正常 ack，33 passed |
 | 6 | success、Provider error、lease lost、ack failure、close 清 timer | `close()` 测试因 `TypeError: service.close is not a function` 失败，focused suite 为 1 failed / 33 passed | 增加幂等 async `close()` 与 active-heartbeat 隔离；成功、Provider error、lease lost、ack false、close 均验证 fake timer count 为 0；deferred renewal 证明无重叠且 close 等待在途 renewal；39 passed |
 | 7 | 非法 heartbeat 配置、隐私 marker 与无句柄泄漏 | 配置/隐私回归在实现边界后首次执行即 GREEN；storage-error 测试初版使用无效 resume fixture 导致 Provider-start wait 超时，修复为既有合法 fixture 后通过，未为测试改业务实现 | lease/heartbeat min、max、整数与 `< lease` 稳定拒绝；raw Provider/heartbeat error、JD、owner marker 不进入 public Run/安全错误；`afterEach` 恢复 real timers、关闭全部 Store、删除精确临时目录；39 passed |
-| 8 | RA-015A–D 全量回归 | Store/worker 与 Run focused suites 没有新失败；完整 package suite 的 RA-015E 所在 14 个文件/149 tests 全部通过，但未修改的 `src/llm/openai-compatible.test.ts` 从首个 case 起按 20s 超时并使命令不退出 | RA-015A–E in-scope regression 为 57/57；package suite 不能记为通过，约 71s 时安全中止。该 LLM suite 单独运行复现相同超时，禁止文件未修改；完整输出与限制保留在验证结果 |
+| 8 | RA-015A–D 全量回归 | Store/worker 与 Run focused suites 没有新失败；RA-015E 提交当时的 package suite 中，14 个文件/149 tests 通过，但 `src/llm/openai-compatible.test.ts` 从首个 case 起超时 | 当时只把 57/57 in-scope regression 记为通过；后续 RA-015E-H 诊断在相同 Node/Vitest 版本和固定快照上无法复现，见下节。没有把环境变化误写成 heartbeat 修复 |
+
+### 11.1 RA-015E-H：完整测试进程不退出的后续诊断
+
+ODT 开发前曾再次观察到 14 个文件、150 个测试已全部报告通过，但 Vitest 进程未自然退出。
+本轮把“测试断言通过”和“进程完成退出”拆成两个信号，先按测试文件组合二分，再检查
+`process.getActiveResourcesInfo()` 与定向 timer/server/socket 生命周期。可证伪假设及结果如下：
+
+1. **heartbeat 或 SQLite adapter 遗留 timer/连接。** 若成立，最小的
+   `run.test.ts + sqlite-run-store.test.ts` 组合应稳定留下额外资源；实际单文件、两文件和加入
+   LLM suite 的三文件组合均自然退出，资源快照没有额外 timer/server。
+2. **OpenAI-compatible HTTP fixture 没有关闭 server/socket。** 若成立，LLM 单文件重复运行应
+   稳定挂起；实际重复运行自然退出。测试结束瞬间只看到正在关闭的 `Server/Socket`，50ms 后
+   消失，不能解释无限等待。
+3. **特定测试顺序或组合触发资源泄漏。** 若成立，重建的精确 14 文件/150 测试集合应提高
+   复现率；该集合连续 20 次自然退出，完整 package suite 连续 12 次自然退出。
+4. **并发负载下的慢测试等同于退出泄漏。** 四个 suite 并发时外层 guard 曾返回 124，但当时
+   SQLite tests 尚未完成断言；这不是“全部测试通过后仍不退出”的同一症状，已排除。
+
+因此当前没有满足 diagnosing loop 的稳定 RED，也没有能归因到产品代码的根因。相似的
+Vitest issue `vitest-dev/vitest#10162` 同样因缺少最小复现而关闭，不能当成本仓库根因证据。
+按照 TDD，只有能先捕获真实故障的正确 seam 才能形成回归测试；本轮没有制造永远为 GREEN 的
+“资源清理测试”，也没有修改 heartbeat、调用 `process.exit`、延长 timeout 或关闭泄漏检测。
+在 `9b5993f` 加入 ODT 后，完整 Agent suite 为 15 files / 184 tests、exit 0，并再次自然退出。
+历史事件保留为环境/runner 层的未决诊断记录；若再次出现，下一步是保留当次 PID、active
+resource 与诊断报告后在同一进程快照二分，而不是先改产品生命周期。
 
 ## 12. Evidence ledger
 
@@ -225,12 +250,12 @@ Feature Brief 完成后按下列顺序逐个加入行为测试，并在每个 RE
 | Independent evidence | 本地真实 SQLite 双连接、fake clock、deferred fake agent 与 fake timer；39 个 focused Store/service tests 与 18 个 Run regression tests |
 | Decision | Adapt visibility heartbeat；combine generation identity 与 leased Run CAS；decline expired revival、memory-only fencing 与 exactly-once |
 | Edge cases | missing task、wrong run/owner/attempt、exact expiry、same owner new generation、revision conflict、renew storage error、Provider in flight、ack false/error、close、claim-ahead |
-| Acceptance | focused Store/service + Run regression、TypeScript、build、Biome、diff check；完整 agent suite 的未修改 LLM timeout 单独记录；全部连接/timer/临时目录清理 |
+| Acceptance | focused Store/service + Run regression、TypeScript、build、Biome、diff check；RA-015E-H 后续重建精确 14/150 集合 20 次、完整 suite 12 次均自然退出，ODT 后 15 files / 184 tests 仍自然退出；全部连接/timer/临时目录清理 |
 | Coverage | Partial：同主机应用代码与注入故障已覆盖；Provider side effect、claim-ahead 与生产运行未覆盖 |
 | Historical gap | Reopened-by-change；RA-015C/D 明确记录 fixed lease 与 mutation fencing 缺口，未曾宣称解决 |
 | Gap origin | RA-015C 固定 lease；RA-015D 只保护 ack/release generation |
 | Remaining gap | claim-ahead/自动 worker、Provider idempotency/cancellation、multi-host clock、DLQ/backoff、metrics/runbook |
-| Last reviewed | 2026-09-16；Node 22.21.1、SQLite schema v2、baseline `7d74e4e` |
+| Last reviewed | 2026-09-16；Node 22.21.1、Vitest 4.0.16、SQLite schema v2、后续快照 `9b5993f` |
 
 ## 13. 可能推翻方案的证据
 
@@ -242,7 +267,7 @@ Feature Brief 完成后按下列顺序逐个加入行为测试，并在每个 RE
 
 ## 14. 验证结果
 
-提交前最终结果：
+RA-015E 提交当时的结果（保留历史原貌）：
 
 ```bash
 pnpm agent test src/workflow/sqlite-run-store.test.ts
@@ -277,6 +302,24 @@ pnpm exec biome check \
 git diff --check
 # exit 0
 ```
+
+RA-015E-H 后续诊断与复验结果：
+
+```bash
+# 精确重建原 14 files / 150 tests（排除后来新增的 evaluation runner）
+# 连续 20 次均完成断言并自然退出，exit 0
+
+pnpm agent test
+# 固定诊断快照连续 12 次自然退出，exit 0
+
+# ODT 提交 9b5993f 后再次复验
+pnpm agent test
+# 15 files / 184 tests passed；exit 0；进程自然退出
+```
+
+由于真实症状在固定快照上没有稳定复现，以上是“当前无法归因”的证据，不是故障已经被某个
+源码改动修复的证据。RA-015E 的 timer/Store 清理测试继续保护已知生命周期，但不能被误称为
+这次历史挂起的 RED → GREEN 回归。
 
 正常 pre-commit 首次执行了 staged-file `pnpm check`：Biome 覆盖 351 个文件且
 无修改，随后 monorepo `tsc --noEmit` 被未暂存的 `packages/playground` 阻断，
