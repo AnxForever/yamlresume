@@ -239,7 +239,17 @@ function capabilities() {
       },
     },
     output: {
-      formats: ['yaml', 'json', 'markdown', 'html', 'latex', 'pdf', 'docx'],
+      formats: [
+        'yaml',
+        'json',
+        'markdown',
+        'html',
+        'latex',
+        'pdf',
+        'docx',
+        'txt',
+        'rtf',
+      ],
       styles: Object.values(STYLE_PRESETS).map((style) => ({
         id: style.id,
         label: style.label,

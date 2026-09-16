@@ -26,7 +26,7 @@ import type { Resume } from '@yamlresume/core'
 import * as yamlResumeCore from '@yamlresume/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { OutputFormat } from '@/contracts'
+import { type OutputFormat, OutputFormatSchema } from '@/contracts'
 import { type PdfCompiler, renderResumeVariant } from '@/rendering/artifacts'
 
 const source: Resume = {
@@ -92,6 +92,280 @@ describe('renderResumeVariant', () => {
       )
       expect(result[format]).toBe(artifact?.content)
     }
+  })
+
+  it('renders a copyable plain-text resume without markup', async () => {
+    const format = OutputFormatSchema.parse('txt')
+    const result = await renderResumeVariant(source, 'ats-compact', {
+      formats: [format],
+    })
+
+    expect(result.failures).toEqual([])
+    expect(result.artifacts).toHaveLength(1)
+    const artifact = result.artifacts[0]
+    expect(artifact).toMatchObject({
+      format: 'txt',
+      style: 'ats-compact',
+      filename: 'resume-ats-compact.txt',
+      mediaType: 'text/plain; charset=utf-8',
+      encoding: 'utf8',
+    })
+    expect(artifact?.content).toContain('Ada 洛夫莱斯')
+    expect(artifact?.content).toContain('Compiler project')
+    expect(artifact?.content).toContain('TypeScript')
+    expect(artifact?.content).not.toContain('# ')
+    expect(artifact?.content.endsWith('\n')).toBe(true)
+    expect(artifact?.content.endsWith('\n\n')).toBe(false)
+    expect(artifact?.sizeBytes).toBe(
+      Buffer.byteLength(artifact?.content ?? '', 'utf8')
+    )
+    expect(result).not.toHaveProperty('txt')
+  })
+
+  it('renders escaped Unicode RTF without allowing user control groups', async () => {
+    const format = OutputFormatSchema.parse('rtf')
+    const rtfSource = structuredClone(source)
+    rtfSource.content.basics.summary =
+      'Uses {safe} \\object-like text and an emoji 😀.'
+
+    const result = await renderResumeVariant(rtfSource, 'ats-compact', {
+      formats: [format],
+    })
+
+    expect(result.failures).toEqual([])
+    expect(result.artifacts).toHaveLength(1)
+    const artifact = result.artifacts[0]
+    expect(artifact).toMatchObject({
+      format: 'rtf',
+      style: 'ats-compact',
+      filename: 'resume-ats-compact.rtf',
+      mediaType: 'application/rtf',
+      encoding: 'utf8',
+    })
+    expect(artifact?.content.startsWith('{\\rtf1\\ansi\\deff0\\uc1')).toBe(true)
+    expect(artifact?.content).toContain('\\{safe\\}')
+    expect(artifact?.content).toContain('\\\\object-like')
+    expect(artifact?.content).not.toContain('{\\object')
+    expect(artifact?.content).toContain('\\u27931?')
+    expect(artifact?.content).toContain('\\u-10179?\\u-8704?')
+    expect(
+      [...(artifact?.content ?? '')].every(
+        (character) => (character.codePointAt(0) ?? 0) <= 0x7f
+      )
+    ).toBe(true)
+    expect(artifact?.sizeBytes).toBe(
+      Buffer.byteLength(artifact?.content ?? '', 'utf8')
+    )
+    expect(result).not.toHaveProperty('rtf')
+  })
+
+  it('shares complete semantic content and order across TXT and RTF', async () => {
+    const richSource = structuredClone(source)
+    richSource.content.basics.headline = 'Platform Engineer'
+    richSource.content.basics.phone = '+1 555 0100'
+    richSource.content.basics.url = 'https://example.invalid/resume'
+    richSource.content.location = {
+      address: '123 Example Road',
+      city: 'London',
+      region: 'England',
+      postalCode: 'SW1A 1AA',
+    }
+    richSource.content.work = [
+      {
+        name: 'Example Systems',
+        position: 'Platform Engineer',
+        startDate: '2022',
+        endDate: '2026',
+        summary: '- Operated reliable Kubernetes services',
+        keywords: ['Kubernetes', 'Terraform'],
+        url: 'https://example.invalid/work',
+      },
+    ]
+    richSource.content.projects = [
+      {
+        name: 'Compiler project',
+        description: 'Reliable compiler platform',
+        startDate: '2024',
+        endDate: '2025',
+        summary: '- Built a TypeScript compiler service',
+        keywords: ['TypeScript'],
+        url: 'https://example.invalid/project',
+      },
+    ]
+    richSource.content.education = [
+      {
+        institution: 'Example University',
+        area: 'Computer Science',
+        degree: 'Bachelor',
+        startDate: '2018',
+        endDate: '2022',
+        score: '3.95',
+        courses: ['Distributed Systems'],
+        summary: '- Built a scheduler',
+        url: 'https://example.invalid/education',
+      },
+    ]
+    richSource.content.skills = [
+      {
+        name: 'Infrastructure',
+        level: 'Advanced',
+        keywords: ['Kubernetes', 'Terraform'],
+      },
+    ]
+    richSource.content.certificates = [
+      {
+        name: 'Cloud Certificate',
+        issuer: 'Example Issuer',
+        date: '2025',
+        url: 'https://example.invalid/certificate',
+      },
+    ]
+    richSource.content.awards = [
+      {
+        title: 'Reliability Award',
+        awarder: 'Example Foundation',
+        date: '2024',
+        summary: 'Recognized for resilient systems',
+      },
+    ]
+    richSource.content.publications = [
+      {
+        name: 'Reliable Agents',
+        publisher: 'Example Press',
+        releaseDate: '2025',
+        summary: 'A study of bounded agent systems',
+        url: 'https://example.invalid/publication',
+      },
+    ]
+    richSource.content.volunteer = [
+      {
+        organization: 'Example Community',
+        position: 'Mentor',
+        startDate: '2023',
+        endDate: '2024',
+        summary: 'Mentored new engineers',
+        url: 'https://example.invalid/volunteer',
+      },
+    ]
+    richSource.content.languages = [
+      {
+        language: 'English',
+        fluency: 'Native or Bilingual Proficiency',
+        keywords: ['IELTS 8.0'],
+      },
+    ]
+    richSource.content.profiles = [
+      {
+        network: 'GitHub',
+        username: 'example-user',
+        url: 'https://github.com/example-user',
+      },
+    ]
+    richSource.content.interests = [
+      { name: 'Open Source', keywords: ['Mentoring'] },
+    ]
+    richSource.content.references = [
+      {
+        name: 'Example Manager',
+        relationship: 'Former Manager',
+        email: 'manager@example.invalid',
+        phone: '+1 555 0199',
+        summary: 'Recommends the candidate',
+      },
+    ]
+
+    const result = await renderResumeVariant(richSource, 'ats-compact', {
+      formats: ['rtf', 'txt', 'rtf'],
+    })
+
+    expect(result.artifacts.map((artifact) => artifact.format)).toEqual([
+      'rtf',
+      'txt',
+    ])
+    const text =
+      result.artifacts.find((artifact) => artifact.format === 'txt')?.content ??
+      ''
+    for (const value of [
+      '+1 555 0100',
+      '123 Example Road',
+      'https://example.invalid/resume',
+      'https://example.invalid/work',
+      'Reliable compiler platform',
+      'https://example.invalid/project',
+      'Score: 3.95',
+      'Distributed Systems',
+      'Built a scheduler',
+      'https://example.invalid/education',
+      'Cloud Certificate',
+      'Reliability Award',
+      'Reliable Agents',
+      'Example Community',
+      'IELTS 8.0',
+      'https://github.com/example-user',
+      'Open Source',
+      'Example Manager',
+    ]) {
+      expect(text).toContain(value)
+    }
+    expect(text.indexOf('Education')).toBeLessThan(text.indexOf('Work'))
+    expect(text.indexOf('Work')).toBeLessThan(text.indexOf('Skills'))
+    expect(text.indexOf('Skills')).toBeLessThan(text.indexOf('Projects'))
+    expect(text.indexOf('Projects')).toBeLessThan(text.indexOf('Profiles'))
+
+    const rtf =
+      result.artifacts.find((artifact) => artifact.format === 'rtf')?.content ??
+      ''
+    for (const value of [
+      '123 Example Road',
+      'Example Systems',
+      'Example University',
+      'Infrastructure',
+      'https://example.invalid/work',
+      'Score: 3.95',
+      'IELTS 8.0',
+      'https://github.com/example-user',
+    ]) {
+      expect(rtf).toContain(value)
+    }
+  })
+
+  it('uses localized section headings, aliases, and layout order', async () => {
+    const localizedSource = structuredClone(source)
+    localizedSource.locale = { language: 'zh-hans' }
+    localizedSource.content.education = [
+      {
+        institution: 'Example University',
+        area: 'Computer Science',
+        degree: 'Bachelor',
+        startDate: '2018',
+      },
+    ]
+    localizedSource.content.work = [
+      {
+        name: 'Example Systems',
+        position: 'Platform Engineer',
+        startDate: '2022',
+        summary: 'Built reliable systems',
+      },
+    ]
+    const latex = localizedSource.layouts?.find(
+      (layout) => layout.engine === 'latex'
+    )
+    if (!latex) throw new Error('Expected a LaTeX layout')
+    latex.sections = {
+      order: ['work', 'education'],
+      aliases: { work: '职业经历' },
+    }
+
+    const result = await renderResumeVariant(localizedSource, 'ats-compact', {
+      formats: ['txt'],
+    })
+    const text = result.artifacts[0]?.content ?? ''
+
+    expect(text).toContain('职业经历')
+    expect(text).toContain('教育背景')
+    expect(text.indexOf('职业经历')).toBeLessThan(text.indexOf('教育背景'))
+    expect(text).not.toContain('\nExperience\n')
   })
 
   it('deduplicates formats without changing their first-seen order', async () => {

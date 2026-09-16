@@ -97,6 +97,8 @@ export const OutputFormatSchema = z.enum([
   'latex',
   'pdf',
   'docx',
+  'txt',
+  'rtf',
 ])
 
 export const StylePresetSchema = z.enum([
@@ -123,7 +125,7 @@ export const TailorPreferencesSchema = z.object({
   formats: z
     .array(OutputFormatSchema)
     .min(1)
-    .max(7)
+    .max(9)
     .default(['yaml', 'json', 'markdown', 'html', 'latex']),
   styles: z.array(StylePresetSchema).min(1).max(5).default(['ats-compact']),
 })

@@ -110,6 +110,8 @@ describe('agent API', () => {
       expect(response.headers.get('x-request-id')).toBe('frontend-test')
       expect(payload.meta?.requestId).toBe('frontend-test')
       expect(payload.data?.output?.formats).toContain('docx')
+      expect(payload.data?.output?.formats).toContain('txt')
+      expect(payload.data?.output?.formats).toContain('rtf')
       expect(payload.data?.output?.styles).toHaveLength(5)
     })
   })

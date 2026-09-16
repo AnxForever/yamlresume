@@ -68,7 +68,7 @@
     "targetTitle": "Agent 应用开发工程师",
     "maxPages": 1,
     "styles": ["ats-compact", "developer-two-column"],
-    "formats": ["yaml", "json", "markdown", "html", "latex", "pdf", "docx"]
+    "formats": ["yaml", "json", "markdown", "html", "latex", "pdf", "docx", "txt", "rtf"]
   }
 }
 ```
@@ -111,9 +111,19 @@
 - HTML：浏览器预览和未来网页发布；
 - LaTeX：高质量排版源文件；
 - PDF：正式投递；
-- DOCX：便于在 Word、WPS 和企业系统中继续编辑。
+- DOCX：便于在 Word、WPS 和企业系统中继续编辑；
+- TXT：无 Markdown/HTML 标记的复制、粘贴与 ATS 文本输入；
+- RTF：传统办公软件与 ATS 使用的可编辑交换格式。
 
-文本产物使用 UTF-8；PDF 和 DOCX 在 JSON API 中使用 Base64，并记录媒体类型和原始字节数。后续生产环境应改成对象存储短期下载地址，避免把大文件长期放在 JSON 和数据库里。
+YAML、JSON、Markdown、HTML、LaTeX、TXT 与 RTF 在 API 中都使用 `utf8` encoding；RTF source
+本身限制为 ASCII，并用 RTF Unicode control word 表达非 ASCII 文本。PDF 和 DOCX 使用 Base64。
+所有 artifact 都记录准确媒体类型和实际字节数；TXT/RTF 只通过权威 `artifacts` 集合交付，
+不增加 legacy 顶层字段。后续生产环境应改成对象存储短期下载地址，避免把大文件长期放在
+JSON 和数据库里。
+
+ODT 输出以及 RTF、ODT、旧 `.doc` 输入仍是 Planned，不应从当前 TXT/RTF 输出能力推断为已支持。
+具体证据和剩余兼容矩阵见
+[`resume-agent-common-document-export.zh-CN.md`](./resume-agent-common-document-export.zh-CN.md)。
 
 LLM trace 只包含 provider/model、计数、耗时和 token 数，不包含 JD、候选人资料、Prompt、图片 Data URL 或原始模型响应。若结构化输出在一次默认 Repair 后仍不符合 Schema，同步 API 返回 `502 structured_output_validation_failed`，不会继续匹配、生成或渲染。
 
