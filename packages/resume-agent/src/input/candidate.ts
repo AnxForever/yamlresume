@@ -111,19 +111,34 @@ function imageAttachments(artifacts: ExtractedArtifact[]) {
 interface CandidateShapeNormalization {
   value: unknown
   omittedOptionalEntries: boolean
+  usedSourceSummary: boolean
 }
 
 function normalizeCandidateResumeShape(
-  value: unknown
+  value: unknown,
+  sourceText = ''
 ): CandidateShapeNormalization {
   const resume = asRecord(value)
   const content = asRecord(resume?.content)
   if (!resume || !content) {
-    return { value, omittedOptionalEntries: false }
+    return { value, omittedOptionalEntries: false, usedSourceSummary: false }
   }
 
   let changed = false
+  let usedSourceSummary = false
   const normalizedContent = { ...content }
+  const basics = asRecord(content.basics)
+  const fallbackSummary = sourceText.replace(/\s+/gu, ' ').trim().slice(0, 1024)
+  if (
+    basics &&
+    typeof basics.name === 'string' &&
+    typeof basics.summary !== 'string' &&
+    fallbackSummary.length >= 16
+  ) {
+    normalizedContent.basics = { ...basics, summary: fallbackSummary }
+    changed = true
+    usedSourceSummary = true
+  }
   if (!('education' in content)) {
     normalizedContent.education = []
     changed = true
@@ -161,6 +176,7 @@ function normalizeCandidateResumeShape(
   return {
     value: changed ? { ...resume, content: normalizedContent } : value,
     omittedOptionalEntries,
+    usedSourceSummary,
   }
 }
 
@@ -211,7 +227,13 @@ export async function normalizeCandidateInput(
     )
   }
 
-  const normalizedShape = normalizeCandidateResumeShape(parsed.resume)
+  const normalizedShape = normalizeCandidateResumeShape(
+    parsed.resume,
+    artifacts
+      .map((artifact) => artifact.text?.trim() ?? '')
+      .filter(Boolean)
+      .join('\n')
+  )
   let normalized: ReturnType<typeof parseCandidateResume>
   try {
     normalized = parseCandidateResume({
@@ -249,6 +271,11 @@ export async function normalizeCandidateInput(
       ...(normalizedShape.omittedOptionalEntries
         ? [
             'Some incomplete optional candidate entries were omitted; confirm missing details before submitting.',
+          ]
+        : []),
+      ...(normalizedShape.usedSourceSummary
+        ? [
+            'A summary was assembled from extracted source text because the normalized profile omitted one; review it before submitting.',
           ]
         : []),
       ...parsed.warnings,

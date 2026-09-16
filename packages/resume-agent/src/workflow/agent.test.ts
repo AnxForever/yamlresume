@@ -360,6 +360,73 @@ describe('ResumeTailoringAgent', () => {
     )
   })
 
+  it('retains extracted source text when normalization omits a summary', async () => {
+    const responses = [
+      {
+        resume: {
+          content: {
+            basics: { name: 'Ada Lovelace' },
+            education: [],
+          },
+          layouts: candidate.layouts,
+        },
+        sourceArtifactIds: ['candidate.txt'],
+        questions: [],
+        warnings: [],
+      },
+      {
+        targetTitle: 'Platform Engineer',
+        seniority: 'unknown',
+        summary: 'Build reliable platforms',
+        requirements: [],
+        keywords: [],
+      },
+      {
+        resume: {
+          ...candidate,
+          content: {
+            basics: { name: 'Ada Lovelace' },
+            education: [],
+          },
+        },
+        selectedEvidenceIds: [],
+        questions: [],
+        notes: [],
+      },
+    ]
+    const llm: LlmClient = {
+      async completeJson() {
+        return {
+          data: responses.shift(),
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+
+    const result = await new ResumeTailoringAgent(llm).run({
+      candidate: {
+        files: [
+          {
+            filename: 'candidate.txt',
+            text: 'Ada Lovelace built reliable TypeScript services.',
+          },
+        ],
+      },
+      jobDescription: 'Platform Engineer',
+      preferences: { formats: ['yaml'] },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.warnings).toContain(
+      'A summary was assembled from extracted source text because the normalized profile omitted one; review it before submitting.'
+    )
+  })
+
   it('reports metadata from each rendered style preset', async () => {
     const responses = [
       {
