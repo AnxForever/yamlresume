@@ -1,12 +1,14 @@
 # Resume Agent 确定性评估框架 Feature Brief
 
-> 功能 ID：RA-010 / RA-010B
+> 功能 ID：RA-010 / RA-010B / RA-010C
 >
 > 状态：Implemented（development-only；非 Enabled / Operational）
 >
 > 证据覆盖：Partial
 >
 > RA-010B 状态：Implemented（development-only）
+>
+> RA-010C 状态：Implemented for development；真实模型质量基线尚未取得
 >
 > 调研基线：2026-09-16，`ce7decd`
 
@@ -198,7 +200,19 @@ RA-010B 在 2026-09-16 的验证记录：
 - `git diff --check`：通过；
 - `pnpm license:check`：命令成功，但环境没有 `addlicense` binary，脚本跳过实际扫描；本轮没有新增 `.ts` 文件，修改的三个既有 `.ts` 文件均保留完整 MIT header。
 
-## 10. 后续真实评估路线
+## 10. RA-010C：公开岗位派生数据与 Campaign
+
+RA-010C 已新增三份“真实公开 JD 派生 + 完全合成候选人”的 development cases、版本化
+provenance、`requiredJobKeywords` 断言和 `runEvaluationCampaign` 重复采样接口。它补上了原框架
+只有单份虚构 fixture、只能依赖模型自评 coverage、没有 campaign metadata 的缺口。
+
+两条真实 Provider 路径已经执行：默认 Node 出网未读取代理；启用实验性 env-proxy 后，OpenAI
+返回 401，Gemini-compatible 返回 400；3 个 case 没有进入评分。因此当前只证明真实执行通道能
+安全分类失败，不能宣称模型质量通过。完整研究、
+RED → GREEN、来源版本、运行证据和证据台账见
+[`resume-agent-public-job-evaluation.zh-CN.md`](./resume-agent-public-job-evaluation.zh-CN.md)。
+
+### 后续真实评估路线
 
 1. 在受控环境注入真实 execute adapter，并把 provider、model、prompt revision 和 runtime revision 作为运行元数据，而不是写入 case；
 2. 建立经授权、去标识并人工复核的代表性数据集，分开 development set 与 held-out set；
@@ -215,21 +229,23 @@ RA-010B 在 2026-09-16 的验证记录：
 | Parent / lifecycle | Resume Agent 质量评估：案例验证 -> 执行 -> 确定性断言 -> 安全汇总 |
 | Feature | 用同一批匿名案例比较 prompt、模型和 runtime 的基础设施 |
 | Delivery state | Implemented（development-only；非 Enabled / Operational） |
-| Current state | 版本化 EvalCase/数据集/execute 输出 Schema、顺序 runner、三类安全失败、聚合和一份虚构 fixture 已实现 |
+| Current state | 版本化 EvalCase/数据集/execute 输出 Schema、顺序 runner、三类安全失败、聚合、一份虚构 fixture、三份公开 JD 派生 development cases、岗位关键词断言和 campaign 重复采样已实现 |
 | Primary evidence | OpenAI Evaluation best practices 与 Zod 4.3.6 维护者源码/测试，2026-09-16 查阅 |
 | Independent evidence | 本地 `TailorResumeRequestSchema`、`TailorResumeResult`、quality warning 与 fake workflow tests |
-| Decision | Adapt 任务特定 deterministic checks；在 execute 与评分之间验证最小观察面；暂缓托管平台、真实模型与 LLM judge |
+| Decision | Adapt 任务特定 deterministic checks；在 execute 与评分之间验证最小观察面；公开 JD 只保留可追溯的改写摘要，候选人保持全合成；暂缓托管平台与未经人工校准的 LLM judge |
 | Edge cases | 非法/冲突 case、断言失败、敏感异常、无效 execute 输出、部分失败聚合、空集合、重复 ID、敏感 warning message |
-| Acceptance | RA-010 七个纵向行为、RA-010B 五个 RED -> GREEN 行为与混合聚合回归，共 27 个测试 |
+| Acceptance | RA-010 七个纵向行为、RA-010B 五个 RED -> GREEN 行为与混合聚合回归、RA-010C 七个 provenance/corpus/keyword/campaign 行为，共 34 个测试 |
 | Coverage | Partial |
 | Historical gap | Backfilled；RA-010 初版只依赖 TypeScript 返回类型，曾缺少 execute 输出的运行时验证 |
-| Remaining gap | Schema 只证明观察值结构有效，不证明模型语义质量；真实匿名数据、真实模型、重复采样、方差/成本、人工标注与 judge 校准均未实现 |
-| Last reviewed | 2026-09-16，基线 `ce7decd`，Zod 4.3.6、Vitest 4.0.16 |
+| Remaining gap | 公开 JD 派生案例仍不是真实候选人分布；当前环境需要实验性 env-proxy，且现有 OpenAI 凭证返回 401、Gemini 配置返回 400；尚无可评分的重复真实模型结果、token/费用、人工标注或 judge 校准 |
+| Last reviewed | 2026-09-16，RA-010 基线 `ce7decd`，Zod 4.3.6、Vitest 4.0.16，RA-010C 公开来源版本见独立 Feature Brief |
 
 ## 12. 参考资料
 
 - OpenAI Evaluation best practices：
   <https://developers.openai.com/api/docs/guides/evaluation-best-practices>
+- Greenhouse Job Board API：
+  <https://developers.greenhouse.io/job-board.html>
 - 本仓库结构化输出可靠性设计：
   [`resume-agent-structured-output-reliability.zh-CN.md`](./resume-agent-structured-output-reliability.zh-CN.md)
 - 本仓库 Resume Agent 后端设计与现有 evidence ledger：

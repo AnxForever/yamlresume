@@ -38,6 +38,10 @@ function roundMetric(value: number): number {
   return Math.round(value * 10_000) / 10_000
 }
 
+function normalizeJobKeyword(value: string): string {
+  return value.normalize('NFKC').trim().toLocaleLowerCase()
+}
+
 function parseExecutionResult(value: unknown): EvalExecutionResult | null {
   try {
     const result = EvalExecutionResultSchema.safeParse(value)
@@ -60,11 +64,21 @@ function evaluateAssertions(
   const warningCodes = new Set(
     execution.quality.warnings.map((warning) => warning.code)
   )
+  const jobKeywords = new Set(
+    (execution.jobSpec.keywords ?? []).map(normalizeJobKeyword)
+  )
 
   if (expectations.targetTitle !== undefined) {
     assertions.push({
       code: 'target_title',
       passed: execution.jobSpec.targetTitle === expectations.targetTitle,
+    })
+  }
+  for (const keyword of expectations.requiredJobKeywords ?? []) {
+    assertions.push({
+      code: 'required_job_keyword',
+      subject: keyword,
+      passed: jobKeywords.has(normalizeJobKeyword(keyword)),
     })
   }
   if (expectations.minimumRequirementCoverage !== undefined) {

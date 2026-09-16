@@ -41,6 +41,36 @@ const WarningCodesSchema = z
 
 const CoverageSchema = z.number().finite().min(0).max(1)
 
+const JobKeywordsSchema = z
+  .array(z.string().trim().min(1).max(128))
+  .max(100)
+  .refine(
+    (keywords) =>
+      new Set(keywords.map((keyword) => keyword.toLocaleLowerCase())).size ===
+      keywords.length,
+    { message: 'Job keywords must be unique ignoring case' }
+  )
+
+const ISODateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const date = new Date(`${value}T00:00:00.000Z`)
+    return (
+      !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+    )
+  }, 'Date must be a real calendar date')
+
+const HttpsUrlSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2_048)
+  .url()
+  .refine((value) => new URL(value).protocol === 'https:', {
+    message: 'Source URL must use HTTPS',
+  })
+
 const ExecutionWarningsSchema = z
   .array(z.object({ code: StableCodeSchema }))
   .max(50)
@@ -55,6 +85,7 @@ export const EvalExpectationsSchema = z
     targetTitle: z.string().trim().min(1).max(200).optional(),
     minimumRequirementCoverage: CoverageSchema.optional(),
     minimumMustHaveCoverage: CoverageSchema.optional(),
+    requiredJobKeywords: JobKeywordsSchema.max(25).optional(),
     requiredWarningCodes: WarningCodesSchema.optional(),
     forbiddenWarningCodes: WarningCodesSchema.optional(),
   })
@@ -72,12 +103,36 @@ export const EvalExpectationsSchema = z
     }
   })
 
+export const EvalCaseProvenanceSchema = z
+  .object({
+    split: z.enum(['development', 'held-out']),
+    jobDescription: z
+      .object({
+        kind: z.literal('public_job_posting_derived'),
+        publisher: z.string().trim().min(1).max(200),
+        sourceUrl: HttpsUrlSchema,
+        sourcePostingId: StableCodeSchema,
+        observedAt: ISODateSchema,
+        sourceUpdatedAt: z.string().datetime({ offset: true }),
+        handling: z.literal('paraphrased_requirements_only'),
+      })
+      .strict(),
+    candidate: z
+      .object({
+        kind: z.literal('synthetic'),
+        containsRealPersonalData: z.literal(false),
+      })
+      .strict(),
+  })
+  .strict()
+
 export const EvalCaseSchema = z
   .object({
     version: z.literal(1),
     id: StableCodeSchema,
     request: TailorResumeRequestSchema,
     expectations: EvalExpectationsSchema.optional(),
+    provenance: EvalCaseProvenanceSchema.optional(),
   })
   .strict()
 
@@ -99,12 +154,14 @@ export const EvalDatasetSchema = z
 
 export type EvalCase = z.input<typeof EvalCaseSchema>
 export type EvalCaseData = z.output<typeof EvalCaseSchema>
+export type EvalCaseProvenance = z.output<typeof EvalCaseProvenanceSchema>
 export type EvalDataset = z.input<typeof EvalDatasetSchema>
 export type EvalExpectations = z.output<typeof EvalExpectationsSchema>
 
 export const EvalExecutionResultSchema = z.object({
   jobSpec: z.object({
     targetTitle: z.string().trim().min(1).max(200),
+    keywords: JobKeywordsSchema.optional(),
   }),
   quality: z.object({
     requirementCoverage: CoverageSchema,
@@ -121,6 +178,7 @@ export type EvalExecute = (
 
 export type EvalAssertionCode =
   | 'target_title'
+  | 'required_job_keyword'
   | 'minimum_requirement_coverage'
   | 'minimum_must_have_coverage'
   | 'required_warning_code'

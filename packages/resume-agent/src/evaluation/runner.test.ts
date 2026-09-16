@@ -54,6 +54,53 @@ function unvalidatedExecutionResult(value: unknown): EvalExecutionResult {
 }
 
 describe('EvalCaseSchema', () => {
+  it('accepts only safe provenance for a public-job-derived case', () => {
+    const provenance = {
+      split: 'development',
+      jobDescription: {
+        kind: 'public_job_posting_derived',
+        publisher: 'Example Employer',
+        sourceUrl: 'https://example.com/jobs/123',
+        sourcePostingId: '123',
+        observedAt: '2026-09-16',
+        sourceUpdatedAt: '2026-09-14T04:21:56-04:00',
+        handling: 'paraphrased_requirements_only',
+      },
+      candidate: {
+        kind: 'synthetic',
+        containsRealPersonalData: false,
+      },
+    }
+
+    expect(EvalCaseSchema.safeParse({ ...validCase, provenance }).success).toBe(
+      true
+    )
+    expect(
+      EvalCaseSchema.safeParse({
+        ...validCase,
+        provenance: {
+          ...provenance,
+          jobDescription: {
+            ...provenance.jobDescription,
+            sourceUrl: 'http://example.com/jobs/123',
+          },
+        },
+      }).success
+    ).toBe(false)
+    expect(
+      EvalCaseSchema.safeParse({
+        ...validCase,
+        provenance: {
+          ...provenance,
+          candidate: {
+            ...provenance.candidate,
+            containsRealPersonalData: true,
+          },
+        },
+      }).success
+    ).toBe(false)
+  })
+
   it.each([
     ['an unsupported version', { ...validCase, version: 2 }],
     ['an unstable id', { ...validCase, id: 'Candidate Name' }],
@@ -186,6 +233,44 @@ describe('EvalExecutionResultSchema', () => {
 })
 
 describe('runEvaluation', () => {
+  it('checks required job keywords without case-sensitive drift', async () => {
+    const keywordCase = EvalCaseSchema.parse({
+      ...validCase,
+      expectations: {
+        requiredJobKeywords: ['Kubernetes', 'Terraform'],
+      },
+    })
+
+    const report = await runEvaluation([keywordCase], async () => ({
+      jobSpec: {
+        targetTitle: 'Platform Engineer',
+        keywords: ['kubernetes', 'Go'],
+      },
+      quality: {
+        requirementCoverage: 1,
+        mustHaveCoverage: 1,
+        warnings: [],
+      },
+    }))
+
+    expect(report.results[0]).toMatchObject({
+      passed: false,
+      assertions: [
+        {
+          code: 'required_job_keyword',
+          subject: 'Kubernetes',
+          passed: true,
+        },
+        {
+          code: 'required_job_keyword',
+          subject: 'Terraform',
+          passed: false,
+        },
+      ],
+      failureCode: 'assertion_failed',
+    })
+  })
+
   it('passes a case when the execution satisfies every expectation', async () => {
     const report = await runEvaluation(
       [fictionalPlatformEngineerCase],

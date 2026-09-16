@@ -136,13 +136,30 @@ private. See the
 | RA-007C | Common document export expansion | Planned | User requirement and RA-007B format matrix | Gap | None | Separate TXT, RTF and ODT Feature Briefs, exporters, fixtures and compatibility tests |
 | RA-008 | HTTP API | Implemented | End-to-end HTTP tests | Partial | None | Authentication, rate limits, request IDs, cancellation |
 | RA-009 | Asynchronous runs, persistence and resume versions | Implemented for development; durable adapter opt-in | In-memory default, SQLite Run/task persistence and explicit restart drain, stage state machine, `POST/GET /v1/runs` and package/API tests | Partial | None | Wire a production worker, cancellation, retention and operational recovery |
-| RA-010 | Agent evaluation and operational observability | Implemented for development | Deterministic EvalCase runner, fictional fixture, safe aggregates and structured-output telemetry | Partial | None | Real-model adapter, authorized anonymized dataset, repeated sampling, cost and human calibration |
+| RA-010 | Agent evaluation and operational observability | Implemented for development | Deterministic runner, public-JD-derived synthetic corpus, required-keyword gold assertions, safe repeated campaign aggregation and structured-output telemetry | Partial | Backfilled | Valid Provider credentials/configuration, authorized anonymized candidate set, token/cost statistics and human calibration |
 | RA-011 | Human-in-the-loop clarification | Implemented for development; durable adapter opt-in | Typed controls, `needs_input`, durable checkpoint/receipt/task transaction, answer endpoint and restart tests | Partial | None | Production worker, authentication, file-answer loop and later-stage interrupts |
 | RA-012 | Structured-output validation and bounded repair | Implemented | Shared module, three-boundary workflow tests, safe API error test | Covered | Backfilled | Operational provider comparison is tracked by RA-010 |
 | RA-015A | Revision-safe RunStore and atomic answer acceptance | Implemented for development | Atomic in-memory create/CAS, deterministic concurrent answer tests, clone and privacy tests; durable realization tracked by RA-015B/C | Covered for one process | Backfilled | Operational multi-instance evidence remains RA-015D |
 | RA-015B | Durable versioned RunStore | Implemented for development; not operational | SQLite schema introduced at v1, disk reopen, SQL CAS across connections, safe failure and privacy tests; current adapter migrated to v2 | Covered for one host | None | Async production driver, encryption and retention |
 | RA-015C | Transactional Run outbox and restart recovery | Implemented for development; explicit drain only | Run + task atomic transactions, v1→v2 migration, lease/ack/release, lost-hint restart and terminal replay tests | Partial | None | No heartbeat, automatic poller, DLQ/backoff, long-task fencing or operational evidence |
 | RA-015D | Multi-worker lease takeover and fault verification | Implemented for development; same-host only | Claim-generation fencing, same-Run serialization, crash takeover, bounded batch/attempts and privacy tests | Partial | Reopened-by-change | No heartbeat, execution fencing, DLQ/redrive, automatic worker or multi-host evidence |
+
+### RA-010C evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | public job source → derived case → Agent execution → repeated safe aggregate |
+| User outcome | Prompt, model and runtime revisions can be compared on the same traceable job-derived development corpus without committing real candidate data |
+| Current state | Three versioned public-JD-derived cases, synthetic candidates, required job-keyword assertions, strict campaign metadata and bounded sequential repetitions are exported from the package |
+| Primary evidence | OpenAI Evaluation best practices; Greenhouse Job Board API and three first-party job-board responses, reviewed 2026-09-16 |
+| Independent evidence | Production Resume Schema, full Agent seam, provenance/corpus/keyword/campaign RED → GREEN tests and two safe Provider execution attempts |
+| Decision | Combine paraphrased public-job requirements with synthetic candidates; add task-specific keyword gold assertions; keep hidden held-out and real-candidate datasets separate |
+| Edge cases | HTTP source URL, invalid/unstable source dates, real-person flag, duplicate case IDs/keywords, case-insensitive matching, secret-bearing config, unbounded repetitions, execution failure |
+| Acceptance | 34 evaluation tests, TypeScript, package build, targeted Biome and safe real-run failure reports |
+| Coverage | Partial: application contracts and public-source development corpus are covered; model quality and representative candidate distribution are not |
+| Historical gap | Backfilled; earlier RA-010 relied on one fictional case and model-self-referential coverage without job-keyword gold assertions |
+| Remaining gap | Default Node fetch needs an experimental env-proxy switch here; current OpenAI credentials return 401 and Gemini-compatible configuration returns 400; no scored repeated baseline, token/cost rollup, authorized anonymized candidate set, held-out set or human rubric |
+| Last reviewed | 2026-09-16; source revisions and exact runtime evidence are in `resume-agent-public-job-evaluation.zh-CN.md` |
 
 ### RA-012 evidence detail
 

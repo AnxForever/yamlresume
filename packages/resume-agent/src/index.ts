@@ -87,6 +87,39 @@ export {
   TailorPreferencesSchema,
   TailorResumeRequestSchema,
 } from './contracts'
+export type {
+  EvalCampaignAggregate,
+  EvalCampaignConfiguration,
+  EvalCampaignConfigurationData,
+  EvalCampaignReport,
+} from './evaluation/campaign'
+export {
+  EvalCampaignConfigurationSchema,
+  runEvaluationCampaign,
+} from './evaluation/campaign'
+export type {
+  EvalAssertionCode,
+  EvalAssertionResult,
+  EvalCase,
+  EvalCaseData,
+  EvalCaseProvenance,
+  EvalCaseResult,
+  EvalDataset,
+  EvalExecute,
+  EvalExecutionResult,
+  EvalExpectations,
+  EvalFailureCode,
+  EvalReport,
+} from './evaluation/contracts'
+export {
+  EvalCaseProvenanceSchema,
+  EvalCaseSchema,
+  EvalDatasetSchema,
+  EvalExecutionResultSchema,
+  EvalExpectationsSchema,
+} from './evaluation/contracts'
+export { publicJobDerivedDevelopmentCases } from './evaluation/fixtures/public-job-derived'
+export { runEvaluation } from './evaluation/runner'
 export {
   ArtifactInputError,
   extractArtifact,

@@ -398,9 +398,11 @@ LLM-as-judge 可以辅助比较，但必须使用具体 rubric，并定期与人
 1. [`resume-agent-product-roadmap.zh-CN.md`](./resume-agent-product-roadmap.zh-CN.md)：理解 Career Agent 产品边界和阶段门禁；
 2. [`resume-agent-backend.md`](./resume-agent-backend.md)：理解当前能力的设计和证据台账；
 3. [`resume-agent-structured-output-reliability.zh-CN.md`](./resume-agent-structured-output-reliability.zh-CN.md)：理解最重要的 LLM 可靠性边界；
-4. [`resume-agent-input-output.zh-CN.md`](./resume-agent-input-output.zh-CN.md)：理解输入、输出和文件能力；
-5. [`resume-agent-implementation-plan.md`](./resume-agent-implementation-plan.md)：理解实现顺序和遗留缺口；
-6. 按本文第 3 节的顺序阅读源代码和相邻测试。
+4. [`resume-agent-evaluation-harness.zh-CN.md`](./resume-agent-evaluation-harness.zh-CN.md)：理解确定性 runner、运行时输出校验和安全报告；
+5. [`resume-agent-public-job-evaluation.zh-CN.md`](./resume-agent-public-job-evaluation.zh-CN.md)：理解真实公开 JD、合成候选人、真实 Provider 调用和模型质量证据为何必须分开；
+6. [`resume-agent-input-output.zh-CN.md`](./resume-agent-input-output.zh-CN.md)：理解输入、输出和文件能力；
+7. [`resume-agent-implementation-plan.md`](./resume-agent-implementation-plan.md)：理解实现顺序和遗留缺口；
+8. 按本文第 3 节的顺序阅读源代码和相邻测试。
 
 ### 10.2 再读外部一手资料
 

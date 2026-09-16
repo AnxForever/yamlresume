@@ -60,7 +60,7 @@ P0 已经具备可运行的后端骨架，但尚未达到“完成”状态。�
 | ID | 用户结果 | 交付状态 | 当前证据 | 证据覆盖 | 下一道门禁 |
 | --- | --- | --- | --- | --- | --- |
 | RP-000 | Career Agent 理解长期目标、规划任务、选择能力并维护可恢复运行 | Planned | 产品边界和目标架构已记录，尚无顶层运行时 | Gap | 独立调研 Agent runtime、能力协议、状态模型、权限和 Eval；不得以简历工作流代替 |
-| RP-001 | 简历能力针对真实 JD 生成可信、可追溯的定制简历 | Implemented，尚未 operational | 后端工作流、同步/内存异步 Run、确定性 Eval、开发级 HITL、现有七格式渲染可靠性与单元/集成测试 | Partial | 完成常见文档格式扩展、durable persistence、匿名真实模型 Eval 和生产安全边界 |
+| RP-001 | 简历能力针对真实 JD 生成可信、可追溯的定制简历 | Implemented，尚未 operational | 后端工作流、durable development RunStore/outbox、确定性 Eval、公开 JD 派生合成 corpus、安全 campaign、开发级 HITL、现有七格式渲染可靠性与单元/集成测试 | Partial | 完成常见文档格式扩展、使用有效 Provider 配置执行重复可评分模型 Eval、授权匿名候选人集和生产安全边界 |
 | RP-002 | Agent 主动提出必要问题，并让用户通过选项或合适的输入控件回答 | Implemented for development，尚不 durable | RA-011 Feature Brief、类型化控件、`needs_input`、回答 API、内存 checkpoint、恢复/幂等/隐私测试 | Partial | 增加事务版本锁、重启/多实例恢复、文件上传闭环、鉴权和前端可访问性验收 |
 | RP-003 | 根据目标岗位差距生成可执行、可动态调整的学习计划 | Idea | 用户需求和本路线图问题定义 | Gap | 调研学习闭环与衡量方法，定义能力矩阵、里程碑和 Eval |
 | RP-004 | 搜集可靠学习资料并辅导练习、项目和复盘 | Idea | 用户需求和来源/新鲜度原则 | Gap | 调研检索、引用、版权、新鲜度、难度匹配和反馈质量 |
