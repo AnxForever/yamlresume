@@ -28,6 +28,7 @@ import type {
   DraftResponse,
   JobSpec,
   LlmClient,
+  ResumeTailoringCheckpoint,
   StructuredOutputTelemetry,
   TailorResumeRequest,
   TailorResumeResult,
@@ -37,7 +38,11 @@ import { extractArtifacts } from '@/input/artifacts'
 import { artifactEvidence, normalizeCandidateInput } from '@/input/candidate'
 import { completeStructuredOutput } from '@/llm/structured-output'
 import { buildMatchReport } from '@/matching/match'
-import { buildDraftPrompt, buildJobAnalysisPrompt } from '@/prompts'
+import {
+  buildDraftPrompt,
+  buildJobAnalysisPrompt,
+  INTERACTION_CONTROL_EXPECTED_SHAPE,
+} from '@/prompts'
 import { renderResumeVariant } from '@/rendering/artifacts'
 import { applyStylePreset, resolveStyleIDs } from '@/rendering/styles'
 import { buildResumeDiff } from '@/transparency/diff'
@@ -70,7 +75,8 @@ const DRAFT_RESPONSE_EXPECTED_SHAPE = `{
     "field": string,
     "question": string,
     "reason": string,
-    "severity": "blocking" | "important" | "optional"
+    "severity": "blocking" | "important" | "optional",
+    "control"?: ${INTERACTION_CONTROL_EXPECTED_SHAPE}
   }],
   "notes": string[]
 }`
@@ -113,7 +119,7 @@ function structuredOutputMetadata(
 
 type ActiveAgentRunStatus = Exclude<
   AgentRunStatus,
-  'queued' | 'completed' | 'failed'
+  'queued' | 'needs_input' | 'completed' | 'failed'
 >
 
 export interface ResumeTailoringRunOptions {
@@ -228,6 +234,14 @@ export class ResumeTailoringAgent {
     request: TailorResumeRequest,
     options: ResumeTailoringRunOptions = {}
   ): Promise<TailorResumeResult> {
+    const checkpoint = await this.prepare(request, options)
+    return this.complete(checkpoint, options)
+  }
+
+  async prepare(
+    request: TailorResumeRequest,
+    options: ResumeTailoringRunOptions = {}
+  ): Promise<ResumeTailoringCheckpoint> {
     const trace: AgentTraceEvent[] = []
     const preferences = request.preferences ?? {}
     const candidateFiles = request.candidate.files ?? []
@@ -267,10 +281,6 @@ export class ResumeTailoringAgent {
       candidateArtifacts
     )
     const candidate = normalizedCandidate.resume
-    const evidence = buildEvidenceIndex(
-      candidate,
-      artifactEvidence(candidateArtifacts)
-    )
     addTrace(trace, 'normalize_candidate', 'completed', {
       questions: normalizedCandidate.questions.length,
       warnings: normalizedCandidate.warnings.length,
@@ -278,6 +288,36 @@ export class ResumeTailoringAgent {
         ? structuredOutputMetadata(normalizedCandidate.telemetry)
         : {}),
     })
+
+    return {
+      version: 1,
+      jobText,
+      jobArtifacts,
+      candidateArtifacts,
+      candidate,
+      preferences,
+      questions: normalizedCandidate.questions,
+      warnings: normalizedCandidate.warnings,
+      trace,
+    }
+  }
+
+  async complete(
+    checkpoint: ResumeTailoringCheckpoint,
+    options: ResumeTailoringRunOptions = {}
+  ): Promise<TailorResumeResult> {
+    const {
+      candidate,
+      candidateArtifacts,
+      jobArtifacts,
+      jobText,
+      preferences,
+    } = checkpoint
+    const trace = structuredClone(checkpoint.trace)
+    const evidence = buildEvidenceIndex(
+      candidate,
+      artifactEvidence(candidateArtifacts)
+    )
 
     await reportStatus(options, 'analyzing_jd')
     addTrace(trace, 'analyze_job', 'started')
@@ -440,9 +480,9 @@ export class ResumeTailoringAgent {
       resume: primaryResume,
       rendered,
       variants: renderedVariants,
-      questions: [...normalizedCandidate.questions, ...draftResponse.questions],
+      questions: [...checkpoint.questions, ...draftResponse.questions],
       warnings: [
-        ...normalizedCandidate.warnings,
+        ...checkpoint.warnings,
         ...draftResponse.notes,
         ...renderedVariants.flatMap((variant) =>
           variant.failures.map((failure) => failure.message)

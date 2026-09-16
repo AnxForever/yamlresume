@@ -33,10 +33,12 @@ import {
   CandidateValidationError,
   createOpenAICompatibleClientFromEnv,
   DraftValidationError,
+  InteractionAnswerSchema,
   LlmConfigurationError,
   LlmRequestError,
   ResumeAgentRunService,
   ResumeTailoringAgent,
+  RunAnswerError,
   STYLE_PRESETS,
   StructuredOutputValidationError,
   TailorResumeRequestSchema,
@@ -54,6 +56,7 @@ export const API_ROUTES = [
   { method: 'post', path: '/v1/tailor-resume' },
   { method: 'post', path: '/v1/runs' },
   { method: 'get', path: '/v1/runs/{id}' },
+  { method: 'post', path: '/v1/runs/{id}/answers' },
 ] as const
 
 interface ApiMeta {
@@ -210,6 +213,7 @@ function capabilities() {
       tailorResume: 'POST /v1/tailor-resume',
       createRun: 'POST /v1/runs',
       getRun: 'GET /v1/runs/:id',
+      answerRun: 'POST /v1/runs/:id/answers',
     },
     input: {
       requestContentTypes: ['application/json', 'multipart/form-data'],
@@ -275,6 +279,64 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
 
     if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
       success(response, 200, capabilities(), requestId)
+      return
+    }
+
+    const answerMatch = url.pathname.match(/^\/v1\/runs\/([^/]+)\/answers$/)
+    if (request.method === 'POST' && answerMatch) {
+      let answerPayload: unknown
+      try {
+        answerPayload = await readPayload(request)
+      } catch (requestError) {
+        error(
+          response,
+          400,
+          'invalid_answer',
+          getErrorMessage(requestError),
+          requestId
+        )
+        return
+      }
+      const parsedAnswer = InteractionAnswerSchema.safeParse(answerPayload)
+      if (!parsedAnswer.success) {
+        error(
+          response,
+          400,
+          'invalid_answer',
+          'Invalid interaction answer',
+          requestId,
+          validationDetails(parsedAnswer.error.issues)
+        )
+        return
+      }
+      try {
+        const run = await runService.answer(answerMatch[1], parsedAnswer.data)
+        success(response, 202, run, requestId)
+      } catch (answerError) {
+        if (answerError instanceof RunAnswerError) {
+          const status =
+            answerError.code === 'run_not_found'
+              ? 404
+              : answerError.code === 'invalid_answer'
+                ? 400
+                : 409
+          error(
+            response,
+            status,
+            answerError.code,
+            answerError.message,
+            requestId
+          )
+          return
+        }
+        error(
+          response,
+          500,
+          'answer_failed',
+          'The interaction answer could not be processed.',
+          requestId
+        )
+      }
       return
     }
 

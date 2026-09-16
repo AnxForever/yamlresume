@@ -320,6 +320,8 @@ describe('ResumeTailoringAgent', () => {
     expect(result.status).toBe('completed')
     expect(requests).toHaveLength(3)
     expect(requests[2]?.user).toContain('resume')
+    expect(requests[2]?.user).toContain('"type": "single_choice"')
+    expect(requests[2]?.user).toContain('"type": "file"')
     expect(
       result.trace.find(
         (event) => event.name === 'draft_resume' && event.status === 'completed'
@@ -389,6 +391,8 @@ describe('ResumeTailoringAgent', () => {
     expect(result.status).toBe('completed')
     expect(requests).toHaveLength(4)
     expect(requests[1]?.user).toContain('resume')
+    expect(requests[1]?.user).toContain('"type": "single_choice"')
+    expect(requests[1]?.user).toContain('"type": "date_range"')
     expect(
       result.trace.find(
         (event) =>

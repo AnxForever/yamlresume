@@ -37,6 +37,19 @@ If a fact is missing or ambiguous, leave it out and add a follow-up question ins
 Return JSON only. Do not wrap JSON in Markdown fences.
 `
 
+export const INTERACTION_CONTROL_EXPECTED_SHAPE = `one of:
+{ "type": "text", "minLength"?: integer, "maxLength"?: integer }
+{ "type": "textarea", "minLength"?: integer, "maxLength"?: integer }
+{ "type": "single_choice", "options": ChoiceOption[2..5], "allowCustom"?: boolean }
+{ "type": "multi_choice", "options": ChoiceOption[2..5], "allowCustom"?: boolean, "minSelections"?: integer 0..5, "maxSelections"?: integer 1..5 }
+{ "type": "number", "min"?: finite number, "max"?: finite number, "integer"?: boolean }
+{ "type": "date", "min"?: "YYYY-MM-DD", "max"?: "YYYY-MM-DD" }
+{ "type": "date_range", "min"?: "YYYY-MM-DD", "max"?: "YYYY-MM-DD", "allowOpenEnd"?: boolean }
+{ "type": "url", "maxLength"?: integer }
+{ "type": "file", "acceptedMediaTypes": string[], "maxFiles"?: integer }
+{ "type": "confirm", "confirmLabel"?: string, "cancelLabel"?: string }
+where ChoiceOption = { "value": string, "label": string, "description"?: string, "recommended"?: boolean }`
+
 export function buildJobAnalysisPrompt(
   jobDescription: string,
   artifacts: ExtractedArtifact[] = []

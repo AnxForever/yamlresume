@@ -26,9 +26,10 @@ personal data in a production database.
 
 Candidate files can currently be normalized from text, structured documents,
 digital PDF, DOCX, HTML, Markdown, and supported image formats. The result is
-marked for review and can contain follow-up questions, but a resumable
-confirmation workflow is still planned; normalization must not be presented as
-user-confirmed truth.
+marked for review. Asynchronous Runs can now pause after normalization for
+important structured questions, accept validated answers, and resume from JD
+analysis. This development loop is in-memory, so it must not be presented as
+durable user confirmation across process restarts.
 
 ## User outputs
 
@@ -41,7 +42,8 @@ user-confirmed truth.
 - follow-up questions and warnings.
 - trace events for every workflow stage.
 - trace metadata for synchronous runs and stage-driven status for in-memory
-  asynchronous runs; durable status and checkpoint recovery remain planned.
+  asynchronous runs, including `needs_input`; durable status and restart
+  recovery remain planned.
 
 ## Execution plan
 
@@ -200,30 +202,53 @@ Verified tests:
 Known limits:
 
 - in-memory runs do not survive restarts and are not shared across instances;
-- there is no cancellation, durable queue, retention policy, or checkpoint yet;
+- in-memory checkpoints now support Unit 7B, but there is no durable queue,
+  cancellation, retention policy, or restart recovery;
 - these limits must be addressed before calling the protocol operational.
 
 ### Unit 7B — Structured human-in-the-loop interaction
 
-**Status:** planned.
+**Status:** implemented for development with an in-memory checkpoint; not
+durable or operational.
 
-Deliverables:
+Delivered:
 
 - typed interaction requests for choices, custom input, field-specific inputs,
   files, and confirmations;
-- a persisted `needs_input` state linked to a run and workflow checkpoint;
+- a stored `needs_input` state linked to a Run and in-memory workflow
+  checkpoint;
 - an answer endpoint with idempotency and validation;
 - resume from the necessary stage without repeating unrelated model calls;
 - audit-safe question and answer metadata without logging private source text.
 
-Tests:
+Verified tests:
 
 - missing required fact pauses with one focused question;
 - suggested choices still allow custom input;
 - field requests select the correct control and validation rules;
-- conflicting files require confirmation;
+- confirmation, file-reference, choice, text, number, day-precision date, URL,
+  and range values are validated by control type;
 - repeated or stale answers are handled deterministically;
-- resumed runs preserve prior artifacts and do not duplicate completed stages.
+- invalid required answers leave the Run paused;
+- priority ordering preserves stable interaction IDs and removes every answered
+  question;
+- resumed runs preserve prior artifacts and do not duplicate completed stages;
+- HTTP answers return `202`, while invalid, unknown, stale and wrong-state
+  requests use stable `400` / `404` / `409` errors.
+
+Known limits:
+
+- answer receipt updates are not transactionally safe under concurrent
+  requests; a durable adapter needs version or compare-and-set semantics;
+- `date` and `date_range` intentionally accept only day-precision
+  `YYYY-MM-DD`; year/month-aware controls remain to be designed;
+- `file` validates references only; binary upload and re-normalization are not
+  connected to the answer endpoint;
+- deterministic conflict detection between uploaded files is not implemented;
+  the protocol can carry a model-proposed confirmation, but that scenario is
+  not yet an independently proven capability;
+- only post-normalization interruption is implemented; later-stage approvals
+  require their own Feature Brief and Eval.
 
 ### Unit 8 — Backend documentation and completion audit
 
@@ -254,7 +279,9 @@ pnpm check:ci
 - authentication and multi-user tenancy;
 - production database and encrypted object storage;
 - production-grade OCR for image-only PDFs;
-- resumable human-in-the-loop answers;
+- durable/restart-resumable Human-in-the-loop storage and transactional answer
+  coordination;
+- binary file answers and candidate re-normalization after upload;
 - automated web browsing or job application;
 - PDF compilation sandbox and page-count optimization;
 - real-model quality benchmarks requiring credentials.

@@ -53,3 +53,20 @@ queued run snapshot. Use this endpoint for long-running clients.
 Returns the latest workflow stage and, after termination, either the completed
 result or a data-safe failure. The default store is in-memory: runs do not
 survive process restarts and are not shared across server instances.
+
+### `POST /v1/runs/{id}/answers`
+
+Accepts the active interaction ID, a client-generated idempotency key, and the
+control-specific value. A valid answer returns `202` with either the next
+focused interaction or a run that is resuming at JD analysis. Invalid values
+return `400`; unknown runs return `404`; stale interactions, wrong run states,
+and idempotency conflicts return `409`.
+
+This Human-in-the-loop loop is development-only. Checkpoints and answer
+receipts live in memory, so restart recovery, multi-instance coordination,
+transactional version locking, cancellation, and retention are still absent.
+Completed public snapshots intentionally include the generated resume and
+rendered artifacts for retrieval, but never include the source request,
+checkpoint, raw answer values, or raw model output. File controls currently
+accept references to previously uploaded files only; the binary upload and
+re-normalization loop is deferred.

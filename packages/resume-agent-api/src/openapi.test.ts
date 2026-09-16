@@ -55,6 +55,8 @@ describe('OpenAPI contract', () => {
     expect(schemas.RenderedVariant).toBeDefined()
     expect(schemas.TailorResumeMultipartRequest).toBeDefined()
     expect(schemas.ResumeAgentRun).toBeDefined()
+    expect(schemas.InteractionRequest).toBeDefined()
+    expect(schemas.InteractionAnswer).toBeDefined()
   })
 
   it('documents structured-output validation failures', async () => {
@@ -77,5 +79,41 @@ describe('OpenAPI contract', () => {
       document.components?.schemas?.ErrorEnvelope?.properties?.error?.properties
         ?.code?.enum
     ).toContain('structured_output_validation_failed')
+  })
+
+  it('documents focused interactions and bounded choice controls', async () => {
+    const path = join(process.cwd(), '../../docs/api/resume-agent.openapi.yaml')
+    const document = parse(await readFile(path, 'utf8')) as {
+      components?: {
+        schemas?: {
+          AgentRunStatus?: { enum?: string[] }
+          ResumeAgentRun?: {
+            properties?: { interactions?: { maxItems?: number } }
+          }
+          InteractionControl?: {
+            oneOf?: Array<{
+              properties?: {
+                type?: { const?: string }
+                options?: { maxItems?: number }
+                maxSelections?: { maximum?: number }
+              }
+            }>
+          }
+        }
+      }
+    }
+    const schemas = document.components?.schemas
+    const multiChoice = schemas?.InteractionControl?.oneOf?.find(
+      (control) => control.properties?.type?.const === 'multi_choice'
+    )
+    const singleChoice = schemas?.InteractionControl?.oneOf?.find(
+      (control) => control.properties?.type?.const === 'single_choice'
+    )
+
+    expect(schemas?.AgentRunStatus?.enum).toContain('needs_input')
+    expect(schemas?.ResumeAgentRun?.properties?.interactions?.maxItems).toBe(1)
+    expect(singleChoice?.properties?.options?.maxItems).toBe(5)
+    expect(multiChoice?.properties?.options?.maxItems).toBe(5)
+    expect(multiChoice?.properties?.maxSelections?.maximum).toBe(5)
   })
 })

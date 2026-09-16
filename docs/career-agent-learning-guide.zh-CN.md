@@ -106,18 +106,24 @@ JD 结构化分析 ───────── LLM + Schema
 
 ### 3.2 已有接口不等于完整能力
 
-当前代码中的 `FollowUpQuestion` 只有字段、问题、原因和严重程度；工作流会把问题放进最终结果，但不会真正暂停。异步 Run API 和内存 `RunStore` 已能报告阶段与终态，但 `AgentRunStatus` 还没有 `needs_input`，也没有持久化 checkpoint、进程重启恢复和回答命令。
+当前代码已经把 `FollowUpQuestion` 扩展为可选的判别联合控件，并在异步 Run
+中实现 `needs_input → answer → resume` 的开发级闭环：服务端一次公开一个重点
+问题，验证回答，写回候选人 checkpoint，再从 JD 分析继续。内部可信 record 与
+公开 Run 快照已经分离，幂等记录只保存回答指纹。
 
-因此目前不能宣称已经实现类似 Codex 或 Claude Code 的主动交互。完整能力至少还需要：
+这证明了主动交互的最小机制，但还不能宣称达到 Codex 或 Claude Code 的生产
+可靠性。当前已经有结构化控件、状态转换和回答命令，完整能力仍至少需要：
 
 - `single_choice`、`multi_choice`、`text`、`textarea`、`number`、`date`、`file` 和 `confirm` 等结构化控件；
 - 选项、推荐理由、自定义输入、校验规则、隐私提示和稳定字段 ID；
-- `Run / Session / Checkpoint` 持久化模型；
-- `needs_input → answer → resume` 的状态转换和幂等性；
-- 过期问题、重复回答、冲突回答、取消和恢复测试；
+- durable `Run / Session / Checkpoint` 持久化模型和版本迁移；
+- 并发回答的 compare-and-set / version lock；
+- 进程重启、多实例、取消、过期和恢复测试；
 - 前端根据同一协议渲染输入框或选择器，而不是解析自然语言。
 
-这些都已列入产品路线图，但状态仍是 `Planned / Gap`。
+已实现部分是 `Implemented for development / Partial`；durable recovery 与生产
+安全仍是明确缺口。`date` 控件当前只接受 `YYYY-MM-DD`，`file` 控件只验证
+既有文件引用，这两个限制也适合用来学习“协议存在”和“完整能力可用”的区别。
 
 ## 4. 与本项目一致的学习路线
 

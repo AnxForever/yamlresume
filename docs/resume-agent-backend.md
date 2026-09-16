@@ -21,6 +21,12 @@ POST /v1/tailor-resume or POST /v1/runs → GET /v1/runs/{id}
                               ▼
  Request, file extraction, candidate normalization
           │
+          ├── important fact missing → needs_input
+          │                              │
+          │               POST /v1/runs/{id}/answers
+          │                              │
+          ◀──────── validated checkpoint ┘
+          │
           ▼
  Candidate evidence index ─────────────┐
           │                            │
@@ -90,6 +96,23 @@ The workflow depends on `LlmClient`, not on one SDK. The included adapter uses
 an OpenAI-compatible chat-completions endpoint. Provider-specific retries,
 structured-output modes, and token accounting can evolve inside adapters.
 
+### Structured Human-in-the-loop
+
+Candidate normalization can emit typed questions. Important or blocking
+questions pause an asynchronous Run at `needs_input`; the public snapshot
+exposes one focused `InteractionRequest`, while a trusted store record retains
+the checkpoint and remaining interactions. A validated answer is applied only
+to an existing `content.*` path, the resulting candidate is revalidated by
+`ResumeSchema`, and execution resumes at JD analysis without repeating input
+extraction or normalization.
+
+This is a development proof, not durable orchestration. The default adapter is
+in-memory and has no transactional compare-and-set, restart recovery,
+multi-instance coordination, authentication, retention, or binary file-answer
+loop. Completed public snapshots intentionally contain the generated resume
+and artifacts for the user; source requests, checkpoints, raw answers, and raw
+model completions remain private.
+
 ## Feature evidence ledger
 
 | ID | Capability | Delivery | Evidence | Coverage | Historical gap | Next acceptance evidence |
@@ -103,8 +126,8 @@ structured-output modes, and token accounting can evolve inside adapters.
 | RA-007 | YAML/HTML/LaTeX rendering | Implemented | Uses `@yamlresume/core`; package tests | Partial | None | Add PDF compilation and page-count checks |
 | RA-008 | HTTP API | Implemented | End-to-end HTTP tests | Partial | None | Authentication, rate limits, request IDs, cancellation |
 | RA-009 | Asynchronous runs, persistence and resume versions | Implemented for development; not durable | In-memory `RunStore`, stage state machine, `POST/GET /v1/runs` and package/API tests | Partial | None | Add durable checkpoint storage, cancellation, retention and restart recovery |
-| RA-010 | Agent evaluation and operational observability | Planned | Safe per-run structured-output telemetry now exists | Partial | None | Dataset, aggregated metrics and cost telemetry |
-| RA-011 | Human-in-the-loop clarification | Planned | Questions exist in output only | Gap | None | Resume a run after answers without redoing unrelated stages |
+| RA-010 | Agent evaluation and operational observability | Implemented for development | Deterministic EvalCase runner, fictional fixture, safe aggregates and structured-output telemetry | Partial | None | Real-model adapter, authorized anonymized dataset, repeated sampling, cost and human calibration |
+| RA-011 | Human-in-the-loop clarification | Implemented for development; not durable | Typed controls, `needs_input`, checkpoint, answer endpoint, validation/idempotency and resume tests | Partial | None | Durable transactional store, restart recovery, authentication, file-answer loop and later-stage interrupts |
 | RA-012 | Structured-output validation and bounded repair | Implemented | Shared module, three-boundary workflow tests, safe API error test | Covered | Backfilled | Operational provider comparison is tracked by RA-010 |
 
 ### RA-012 evidence detail
@@ -138,10 +161,13 @@ model-provider abstraction.
 
 ### Milestone 2: Human-in-the-loop runs
 
-- Give every run an ID and persisted state.
-- Stop at `needs_input` when important candidate facts are missing.
-- Accept answers and resume from the draft stage.
-- Show a source-to-draft diff and evidence links.
+- Development slice delivered: stable Run IDs, `needs_input`, typed controls,
+  safe answer application, idempotency receipts, and resume from JD analysis.
+- Next, replace the in-memory adapter with durable, versioned checkpoint
+  storage and prove restart and concurrent-answer recovery.
+- Extend interrupts only when a separately researched later-stage use case
+  requires them.
+- Keep showing source-to-draft diff and evidence links in completed results.
 
 This milestone demonstrates state machines, resumable workflows, idempotency,
 and approval boundaries.

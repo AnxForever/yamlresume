@@ -36,6 +36,21 @@ export type {
   FollowUpQuestion,
   InputBundle,
   InputFile,
+  InteractionAnswer,
+  InteractionChoiceOption,
+  InteractionConfirmControl,
+  InteractionControl,
+  InteractionDateControl,
+  InteractionDateRangeControl,
+  InteractionFileControl,
+  InteractionFileReference,
+  InteractionMultiChoiceControl,
+  InteractionNumberControl,
+  InteractionRequest,
+  InteractionSingleChoiceControl,
+  InteractionTextareaControl,
+  InteractionTextControl,
+  InteractionUrlControl,
   JobRequirement,
   JobSpec,
   JsonCompletionRequest,
@@ -51,6 +66,7 @@ export type {
   ResumeChange,
   ResumeChangeType,
   ResumeDiff,
+  ResumeTailoringCheckpoint,
   StructuredOutputTelemetry,
   TailorPreferences,
   TailorResumeRequest,
@@ -62,6 +78,10 @@ export {
   CandidateNormalizationResponseSchema,
   DraftResponseSchema,
   FollowUpQuestionSchema,
+  InteractionAnswerSchema,
+  InteractionChoiceOptionSchema,
+  InteractionControlSchema,
+  InteractionRequestSchema,
   JobRequirementSchema,
   JobSpecSchema,
   TailorPreferencesSchema,
@@ -112,8 +132,20 @@ export {
 } from './validation/resume'
 export type { ResumeTailoringRunOptions } from './workflow/agent'
 export { ResumeTailoringAgent } from './workflow/agent'
+export {
+  applyInteractionAnswer,
+  createInteractionRequests,
+  InteractionValidationError,
+  validateInteractionAnswer,
+} from './workflow/interaction'
 export type {
   ResumeAgentRunServiceOptions,
+  RunAnswerErrorCode,
   RunStore,
+  StoredResumeAgentRun,
 } from './workflow/run'
-export { InMemoryRunStore, ResumeAgentRunService } from './workflow/run'
+export {
+  InMemoryRunStore,
+  ResumeAgentRunService,
+  RunAnswerError,
+} from './workflow/run'

@@ -168,6 +168,60 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/runs/{id}/answers:
+    post:
+      tags: [Resume Agent]
+      operationId: answerResumeRunInteraction
+      summary: Answer the currently active structured interaction
+      description: |
+        Validates the answer, applies it to the stored checkpoint, and either
+        exposes the next focused interaction or resumes from the next required
+        workflow stage. Idempotency keys are scoped to the run.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InteractionAnswer'
+      responses:
+        '202':
+          description: Answer accepted; the run is paused again or resuming
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ResumeAgentRun'
+        '400':
+          description: Answer body or control-specific value is invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: No run exists for this ID in the current store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Run state, interaction ID, or idempotency key conflicts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   parameters:
     RequestId:
@@ -252,8 +306,14 @@ components:
               type: string
               enum:
                 - invalid_request
+                - invalid_answer
                 - not_found
                 - run_not_found
+                - run_not_waiting_for_input
+                - stale_interaction
+                - idempotency_conflict
+                - run_checkpoint_missing
+                - answer_failed
                 - agent_validation_failed
                 - llm_not_configured
                 - llm_request_failed
@@ -528,6 +588,125 @@ components:
         severity:
           type: string
           enum: [blocking, important, optional]
+        control:
+          $ref: '#/components/schemas/InteractionControl'
+    InteractionChoiceOption:
+      type: object
+      required: [value, label]
+      properties:
+        value: { type: string, maxLength: 500 }
+        label: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 500 }
+        recommended: { type: boolean }
+    InteractionControl:
+      oneOf:
+        - type: object
+          required: [type, minLength, maxLength]
+          properties:
+            type: { type: string, const: text }
+            minLength: { type: integer, minimum: 0, maximum: 500 }
+            maxLength: { type: integer, minimum: 1, maximum: 10000 }
+        - type: object
+          required: [type, minLength, maxLength]
+          properties:
+            type: { type: string, const: textarea }
+            minLength: { type: integer, minimum: 0, maximum: 5000 }
+            maxLength: { type: integer, minimum: 1, maximum: 50000 }
+        - type: object
+          required: [type, options, allowCustom]
+          properties:
+            type: { type: string, const: single_choice }
+            options:
+              type: array
+              minItems: 2
+              maxItems: 5
+              items:
+                $ref: '#/components/schemas/InteractionChoiceOption'
+            allowCustom: { type: boolean }
+        - type: object
+          required: [type, options, allowCustom, minSelections, maxSelections]
+          properties:
+            type: { type: string, const: multi_choice }
+            options:
+              type: array
+              minItems: 2
+              maxItems: 5
+              items:
+                $ref: '#/components/schemas/InteractionChoiceOption'
+            allowCustom: { type: boolean }
+            minSelections: { type: integer, minimum: 0, maximum: 5 }
+            maxSelections: { type: integer, minimum: 1, maximum: 5 }
+        - type: object
+          required: [type]
+          properties:
+            type: { type: string, const: number }
+            min: { type: number }
+            max: { type: number }
+            integer: { type: boolean }
+        - type: object
+          description: Day-precision ISO date only; year/month precision is deferred.
+          required: [type]
+          properties:
+            type: { type: string, const: date }
+            min: { type: string, format: date }
+            max: { type: string, format: date }
+        - type: object
+          description: Day-precision ISO date range; the end may be omitted when allowed.
+          required: [type, allowOpenEnd]
+          properties:
+            type: { type: string, const: date_range }
+            min: { type: string, format: date }
+            max: { type: string, format: date }
+            allowOpenEnd: { type: boolean }
+        - type: object
+          required: [type, maxLength]
+          properties:
+            type: { type: string, const: url }
+            maxLength: { type: integer, minimum: 1, maximum: 5000 }
+        - type: object
+          description: References files already uploaded by an external file service; this endpoint does not upload binary content.
+          required: [type, acceptedMediaTypes, maxFiles]
+          properties:
+            type: { type: string, const: file }
+            acceptedMediaTypes:
+              type: array
+              minItems: 1
+              maxItems: 12
+              items: { type: string }
+            maxFiles: { type: integer, minimum: 1, maximum: 12 }
+        - type: object
+          required: [type]
+          properties:
+            type: { type: string, const: confirm }
+            confirmLabel: { type: string, maxLength: 100 }
+            cancelLabel: { type: string, maxLength: 100 }
+      discriminator:
+        propertyName: type
+    InteractionRequest:
+      type: object
+      required: [id, field, prompt, reason, required, severity, privacy, control]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 200 }
+        field: { type: string, minLength: 1, maxLength: 500 }
+        prompt: { type: string, minLength: 1, maxLength: 2000 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        required: { type: boolean }
+        severity:
+          type: string
+          enum: [blocking, important, optional]
+        privacy:
+          type: string
+          enum: [standard, personal, sensitive]
+        control:
+          $ref: '#/components/schemas/InteractionControl'
+    InteractionAnswer:
+      type: object
+      required: [interactionId, idempotencyKey, value]
+      properties:
+        interactionId: { type: string, minLength: 1, maxLength: 200 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        value:
+          description: Value validated against the active interaction control
     AgentTraceEvent:
       type: object
       required: [name, status, at]
@@ -649,6 +828,7 @@ components:
         - queued
         - ingesting_inputs
         - normalizing_candidate
+        - needs_input
         - analyzing_jd
         - matching_evidence
         - drafting
@@ -679,7 +859,13 @@ components:
         updatedAt:
           type: string
           format: date-time
+        interactions:
+          type: array
+          maxItems: 1
+          items:
+            $ref: '#/components/schemas/InteractionRequest'
         result:
+          description: Completed user artifact, including the tailored resume and rendered output; absent before completion.
           $ref: '#/components/schemas/TailorResumeResult'
         error:
           $ref: '#/components/schemas/AgentRunFailure'

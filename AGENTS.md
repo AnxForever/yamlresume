@@ -81,6 +81,39 @@ Use `pnpm` for all operations.
 - Aim for 100% coverage for all packages.
 - Use descriptive `describe` and `it`/`test` blocks.
 
+## 📚 Agent Development Learning Record
+
+This repository is also a learning project for understanding how production
+agents are researched, designed, implemented, evaluated, and improved. Treat
+the learning record as part of each material Agent feature, not as optional
+cleanup after the code is finished.
+
+- Follow the sequence: research -> feature brief -> contracts and state
+  transitions -> one-behavior-at-a-time TDD -> full verification -> status
+  update.
+- Before implementation, add or update the feature's evidence-ledger entry and
+  record the user outcome, current evidence, important edge cases, acceptance
+  evidence, and remaining gaps.
+- Record durable design knowledge: why the chosen approach fits, alternatives
+  considered, tradeoffs, framework-independent concepts, security/privacy
+  boundaries, failure and recovery behavior, and what evidence could reverse
+  the decision.
+- Record the implementation journey at a useful teaching level: the public
+  interface and state model, each meaningful RED -> GREEN behavior, important
+  defects and root causes, refactors that changed the design, and the exact
+  commands and results used for verification.
+- Keep documentation honest and synchronized with the code. Clearly distinguish
+  `Idea`, `Planned`, `Implemented`, `Enabled`, and `Operational`; never describe
+  an in-memory prototype or fake-model test as production-ready.
+- Prefer focused feature documents under `docs/` and link them from the relevant
+  roadmap, architecture, or learning guide. Update existing documents instead
+  of creating duplicate narratives.
+- Write for a future learner who should be able to reconstruct the development
+  process and repeat the experiment without relying on chat history.
+- Do not store hidden chain-of-thought, credentials, personal resume data, raw
+  model completions, or transient debug dumps. Preserve concise decisions,
+  observable evidence, sanitized examples, and reproducible results instead.
+
 ## 🚀 Deployment
 
 - Do not commit to `main` directly without testing.

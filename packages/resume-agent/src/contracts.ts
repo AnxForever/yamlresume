@@ -145,12 +145,271 @@ export const TailorResumeRequestSchema = z
     }
   })
 
-export const FollowUpQuestionSchema = z.object({
-  field: z.string().min(1),
-  question: z.string().min(1),
-  reason: z.string().min(1),
-  severity: z.enum(['blocking', 'important', 'optional']).default('important'),
+export const InteractionChoiceOptionSchema = z.object({
+  value: z.string().min(1).max(500),
+  label: z.string().min(1).max(200),
+  description: z.string().min(1).max(500).optional(),
+  recommended: z.boolean().optional(),
 })
+
+const ISO_DATE_SCHEMA = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const date = new Date(`${value}T00:00:00.000Z`)
+    return (
+      !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+    )
+  }, 'Date must be a real calendar date')
+
+export const InteractionControlSchema = z
+  .discriminatedUnion('type', [
+    z.object({
+      type: z.literal('text'),
+      minLength: z.number().int().min(0).max(500).default(1),
+      maxLength: z.number().int().min(1).max(10_000).default(500),
+    }),
+    z.object({
+      type: z.literal('textarea'),
+      minLength: z.number().int().min(0).max(5_000).default(1),
+      maxLength: z.number().int().min(1).max(50_000).default(5_000),
+    }),
+    z.object({
+      type: z.literal('single_choice'),
+      options: z.array(InteractionChoiceOptionSchema).min(2).max(5),
+      allowCustom: z.boolean().default(true),
+    }),
+    z.object({
+      type: z.literal('multi_choice'),
+      options: z.array(InteractionChoiceOptionSchema).min(2).max(5),
+      allowCustom: z.boolean().default(true),
+      minSelections: z.number().int().min(0).max(5).default(1),
+      maxSelections: z.number().int().min(1).max(5).default(5),
+    }),
+    z.object({
+      type: z.literal('number'),
+      min: z.number().finite().optional(),
+      max: z.number().finite().optional(),
+      integer: z.boolean().optional(),
+    }),
+    z.object({
+      type: z.literal('date'),
+      min: ISO_DATE_SCHEMA.optional(),
+      max: ISO_DATE_SCHEMA.optional(),
+    }),
+    z.object({
+      type: z.literal('date_range'),
+      min: ISO_DATE_SCHEMA.optional(),
+      max: ISO_DATE_SCHEMA.optional(),
+      allowOpenEnd: z.boolean().default(true),
+    }),
+    z.object({
+      type: z.literal('url'),
+      maxLength: z.number().int().min(1).max(5_000).default(500),
+    }),
+    z.object({
+      type: z.literal('file'),
+      acceptedMediaTypes: z.array(z.string().min(1).max(128)).min(1).max(12),
+      maxFiles: z.number().int().min(1).max(12).default(1),
+    }),
+    z.object({
+      type: z.literal('confirm'),
+      confirmLabel: z.string().min(1).max(100).optional(),
+      cancelLabel: z.string().min(1).max(100).optional(),
+    }),
+  ])
+  .superRefine((control, context) => {
+    if (
+      (control.type === 'text' || control.type === 'textarea') &&
+      control.minLength > control.maxLength
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['minLength'],
+        message: 'minLength must not exceed maxLength',
+      })
+    }
+    if (control.type === 'single_choice' || control.type === 'multi_choice') {
+      const values = control.options.map((option) => option.value)
+      if (new Set(values).size !== values.length) {
+        context.addIssue({
+          code: 'custom',
+          path: ['options'],
+          message: 'Choice option values must be unique',
+        })
+      }
+    }
+    if (
+      control.type === 'multi_choice' &&
+      control.minSelections > control.maxSelections
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['maxSelections'],
+        message: 'minSelections must not exceed maxSelections',
+      })
+    }
+    if (
+      control.type === 'multi_choice' &&
+      !control.allowCustom &&
+      control.minSelections > control.options.length
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['minSelections'],
+        message: 'Required selections exceed the available options',
+      })
+    }
+    if (
+      control.type === 'number' &&
+      control.min !== undefined &&
+      control.max !== undefined &&
+      control.min > control.max
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['min'],
+        message: 'min must not exceed max',
+      })
+    }
+    if (
+      (control.type === 'date' || control.type === 'date_range') &&
+      control.min !== undefined &&
+      control.max !== undefined &&
+      control.min > control.max
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['min'],
+        message: 'min date must not exceed max date',
+      })
+    }
+  })
+
+export const FollowUpQuestionSchema = z.object({
+  field: z.string().min(1).max(500),
+  question: z.string().min(1).max(2_000),
+  reason: z.string().min(1).max(2_000),
+  severity: z.enum(['blocking', 'important', 'optional']).default('important'),
+  control: InteractionControlSchema.optional(),
+})
+
+export interface InteractionTextControl {
+  type: 'text'
+  minLength: number
+  maxLength: number
+}
+
+export interface InteractionTextareaControl {
+  type: 'textarea'
+  minLength: number
+  maxLength: number
+}
+
+export interface InteractionChoiceOption {
+  value: string
+  label: string
+  description?: string
+  recommended?: boolean
+}
+
+export interface InteractionSingleChoiceControl {
+  type: 'single_choice'
+  options: InteractionChoiceOption[]
+  allowCustom: boolean
+}
+
+export interface InteractionMultiChoiceControl {
+  type: 'multi_choice'
+  options: InteractionChoiceOption[]
+  allowCustom: boolean
+  minSelections: number
+  maxSelections: number
+}
+
+export interface InteractionNumberControl {
+  type: 'number'
+  min?: number
+  max?: number
+  integer?: boolean
+}
+
+export interface InteractionDateControl {
+  type: 'date'
+  min?: string
+  max?: string
+}
+
+export interface InteractionDateRangeControl {
+  type: 'date_range'
+  min?: string
+  max?: string
+  allowOpenEnd?: boolean
+}
+
+export interface InteractionUrlControl {
+  type: 'url'
+  maxLength: number
+}
+
+export interface InteractionConfirmControl {
+  type: 'confirm'
+  confirmLabel?: string
+  cancelLabel?: string
+}
+
+export interface InteractionFileControl {
+  type: 'file'
+  acceptedMediaTypes: string[]
+  maxFiles: number
+}
+
+export interface InteractionFileReference {
+  fileId: string
+  mediaType: string
+}
+
+export type InteractionControl =
+  | InteractionTextControl
+  | InteractionTextareaControl
+  | InteractionSingleChoiceControl
+  | InteractionMultiChoiceControl
+  | InteractionNumberControl
+  | InteractionDateControl
+  | InteractionDateRangeControl
+  | InteractionUrlControl
+  | InteractionFileControl
+  | InteractionConfirmControl
+
+export interface InteractionRequest {
+  id: string
+  field: string
+  prompt: string
+  reason: string
+  required: boolean
+  severity: FollowUpQuestion['severity']
+  privacy: 'standard' | 'personal' | 'sensitive'
+  control: InteractionControl
+}
+
+export const InteractionRequestSchema = z.object({
+  id: z.string().min(1).max(200),
+  field: z.string().min(1).max(500),
+  prompt: z.string().min(1).max(2_000),
+  reason: z.string().min(1).max(2_000),
+  required: z.boolean(),
+  severity: z.enum(['blocking', 'important', 'optional']),
+  privacy: z.enum(['standard', 'personal', 'sensitive']),
+  control: InteractionControlSchema,
+})
+
+export const InteractionAnswerSchema = z.object({
+  interactionId: z.string().min(1).max(200),
+  idempotencyKey: z.string().min(1).max(200),
+  value: z.unknown(),
+})
+
+export type InteractionAnswer = z.infer<typeof InteractionAnswerSchema>
 
 const REQUIRED_OUTPUT_VALUE_SCHEMA = z
   .unknown()
@@ -237,6 +496,7 @@ export type AgentRunStatus =
   | 'queued'
   | 'ingesting_inputs'
   | 'normalizing_candidate'
+  | 'needs_input'
   | 'analyzing_jd'
   | 'matching_evidence'
   | 'drafting'
@@ -250,6 +510,18 @@ export interface AgentTraceEvent {
   status: 'started' | 'completed' | 'failed'
   at: string
   metadata?: Record<string, string | number | boolean>
+}
+
+export interface ResumeTailoringCheckpoint {
+  version: 1
+  jobText: string
+  jobArtifacts: ExtractedArtifact[]
+  candidateArtifacts: ExtractedArtifact[]
+  candidate: Resume
+  preferences: TailorPreferences
+  questions: FollowUpQuestion[]
+  warnings: string[]
+  trace: AgentTraceEvent[]
 }
 
 export type ResumeChangeType = 'added' | 'removed' | 'changed' | 'reordered'
@@ -342,6 +614,7 @@ export interface ResumeAgentRun {
   status: AgentRunStatus
   createdAt: string
   updatedAt: string
+  interactions?: InteractionRequest[]
   result?: TailorResumeResult
   error?: AgentRunFailure
 }

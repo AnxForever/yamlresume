@@ -11,12 +11,15 @@ This package intentionally keeps the LLM behind a small `LlmClient` interface:
 ## Workflow
 
 1. Validate or normalize candidate material into YAMLResume.
-2. Build a source evidence index with stable candidate paths.
-3. Analyze a job description into a structured `JobSpec`.
-4. Match job requirements to candidate evidence.
-5. Ask the LLM for a targeted YAMLResume draft.
-6. Validate the draft and reject unsupported identity, contact, date, and entry facts.
-7. Render the requested formats and style variants.
+2. For asynchronous Runs, pause at `needs_input` when normalization returns an
+   important structured question; validate the answer and resume from the
+   checkpoint.
+3. Build a source evidence index with stable candidate paths.
+4. Analyze a job description into a structured `JobSpec`.
+5. Match job requirements to candidate evidence.
+6. Ask the LLM for a targeted YAMLResume draft.
+7. Validate the draft and reject unsupported identity, contact, date, and entry facts.
+8. Render the requested formats and style variants.
 
 The first version is deliberately a bounded workflow rather than an autonomous
 ReAct loop. Resume generation benefits more from traceability and factual
@@ -55,3 +58,19 @@ Repair is distinct from provider transport retry. Trace metadata reports model
 calls, Repair calls, transport attempts, duration, and returned token usage.
 Neither trace metadata nor `StructuredOutputValidationError` contains prompts,
 candidate data, image Data URLs, or raw model responses.
+
+## Human-in-the-loop development slice
+
+`ResumeAgentRunService` separates trusted store records from public Run
+snapshots. It exposes one focused typed interaction at a time, validates and
+applies answers only to existing `content.*` paths, records answer fingerprints
+for idempotency, and resumes at JD analysis without repeating extraction or
+normalization.
+
+The default store is in-memory. Restart recovery, multi-instance coordination,
+transactional answer locking, authentication, retention, binary file answers,
+and later-stage interrupts are not implemented. Date controls currently use
+day-precision `YYYY-MM-DD`; year/month precision requires a future control
+contract. Completed public Runs include the tailored resume and rendered
+artifacts, but never expose source requests, checkpoints, raw answers, or raw
+model completions.

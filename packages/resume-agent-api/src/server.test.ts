@@ -23,7 +23,10 @@
  */
 
 import type { LlmClient } from '@yamlresume/resume-agent'
-import { ResumeTailoringAgent } from '@yamlresume/resume-agent'
+import {
+  ResumeAgentRunService,
+  ResumeTailoringAgent,
+} from '@yamlresume/resume-agent'
 import { describe, expect, it } from 'vitest'
 
 import { createAgentApiServer } from './server'
@@ -68,9 +71,13 @@ function fakeAgent(): ResumeTailoringAgent {
 
 async function withServer<T>(
   callback: (baseUrl: string) => Promise<T>,
-  agent = fakeAgent()
+  agent = fakeAgent(),
+  runService?: ResumeAgentRunService
 ): Promise<T> {
-  const server = createAgentApiServer({ agent })
+  const server = createAgentApiServer({
+    agent,
+    ...(runService ? { runService } : {}),
+  })
   await new Promise<void>((resolve) => server.listen(0, resolve))
   const address = server.address()
   if (!address || typeof address === 'string') {
@@ -163,6 +170,201 @@ describe('agent API', () => {
       expect(terminalPayload?.data?.status).toBe('completed')
       expect(terminalPayload?.data?.result?.status).toBe('completed')
     })
+  })
+
+  it('accepts a structured answer and resumes a paused run', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    let modelCalls = 0
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        modelCalls += 1
+        const data =
+          modelCalls === 1
+            ? {
+                resume: candidate,
+                sourceArtifactIds: ['candidate-source'],
+                questions: [
+                  {
+                    field: 'content.basics.name',
+                    question: 'What is your full name?',
+                    reason: 'The source did not contain a reliable name.',
+                    severity: 'blocking',
+                  },
+                ],
+                warnings: [],
+              }
+            : modelCalls === 2
+              ? {
+                  targetTitle: 'TypeScript Engineer',
+                  seniority: 'junior',
+                  summary: 'TypeScript engineer',
+                  requirements: [],
+                  keywords: [],
+                }
+              : {
+                  resume: candidate,
+                  selectedEvidenceIds: [],
+                  questions: [],
+                  notes: [],
+                }
+        return {
+          data: data as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const agent = new ResumeTailoringAgent(llm)
+    const runService = new ResumeAgentRunService(agent, {
+      idFactory: () => 'run-answer-api',
+      schedule: (task) => tasks.push(task),
+    })
+
+    await withServer(
+      async (baseUrl) => {
+        await fetch(`${baseUrl}/v1/runs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jobDescription:
+              'We need a TypeScript Engineer to build reliable systems.',
+            candidate: {
+              resume: candidate,
+              files: [
+                {
+                  id: 'candidate-source',
+                  filename: 'candidate.txt',
+                  text: 'Candidate profile.',
+                },
+              ],
+            },
+          }),
+        })
+        await tasks[0]?.()
+
+        const invalidResponse = await fetch(
+          `${baseUrl}/v1/runs/run-answer-api/answers`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              interactionId: 'candidate-normalization:1',
+              idempotencyKey: 'answer-api-empty',
+              value: '   ',
+            }),
+          }
+        )
+        const invalidPayload = (await invalidResponse.json()) as {
+          error?: { code?: string }
+        }
+        expect(invalidResponse.status).toBe(400)
+        expect(invalidPayload.error?.code).toBe('invalid_answer')
+        expect(tasks).toHaveLength(1)
+
+        const response = await fetch(
+          `${baseUrl}/v1/runs/run-answer-api/answers`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              interactionId: 'candidate-normalization:1',
+              idempotencyKey: 'answer-api-1',
+              value: 'Ada Lovelace',
+            }),
+          }
+        )
+        const payload = (await response.json()) as {
+          data?: { status?: string; interactions?: unknown }
+        }
+
+        expect(response.status).toBe(202)
+        expect(payload.data?.status).toBe('analyzing_jd')
+        expect(payload.data?.interactions).toBeUndefined()
+        expect(tasks).toHaveLength(2)
+      },
+      agent,
+      runService
+    )
+  })
+
+  it('returns stable validation and not-found errors for answers', async () => {
+    await withServer(async (baseUrl) => {
+      const invalidResponse = await fetch(
+        `${baseUrl}/v1/runs/missing-run/answers`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        }
+      )
+      const invalidPayload = (await invalidResponse.json()) as {
+        error?: { code?: string }
+      }
+      expect(invalidResponse.status).toBe(400)
+      expect(invalidPayload.error?.code).toBe('invalid_answer')
+
+      const missingResponse = await fetch(
+        `${baseUrl}/v1/runs/missing-run/answers`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            interactionId: 'candidate-normalization:1',
+            idempotencyKey: 'missing-run-answer',
+            value: 'Ada Lovelace',
+          }),
+        }
+      )
+      const missingPayload = (await missingResponse.json()) as {
+        error?: { code?: string }
+      }
+      expect(missingResponse.status).toBe(404)
+      expect(missingPayload.error?.code).toBe('run_not_found')
+    })
+  })
+
+  it('returns a conflict when a run is not waiting for input', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const agent = fakeAgent()
+    const runService = new ResumeAgentRunService(agent, {
+      idFactory: () => 'run-not-waiting',
+      schedule: (task) => tasks.push(task),
+    })
+    await runService.start({
+      jobDescription:
+        'We need a TypeScript Engineer to build reliable systems.',
+      candidate: { resume: candidate },
+    })
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(
+          `${baseUrl}/v1/runs/run-not-waiting/answers`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              interactionId: 'candidate-normalization:1',
+              idempotencyKey: 'wrong-state-answer',
+              value: 'Ada Lovelace',
+            }),
+          }
+        )
+        const payload = (await response.json()) as {
+          error?: { code?: string }
+        }
+
+        expect(response.status).toBe(409)
+        expect(payload.error?.code).toBe('run_not_waiting_for_input')
+        expect(tasks).toHaveLength(1)
+      },
+      agent,
+      runService
+    )
   })
 
   it('returns a stable not-found error for an unknown run', async () => {

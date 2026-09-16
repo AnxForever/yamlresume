@@ -6,6 +6,10 @@
 >
 > 基线：2026-09-16，`f8b7468`
 
+> 历史说明：本文保留 RA-009 交付时的范围与决策。RA-011 已在其上增加
+> 开发级 `needs_input`、结构化回答和内存 checkpoint；当前状态请同时阅读
+> [`resume-agent-hitl-interaction.zh-CN.md`](./resume-agent-hitl-interaction.zh-CN.md)。
+
 ## 1. 用户问题与成功结果
 
 当前 `POST /v1/tailor-resume` 会一直等待完整简历流程结束。随着文件解析、多个模型调用、PDF 编译和 Human-in-the-loop 加入，单个同步请求无法可靠表达排队、执行阶段、失败、恢复和取消。
@@ -26,7 +30,8 @@
 ## 3. 非目标
 
 - 跨进程或进程重启后的持久化；
-- `needs_input`、问题控件、回答端点和 checkpoint 恢复；
+- `needs_input`、问题控件、回答端点和 checkpoint 恢复（不属于 RA-009，
+  后由 RA-011 的开发级切片交付）；
 - 取消、重新排队、优先级和分布式 worker；
 - 生产数据库选型、鉴权、限流和租户隔离；
 - 顶层 Career Agent 的能力路由。
@@ -130,4 +135,6 @@ completed
 
 上述测试已在实现提交前通过，RA-009 可以标记为“Implemented，开发级”。由于仍是内存 adapter，证据覆盖最多为 `Partial`，不能称为 durable 或 operational。
 
-下一单元 RA-011 / Unit 7B 将在这个 Run 协议上增加结构化交互请求、`needs_input`、回答验证、checkpoint 和恢复语义。
+RA-011 / Unit 7B 已在这个 Run 协议上增加结构化交互请求、`needs_input`、
+回答验证、内存 checkpoint 和从 JD 分析阶段恢复。它仍不具备重启恢复、
+多实例协调或事务并发控制，因此没有改变 RA-009 的 production gap 判断。
