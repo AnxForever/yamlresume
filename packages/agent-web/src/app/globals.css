@@ -30,6 +30,20 @@
    */
   --focus-ring: oklch(0.446 0.03 256.802);
 
+  /*
+   * Ink overlays. The app tints surfaces with a low-opacity wash of the body
+   * ink rather than adding more background tokens; these are the ONLY two
+   * steps allowed. Previously eight hand-written rgba() values were in use,
+   * which is how a "design system" quietly stops being one.
+   *
+   *   --overlay-subtle  static fills (search field, chips, code spans)
+   *   --overlay-hover   hover/active washes on interactive rows
+   *   --overlay-active  pressed state and progress tracks
+   */
+  --overlay-subtle: oklch(0.446 0.03 256.802 / 5%);
+  --overlay-hover: oklch(0.446 0.03 256.802 / 7%);
+  --overlay-active: oklch(0.446 0.03 256.802 / 12%);
+
   /* CJK-capable sans stack on top of appica's Latin-first stack. */
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
@@ -76,4 +90,15 @@ input:not([type="checkbox"]):not([type="radio"]):focus-visible {
 /* Keep long evidence IDs, YAML and error codes from breaking the layout. */
 .break-anywhere {
   overflow-wrap: anywhere;
+}
+
+/*
+ * Safe utility shims for tokens consumed through arbitrary values, so call
+ * sites never re-type an oklch literal.
+ */
+.overlay-subtle {
+  background-color: var(--overlay-subtle);
+}
+.overlay:hover {
+  background-color: var(--overlay-hover);
 }

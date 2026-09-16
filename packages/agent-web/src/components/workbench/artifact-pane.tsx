@@ -111,7 +111,7 @@ export function ArtifactPane({ variants }: ArtifactPaneProps) {
             <select
               value={styleIndex}
               onChange={(event) => setStyleIndex(Number(event.target.value))}
-              className="bg-background text-foreground-strong w-full rounded-xs border-0 bg-[rgba(26,26,25,0.03)] px-2 py-2 text-sm outline-none"
+              className="bg-background text-foreground-strong w-full rounded-xs border-0 bg-[var(--overlay-subtle)] px-2 py-2 text-sm outline-none"
             >
               {variants.map((entry, index) => (
                 <option key={entry.style} value={index}>
@@ -120,13 +120,13 @@ export function ArtifactPane({ variants }: ArtifactPaneProps) {
               ))}
             </select>
           </label>
-          <div className="flex items-center gap-1 rounded-full bg-[rgba(26,26,25,0.05)] p-1">
+          <div className="flex items-center gap-1 rounded-full bg-[var(--overlay-subtle)] p-1">
             <button
               type="button"
               onClick={() => setView('preview')}
               aria-pressed={view === 'preview'}
               className={cx(
-                'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
+                'flex items-center gap-2 rounded-full px-3 py-2 text-xs font-medium transition-colors',
                 view === 'preview'
                   ? 'bg-background text-foreground-strong shadow-md'
                   : 'text-foreground-muted'
@@ -140,7 +140,7 @@ export function ArtifactPane({ variants }: ArtifactPaneProps) {
               onClick={() => setView('source')}
               aria-pressed={view === 'source'}
               className={cx(
-                'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
+                'flex items-center gap-2 rounded-full px-3 py-2 text-xs font-medium transition-colors',
                 view === 'source'
                   ? 'bg-background text-foreground-strong shadow-md'
                   : 'text-foreground-muted'
@@ -152,13 +152,13 @@ export function ArtifactPane({ variants }: ArtifactPaneProps) {
           </div>
         </div>
 
-        <div className="mt-3 flex flex-wrap gap-1.5">
+        <div className="mt-3 flex flex-wrap gap-2">
           {variant.artifacts.map((artifact) => (
             <button
               key={`${artifact.format}-${artifact.style}`}
               type="button"
               onClick={() => downloadArtifact(artifact)}
-              className="bg-secondary-subtle text-secondary-emphasis flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors hover:bg-secondary-soft"
+              className="bg-secondary-subtle text-secondary-emphasis flex items-center gap-2 rounded-full px-3 py-2 text-xs font-medium transition-colors hover:bg-secondary-soft"
             >
               <Download size={13} />
               {FORMAT_LABELS[artifact.format] ?? artifact.format}
@@ -168,7 +168,7 @@ export function ArtifactPane({ variants }: ArtifactPaneProps) {
             <span
               key={`${failure.format}-${failure.style}`}
               title={failure.message}
-              className="bg-error-subtle text-error-emphasis flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium"
+              className="bg-error-subtle text-error-emphasis flex items-center gap-2 rounded-full px-3 py-2 text-xs font-medium"
             >
               {FORMAT_LABELS[failure.format] ?? failure.format} 失败
             </span>

@@ -138,7 +138,7 @@ export function PresetSelect({ presets, value, onChange }: PresetSelectProps) {
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
-        className="text-foreground hover:bg-[rgba(26,26,25,0.04)] flex items-center gap-2 rounded-full px-3 py-2 text-sm font-medium transition-colors"
+        className="text-foreground hover:bg-[var(--overlay-hover)] flex items-center gap-2 rounded-full px-3 py-2 text-sm font-medium transition-colors"
       >
         <SelectedIcon
           size={15}
@@ -185,14 +185,14 @@ export function PresetSelect({ presets, value, onChange }: PresetSelectProps) {
                   isSelected
                     ? 'bg-secondary-subtle'
                     : isActive
-                      ? 'bg-[rgba(26,26,25,0.04)]'
+                      ? 'bg-[var(--overlay-subtle)]'
                       : ''
                 )}
               >
                 <Icon
                   size={18}
                   className={cx(
-                    'mt-0.5 shrink-0',
+                    'mt-1 shrink-0',
                     isSelected
                       ? 'text-secondary-emphasis'
                       : 'text-foreground-muted'

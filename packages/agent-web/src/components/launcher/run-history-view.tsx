@@ -41,7 +41,7 @@ export function RunHistoryView({ runs, onOpenRun }: RunHistoryViewProps) {
   if (runs.length === 0) {
     return (
       <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col items-center justify-center px-6 py-10 text-center">
-        <span className="bg-[rgba(26,26,25,0.04)] text-foreground-muted mb-4 flex size-14 items-center justify-center rounded-full">
+        <span className="bg-[var(--overlay-subtle)] text-foreground-muted mb-4 flex size-14 items-center justify-center rounded-full">
           <History size={26} />
         </span>
         <h1 className="text-foreground-strong text-xl font-semibold tracking-tight">

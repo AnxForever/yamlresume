@@ -72,7 +72,7 @@ export function LogoMark({
  */
 export function Logo({ className }: { className?: string }) {
   return (
-    <span className={cx('inline-flex items-center gap-2.5', className)}>
+    <span className={cx('inline-flex items-center gap-2', className)}>
       <LogoMark size={30} />
       <span className="text-foreground-strong text-[17px] font-semibold tracking-tight">
         Career Agent

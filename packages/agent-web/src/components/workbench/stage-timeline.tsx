@@ -63,7 +63,7 @@ export function StageTimeline({ stages, needsInput }: StageTimelineProps) {
           <li key={stage.stage}>
             <div
               className={cx(
-                'flex items-center gap-3 rounded-xs px-3 py-2.5 text-sm transition-colors',
+                'flex items-center gap-3 rounded-xs px-3 py-3 text-sm transition-colors',
                 isRunning
                   ? 'bg-secondary-subtle text-foreground-strong'
                   : isDone
@@ -79,7 +79,7 @@ export function StageTimeline({ stages, needsInput }: StageTimelineProps) {
                     ? 'bg-success text-success-foreground'
                     : isRunning
                       ? 'bg-secondary-emphasis text-primary-foreground'
-                      : 'bg-[rgba(26,26,25,0.08)] text-foreground-subtle'
+                      : 'bg-[var(--overlay-active)] text-foreground-subtle'
                 )}
               >
                 {isDone ? (
@@ -106,7 +106,7 @@ export function StageTimeline({ stages, needsInput }: StageTimelineProps) {
       })}
       {needsInput ? (
         <li>
-          <div className="bg-warning-subtle text-warning-emphasis flex items-center gap-3 rounded-xs px-3 py-2.5 text-sm font-medium">
+          <div className="bg-warning-subtle text-warning-emphasis flex items-center gap-3 rounded-xs px-3 py-3 text-sm font-medium">
             <span className="bg-warning-emphasis size-2 rounded-full" />
             等待你的回答
           </div>

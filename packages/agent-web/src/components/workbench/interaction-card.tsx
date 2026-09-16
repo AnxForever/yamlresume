@@ -79,7 +79,7 @@ function UnanswerableNotice({
         <button
           type="button"
           onClick={onStartNew}
-          className="bg-primary text-primary-foreground mt-3 rounded-xs px-3 py-1.5 text-sm font-medium transition-colors hover:bg-primary-strong"
+          className="bg-primary text-primary-foreground mt-3 rounded-xs px-3 py-2 text-sm font-medium transition-colors hover:bg-primary-strong"
         >
           带上材料重新发起一次
         </button>
@@ -180,7 +180,6 @@ export function InteractionCard({
   return (
     // A real <fieldset> groups the prompt with its controls for assistive tech;
     // the default border/margin/padding are reset so it renders as before.
-    // biome-ignore lint/a11y/noNoninteractiveTabindex: the card is focused programmatically when it appears
     <fieldset
       ref={focusRef}
       tabIndex={-1}
@@ -202,7 +201,7 @@ export function InteractionCard({
         {request.prompt}
       </p>
       {request.reason ? (
-        <p className="text-foreground-muted mt-1.5 text-xs leading-relaxed">
+        <p className="text-foreground-muted mt-2 text-xs leading-relaxed">
           为什么问：{request.reason}
         </p>
       ) : null}
@@ -335,7 +334,7 @@ export function InteractionCard({
               type="button"
               disabled={submitting}
               onClick={() => submit(false)}
-              className="text-foreground hover:bg-[rgba(26,26,25,0.04)] rounded-xs px-4 py-2 text-sm transition-colors"
+              className="text-foreground hover:bg-[var(--overlay-hover)] rounded-xs px-4 py-2 text-sm transition-colors"
             >
               {control.cancelLabel ?? '取消'}
             </button>
@@ -507,7 +506,7 @@ function ChoiceControl({
   const finished = multi && selected.length >= minSelections
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         {options.map((option) => {
           const active = selected.includes(option.value)
           return (
@@ -518,7 +517,7 @@ function ChoiceControl({
               onClick={() => onToggle(option)}
               aria-pressed={active}
               className={cx(
-                'flex items-start justify-between gap-3 rounded-xs border px-3 py-2.5 text-left transition-colors',
+                'flex items-start justify-between gap-3 rounded-xs border px-3 py-3 text-left transition-colors',
                 active
                   ? 'border-secondary-emphasis bg-secondary-subtle'
                   : 'border-border hover:border-border-strong'
@@ -534,7 +533,7 @@ function ChoiceControl({
                   ) : null}
                 </span>
                 {option.description ? (
-                  <span className="text-foreground-muted mt-0.5 block text-xs leading-relaxed">
+                  <span className="text-foreground-muted mt-1 block text-xs leading-relaxed">
                     {option.description}
                   </span>
                 ) : null}
@@ -548,7 +547,7 @@ function ChoiceControl({
                 )}
               >
                 {active ? (
-                  <span className="bg-primary-foreground size-1.5 rounded-full" />
+                  <span className="bg-primary-foreground size-2 rounded-full" />
                 ) : null}
               </span>
             </button>

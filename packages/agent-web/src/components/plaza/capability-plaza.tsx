@@ -53,10 +53,10 @@ function CapabilityCard({ capability, onOpen }: CapabilityCardProps) {
       <div className="mb-3 flex items-start justify-between gap-3">
         <span
           className={cx(
-            'flex size-10 items-center justify-center rounded-[12px]',
+            'flex size-10 items-center justify-center rounded-xs',
             usable
               ? 'bg-secondary-subtle text-secondary-emphasis'
-              : 'bg-[rgba(26,26,25,0.05)] text-foreground-muted'
+              : 'bg-[var(--overlay-subtle)] text-foreground-muted'
           )}
         >
           <Icon size={20} aria-hidden="true" />
@@ -76,13 +76,13 @@ function CapabilityCard({ capability, onOpen }: CapabilityCardProps) {
         {capability.summary}
       </p>
 
-      <ul className="mt-3 flex flex-1 flex-col gap-1.5">
+      <ul className="mt-3 flex flex-1 flex-col gap-2">
         {capability.highlights.map((highlight) => (
           <li
             key={highlight}
             className="text-foreground-muted flex gap-2 text-xs leading-relaxed"
           >
-            <span className="text-foreground-subtle mt-1.5 size-1 shrink-0 rounded-full bg-current" />
+            <span className="text-foreground-subtle mt-2 size-1 shrink-0 rounded-full bg-current" />
             <span>{highlight}</span>
           </li>
         ))}

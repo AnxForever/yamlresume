@@ -58,10 +58,10 @@ export function StatusBadge({
   return (
     <Badge
       variant={TONE_VARIANT[tone] as never}
-      className={cx('px-2.5 py-0.5 text-xs font-medium', className)}
+      className={cx('px-2 py-1 text-xs font-medium', className)}
     >
       {dot ? (
-        <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+        <span className="size-2 rounded-full bg-current" aria-hidden="true" />
       ) : null}
       {children}
     </Badge>

@@ -105,7 +105,7 @@ export function WorkbenchView({
           type="button"
           onClick={onBack}
           aria-label="返回运行记录"
-          className="text-foreground-muted hover:text-foreground-strong hover:bg-[rgba(26,26,25,0.04)] flex size-8 items-center justify-center rounded-full transition-colors"
+          className="text-foreground-muted hover:text-foreground-strong hover:bg-[var(--overlay-hover)] flex size-8 items-center justify-center rounded-full transition-colors"
         >
           <ArrowLeft size={17} />
         </button>
@@ -121,7 +121,7 @@ export function WorkbenchView({
           onClick={() => setTelemetryOpen((open) => !open)}
           aria-expanded={telemetryOpen}
           aria-label="遥测"
-          className="text-foreground-muted hover:text-foreground-strong hover:bg-[rgba(26,26,25,0.04)] flex size-8 items-center justify-center rounded-full transition-colors"
+          className="text-foreground-muted hover:text-foreground-strong hover:bg-[var(--overlay-hover)] flex size-8 items-center justify-center rounded-full transition-colors"
         >
           <Gauge size={17} />
         </button>
@@ -163,7 +163,7 @@ export function WorkbenchView({
             ).map(([label, value]) => (
               <div key={label}>
                 <dt className="text-foreground-muted text-xs">{label}</dt>
-                <dd className="text-foreground-strong mt-0.5 font-mono text-sm tabular-nums">
+                <dd className="text-foreground-strong mt-1 font-mono text-sm tabular-nums">
                   {value}
                 </dd>
               </div>

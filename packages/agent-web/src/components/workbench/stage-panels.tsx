@@ -101,7 +101,7 @@ export function JobSpecPanel({ jobSpec }: { jobSpec: JobSpec }) {
           {jobSpec.keywords.map((keyword) => (
             <span
               key={keyword}
-              className="bg-[rgba(26,26,25,0.05)] text-foreground-muted rounded-full px-2.5 py-1 text-xs"
+              className="bg-[var(--overlay-subtle)] text-foreground-muted rounded-full px-2 py-1 text-xs"
             >
               {keyword}
             </span>
@@ -136,7 +136,7 @@ export function MatchPanel({ match }: { match: MatchReport }) {
           {items.map((item) => {
             const meta = MATCH_STATUS_META[item.status]
             return (
-              <li key={item.requirementId} className="flex flex-col gap-1.5">
+              <li key={item.requirementId} className="flex flex-col gap-2">
                 <div className="flex items-start justify-between gap-3">
                   <span className="text-foreground-strong text-sm leading-relaxed">
                     {item.requirement}
@@ -146,11 +146,11 @@ export function MatchPanel({ match }: { match: MatchReport }) {
                   </StatusBadge>
                 </div>
                 {item.evidenceIds.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-2">
                     {item.evidenceIds.map((evidenceId) => (
                       <code
                         key={evidenceId}
-                        className="break-anywhere bg-[rgba(26,26,25,0.04)] text-foreground-muted rounded-xs px-1.5 py-0.5 font-mono text-[11px]"
+                        className="break-anywhere bg-[var(--overlay-subtle)] text-foreground-muted rounded-xs px-2 py-1 font-mono text-[11px]"
                       >
                         {evidenceId}
                       </code>
@@ -277,10 +277,10 @@ export function QualityPanel({ quality }: { quality: QualityReport }) {
         ).map(([label, value]) => (
           <div
             key={label}
-            className="bg-[rgba(26,26,25,0.03)] rounded-xs px-3 py-2.5"
+            className="bg-[var(--overlay-subtle)] rounded-xs px-3 py-3"
           >
             <dt className="text-foreground-muted text-xs">{label}</dt>
-            <dd className="text-foreground-strong mt-0.5 text-lg font-semibold tabular-nums">
+            <dd className="text-foreground-strong mt-1 text-lg font-semibold tabular-nums">
               {coverageLabel(value)}
             </dd>
           </div>
@@ -292,7 +292,7 @@ export function QualityPanel({ quality }: { quality: QualityReport }) {
           <p className="text-foreground-muted text-xs font-medium">
             缺失的必须项
           </p>
-          <ul className="mt-1.5 flex flex-col gap-1">
+          <ul className="mt-2 flex flex-col gap-1">
             {quality.missingMustHave.map((item) => (
               <li key={item} className="text-error-emphasis text-sm">
                 {item}
@@ -307,11 +307,11 @@ export function QualityPanel({ quality }: { quality: QualityReport }) {
           <p className="text-foreground-muted text-xs font-medium">
             缺失关键词
           </p>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
+          <div className="mt-2 flex flex-wrap gap-2">
             {quality.missingKeywords.map((keyword) => (
               <span
                 key={keyword}
-                className="bg-warning-subtle text-warning-emphasis rounded-full px-2.5 py-1 text-xs"
+                className="bg-warning-subtle text-warning-emphasis rounded-full px-2 py-1 text-xs"
               >
                 {keyword}
               </span>
@@ -321,7 +321,7 @@ export function QualityPanel({ quality }: { quality: QualityReport }) {
       ) : null}
 
       {quality.warnings.length > 0 ? (
-        <ul className="mt-4 flex flex-col gap-1.5">
+        <ul className="mt-4 flex flex-col gap-2">
           {quality.warnings.map((warning) => (
             <li
               key={warning.code}
@@ -352,7 +352,7 @@ export function StageSkeleton({ label }: { label: string }) {
         {[0.9, 0.7, 0.8, 0.5].map((width) => (
           <div
             key={width}
-            className="bg-[rgba(26,26,25,0.05)] animate-pulse rounded-full"
+            className="bg-[var(--overlay-subtle)] animate-pulse rounded-full"
             style={{ height: 12, width: `${Math.round(width * 100)}%` }}
           />
         ))}

@@ -103,7 +103,7 @@ export function Sidebar({
         <Logo />
       </div>
 
-      <div className="mb-6 flex items-center gap-2 rounded-xs bg-[rgba(26,26,25,0.04)] px-3 py-3">
+      <div className="mb-6 flex items-center gap-2 rounded-xs bg-[var(--overlay-subtle)] px-3 py-3">
         <Search
           size={18}
           className="text-foreground-muted"
@@ -135,7 +135,7 @@ export function Sidebar({
                 'flex items-center gap-3 rounded-xs px-3 py-3 text-[15px] transition-colors',
                 active
                   ? 'bg-background text-foreground-strong shadow-md font-medium'
-                  : 'text-foreground hover:bg-[rgba(26,26,25,0.04)]'
+                  : 'text-foreground hover:bg-[var(--overlay-hover)]'
               )}
             >
               <span className="text-foreground">{item.icon}</span>
@@ -164,7 +164,7 @@ export function Sidebar({
                 key={run.id}
                 type="button"
                 onClick={() => onSelectRun?.(run.id)}
-                className="text-foreground hover:bg-[rgba(26,26,25,0.04)] flex flex-col items-start gap-1 rounded-xs px-3 py-2 text-left transition-colors"
+                className="text-foreground hover:bg-[var(--overlay-hover)] flex flex-col items-start gap-1 rounded-xs px-3 py-2 text-left transition-colors"
               >
                 <span className="text-foreground-strong flex w-full items-center gap-2 text-sm">
                   <FileText
@@ -190,7 +190,7 @@ export function Sidebar({
           type="button"
           onClick={onOpenSettings}
           aria-label="设置"
-          className="text-foreground-muted hover:text-foreground-strong hover:bg-[rgba(26,26,25,0.05)] flex size-9 items-center justify-center rounded-full transition-colors"
+          className="text-foreground-muted hover:text-foreground-strong hover:bg-[var(--overlay-hover)] flex size-9 items-center justify-center rounded-full transition-colors"
         >
           <Settings size={18} />
         </button>
