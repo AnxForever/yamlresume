@@ -293,6 +293,10 @@ describe('agent API', () => {
         data?: { runtime?: { providerConfigured?: boolean } }
       }
       expect(capabilitiesPayload.data?.runtime?.providerConfigured).toBe(false)
+      expect(capabilitiesPayload.data?.endpoints?.chat).toBe('POST /v1/chat')
+      expect(capabilitiesPayload.data?.input?.fileTypes).toContain(
+        'application/rtf'
+      )
 
       const request = {
         jobDescription:
