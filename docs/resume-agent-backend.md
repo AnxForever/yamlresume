@@ -106,15 +106,18 @@ to an existing `content.*` path, the resulting candidate is revalidated by
 `ResumeSchema`, and execution resumes at JD analysis without repeating input
 extraction or normalization.
 
-This is a development proof, not durable orchestration. The default adapter
+This is a development proof, not production orchestration. The default adapter
 uses an in-memory revision and atomic compare-and-set within one Node.js
-process. It has no restart recovery, multi-instance coordination, durable task
-queue, authentication, retention, or binary file-answer loop. Completed public
-snapshots intentionally contain the generated resume and artifacts for the
-user; revisions, source requests, checkpoints, answer receipts, raw answers,
-and raw model completions remain private. The concurrency contract and limits
-are documented in
-[`resume-agent-run-store-concurrency.zh-CN.md`](./resume-agent-run-store-concurrency.zh-CN.md).
+process. An opt-in SQLite adapter persists the same versioned Store contract
+across restarts and coordinates connections on one host, but uses Node's
+active-development synchronous SQLite API. Neither adapter yet provides a
+transactional task outbox, automatic restart drain, authentication, retention,
+or a binary file-answer loop. Completed public snapshots intentionally contain
+the generated resume and artifacts for the user; revisions, source requests,
+checkpoints, answer receipts, raw answers, and raw model completions remain
+private. See the
+[`concurrency`](./resume-agent-run-store-concurrency.zh-CN.md) and
+[`durable Store`](./resume-agent-durable-run-store.zh-CN.md) briefs.
 
 ## Feature evidence ledger
 
@@ -134,7 +137,8 @@ are documented in
 | RA-010 | Agent evaluation and operational observability | Implemented for development | Deterministic EvalCase runner, fictional fixture, safe aggregates and structured-output telemetry | Partial | None | Real-model adapter, authorized anonymized dataset, repeated sampling, cost and human calibration |
 | RA-011 | Human-in-the-loop clarification | Implemented for development; not durable | Typed controls, `needs_input`, checkpoint, answer endpoint, validation/idempotency and resume tests | Partial | None | Durable transactional store, restart recovery, authentication, file-answer loop and later-stage interrupts |
 | RA-012 | Structured-output validation and bounded repair | Implemented | Shared module, three-boundary workflow tests, safe API error test | Covered | Backfilled | Operational provider comparison is tracked by RA-010 |
-| RA-015A | Revision-safe RunStore and atomic answer acceptance | Implemented for development; not durable | Atomic in-memory create/CAS, deterministic concurrent answer tests, clone and privacy tests | Covered for one process | Backfilled | Durable conditional-write adapter, transactional task dispatch and restart recovery |
+| RA-015A | Revision-safe RunStore and atomic answer acceptance | Implemented for development | Atomic in-memory create/CAS, deterministic concurrent answer tests, clone and privacy tests | Covered for one process | Backfilled | RA-015B adds durable CAS; transactional task dispatch and restart drain remain RA-015C |
+| RA-015B | Durable versioned RunStore | Implemented for development; not operational | SQLite schema v1, disk reopen, SQL CAS across connections, safe failure and privacy tests | Covered for one host | None | Transactional outbox/restart drain, async production driver, encryption and retention |
 
 ### RA-012 evidence detail
 

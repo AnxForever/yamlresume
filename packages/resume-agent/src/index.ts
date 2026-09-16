@@ -149,3 +149,11 @@ export {
   ResumeAgentRunService,
   RunAnswerError,
 } from './workflow/run'
+export type {
+  RunStoreErrorCode,
+  SqliteRunStoreOptions,
+} from './workflow/sqlite-run-store'
+export {
+  RunStoreError,
+  SqliteRunStore,
+} from './workflow/sqlite-run-store'

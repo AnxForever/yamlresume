@@ -298,6 +298,44 @@ Research, state transitions, RED → GREEN evidence, and reversal criteria are
 recorded in
 [`resume-agent-run-store-concurrency.zh-CN.md`](./resume-agent-run-store-concurrency.zh-CN.md).
 
+### Unit 7D — Durable versioned RunStore adapter
+
+**Status:** implemented for development on one host; not operational.
+
+Delivered:
+
+- an opt-in SQLite schema v1 adapter using the existing `RunStore` contract;
+- disk persistence across close/reopen and service reconstruction;
+- atomic `INSERT ... ON CONFLICT DO NOTHING` creation and
+  `UPDATE ... WHERE revision = ?` compare-and-set;
+- WAL, `synchronous=FULL`, bounded lock wait, prepared statements and explicit
+  idempotent connection close;
+- safe configuration/storage/corruption errors without record bodies, raw
+  SQLite errors or database paths;
+- fail-closed handling for unsupported schema versions and corrupt records.
+
+Verified tests:
+
+- reopen persistence and public snapshot privacy;
+- matching, stale and missing revision behavior;
+- one winner across two connections to the same file;
+- create/CAS/get isolation;
+- close, configuration, serialization, corrupt-record and future-schema
+  failures; all temporary files and connections are cleaned up.
+
+Known limits:
+
+- Node 22 reports `node:sqlite` as Stability 1.1 (active development), and its
+  synchronous API can block the event loop;
+- WAL coordinates connections on one host, not deployments on different hosts
+  or network filesystems;
+- persisted private inputs are not encrypted by this adapter;
+- state CAS and task scheduling are still separate operations; crash recovery
+  and a transactional outbox remain Unit 7E / RA-015C.
+
+The research, schema, error model and evidence ledger are recorded in
+[`resume-agent-durable-run-store.zh-CN.md`](./resume-agent-durable-run-store.zh-CN.md).
+
 ### Unit 8 — Backend documentation and completion audit
 
 **Status:** in progress; core design and API documents exist, while the final
