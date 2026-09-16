@@ -119,6 +119,31 @@ export {
   EvalExpectationsSchema,
 } from './evaluation/contracts'
 export { publicJobDerivedDevelopmentCases } from './evaluation/fixtures/public-job-derived'
+export type {
+  ResumeHumanReview,
+  ResumeHumanReviewAgreementMetric,
+  ResumeHumanReviewBatch,
+  ResumeHumanReviewCaseVariantAggregate,
+  ResumeHumanReviewDimension,
+  ResumeHumanReviewIssueCode,
+  ResumeHumanReviewPairwiseExactAgreement,
+  ResumeHumanReviewRating,
+  ResumeHumanReviewRatingCounts,
+  ResumeHumanReviewRecommendation,
+  ResumeHumanReviewRecommendationCounts,
+  ResumeHumanReviewReport,
+} from './evaluation/human-review'
+export {
+  RESUME_HUMAN_REVIEW_DIMENSIONS,
+  RESUME_HUMAN_REVIEW_RUBRIC_REVISION,
+  ResumeHumanReviewBatchSchema,
+  ResumeHumanReviewIssueCodeSchema,
+  ResumeHumanReviewRatingSchema,
+  ResumeHumanReviewRecommendationSchema,
+  ResumeHumanReviewSchema,
+  resumeHumanReviewRubricV1,
+  summarizeResumeHumanReviews,
+} from './evaluation/human-review'
 export { runEvaluation } from './evaluation/runner'
 export type { ArtifactInputErrorCode } from './input/artifacts'
 export {

@@ -169,6 +169,17 @@ runtime revision，区间只用于暴露当前固定配置下的小样本宽度�
 总体/逐 case 平均值与 R7 p95；多 case 原始顺序和不同失败类型；空集合；以及序列化报告的敏感
 标记回归。
 
+### 6.2 RA-010C-E1：盲化人工评审契约
+
+自动断言仍不能判断事实忠实、需求重点、证据具体性和表达清晰度。RA-010C-E1 已实现版本化的
+`resume-human-review-v1`：四个独立 anchored dimensions、固定 issue codes、strict/bounded blind
+review Schema、重复 assignment/reviewer-item 拒绝、安全分类聚合，以及描述性的 pairwise exact
+agreement。它不计算 ordinal mean，也不在没有真实 pilot 时选择 chance-corrected IAA 或区间。
+
+该开发契约不包含 assignment UI、随机化、评审者招募/资格、授权数据、真实 review、裁决或持久化，
+因此不能作为“人工校准完成”的证据。完整研究、RED → GREEN 和验证记录见
+[`resume-agent-human-evaluation.zh-CN.md`](./resume-agent-human-evaluation.zh-CN.md)。
+
 ## 7. 隐私、版权与安全边界
 
 ### 7.1 为什么不提交原始公开 JD
@@ -271,13 +282,19 @@ RA-010C-C 在 2026-09-16 的本地验证：
 - `pnpm license:check`：退出码 0，但共享 `scripts/addlicense.mjs` 报告环境缺少 `addlicense` binary，
   因此跳过实际扫描；两个既有 TypeScript 文件仍保留完整 MIT header。
 
+RA-010C-E1 在 2026-09-16 的本地验证：human review 14 tests；runner、campaign、公开岗位 fixture 与
+human review 共 4 files / 55 tests；Resume Agent 全包 16 files / 246 tests；human-review module 的
+statements、branches、functions、lines 均为 100%；TypeScript、ESM/DTS build、目标 Biome 与
+`git diff --check` 通过。`license:check` 同样因缺少 `addlicense` binary 跳过实际扫描，新增文件的
+MIT header 已保留。
+
 真实模型验收还需在允许 Node `fetch` 访问 Provider 的受控环境中：
 
 1. 固定 provider、model、prompt revision 和 runtime revision；
 2. 至少运行 3 次而不是挑选一次结果；
 3. 保存安全 campaign report，不保存原始输入输出；
 4. 记录 Schema 成功率、断言分布、延迟、token 和费用；
-5. 对事实保真和表达质量做盲化人工复核；
+5. 使用已实现的 rubric/记录契约执行真实盲化 pilot，并补齐随机化、评审者资格、一致性区间与争议裁决；
 6. 未经人工校准前，不把 development thresholds 升为 CI 门禁。
 
 ## 11. 证据台账
@@ -288,7 +305,7 @@ RA-010C-C 在 2026-09-16 的本地验证：
 | RA-010C-B | 模型解析 JD → 关键术语断言 | Implemented | required keyword RED/GREEN 与安全报告 | Partial | backfilled | 同义词、责任语义和人工 gold labels 未覆盖 |
 | RA-010C-C | 配置 → 重复采样 → 统计可信的安全聚合 | Implemented for development | 重复运行、逐 case 稳定性、Wilson 95% 区间、R7 latency、空 observation、混合失败和隐私回归；campaign 10 tests | Partial | backfilled | 尚无可评分真实 Provider observations；独立同分布假设未获运行证据；token、费用和持久化未实现 |
 | RA-010C-D | corpus → 真实 Agent/Provider → 可评分结果 | Implemented but not operational | 默认网络、env-proxy、OpenAI 401 与 Gemini 400 均产生安全分类证据 | Gap | none | 需有效 Provider 凭证/配置并取得重复、可评分结果 |
-| RA-010C-E | 模型结果 → 人工质量判断 | Planned | OpenAI eval guidance 与本地质量风险审计 | Gap | none | rubric、盲化标注、一致性与争议流程均未实现 |
+| RA-010C-E | 模型结果 → 盲化人工质量记录与安全聚合 | Implemented for development | `resume-human-review-v1` 四维 anchored rubric、strict/bounded Schema、重复提交拒绝、分类分布、描述性 pairwise exact agreement 与 14 tests | Partial | backfilled | assignment UI、随机化、评审者招募/资格、授权真实数据、pilot、chance-corrected IAA/CI、裁决、持久化与 judge calibration |
 
 ## 12. 参考资料
 
@@ -306,5 +323,7 @@ RA-010C-C 在 2026-09-16 的本地验证：
   <https://boards.greenhouse.io/cloudflare/jobs/8109620?gh_jid=8109620>
 - Anthropic source posting：
   <https://job-boards.greenhouse.io/anthropic/jobs/4956672008>
+- 盲化人工评审 Feature Brief：
+  [`resume-agent-human-evaluation.zh-CN.md`](./resume-agent-human-evaluation.zh-CN.md)
 - RA-010/RA-010B 基础框架：
   [`resume-agent-evaluation-harness.zh-CN.md`](./resume-agent-evaluation-harness.zh-CN.md)
