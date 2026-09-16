@@ -31,13 +31,14 @@ import {
   Search,
   Settings,
   SquarePen,
+  UserRound,
 } from 'lucide-react'
 import { useId, useState } from 'react'
 import { Logo } from '@/components/brand/logo'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { cx } from '@/lib/cx'
 
-export type ShellView = 'new' | 'plaza' | 'runs'
+export type ShellView = 'new' | 'plaza' | 'runs' | 'profile'
 
 interface NavItem {
   id: ShellView
@@ -49,6 +50,7 @@ const PRIMARY_NAV: NavItem[] = [
   { id: 'new', label: '新建定制', icon: <SquarePen size={18} /> },
   { id: 'plaza', label: '能力广场', icon: <LayoutGrid size={18} /> },
   { id: 'runs', label: '运行记录', icon: <History size={18} /> },
+  { id: 'profile', label: '个人主页', icon: <UserRound size={18} /> },
 ]
 
 export interface RecentRun {
@@ -66,6 +68,7 @@ export interface SidebarProps {
   onSelectItem: (id: ShellView) => void
   onSelectRun?: (id: string) => void
   onOpenSettings: () => void
+  onLogout: () => void
 }
 
 const HEALTH_META: Record<
@@ -84,6 +87,7 @@ export function Sidebar({
   onSelectItem,
   onSelectRun,
   onOpenSettings,
+  onLogout,
 }: SidebarProps) {
   const healthMeta = HEALTH_META[health]
   const [query, setQuery] = useState('')
@@ -186,14 +190,23 @@ export function Sidebar({
         <StatusBadge tone={healthMeta.tone} dot>
           {healthMeta.label}
         </StatusBadge>
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          aria-label="设置"
-          className="text-foreground-muted hover:text-foreground-strong hover:bg-[var(--overlay-hover)] flex size-9 items-center justify-center rounded-full transition-colors"
-        >
-          <Settings size={18} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="设置"
+            className="text-foreground-muted hover:text-foreground-strong hover:bg-[var(--overlay-hover)] flex size-9 items-center justify-center rounded-full transition-colors"
+          >
+            <Settings size={18} />
+          </button>
+          <button
+            type="button"
+            onClick={onLogout}
+            className="text-foreground-muted hover:text-foreground-strong rounded-full px-2 py-1 text-xs"
+          >
+            退出
+          </button>
+        </div>
       </div>
     </aside>
   )

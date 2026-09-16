@@ -37,6 +37,7 @@ import {
   Sidebar,
 } from '@/components/launcher/sidebar'
 import { CapabilityPlaza } from '@/components/plaza/capability-plaza'
+import { ProfileView } from '@/components/profile/profile-view'
 import { SettingsDialog } from '@/components/settings/settings-dialog'
 import { WorkbenchView } from '@/components/workbench/workbench'
 import {
@@ -54,7 +55,7 @@ import {
 
 const HEALTH_POLL_MS = 30_000
 
-const SHELL_VIEWS: ShellView[] = ['new', 'plaza', 'runs']
+const SHELL_VIEWS: ShellView[] = ['new', 'plaza', 'runs', 'profile']
 
 function viewFromHash(hash: string): ShellView | null {
   const value = hash.replace(/^#/, '')
@@ -96,11 +97,15 @@ export function AppShell() {
     import('@/lib/api/client').AuthSession | null
   >(null)
   const [authChecked, setAuthChecked] = useState(false)
+  const [profileResume, setProfileResume] = useState('')
   const clientRef = useRef<AgentApiClient | null>(null)
 
   // Settings live in localStorage, which is only available after mount.
   useEffect(() => {
     setSettings(loadSettings())
+    setProfileResume(
+      localStorage.getItem('career-agent:profile-resume:v1') ?? ''
+    )
   }, [])
 
   // Restore the local run index. Without this the sidebar always claimed "还
@@ -141,6 +146,11 @@ export function AppShell() {
     if (typeof window !== 'undefined') {
       window.location.hash = next === 'new' ? '' : next
     }
+  }, [])
+
+  const saveProfileResume = useCallback((value: string) => {
+    setProfileResume(value)
+    localStorage.setItem('career-agent:profile-resume:v1', value)
   }, [])
 
   const openRun = useCallback((runId: string) => {
@@ -305,6 +315,10 @@ export function AppShell() {
         onSelectItem={selectView}
         onSelectRun={openRun}
         onOpenSettings={() => setSettingsOpen(true)}
+        onLogout={async () => {
+          await clientRef.current?.logout()
+          setAuthSession(null)
+        }}
       />
 
       <main className="bg-background-subtle shadow-xl flex min-w-0 flex-1 flex-col overflow-y-auto rounded-xl">
@@ -317,6 +331,11 @@ export function AppShell() {
               onStartNew={() => selectView('new')}
             />
           ) : null
+        ) : view === 'profile' ? (
+          <ProfileView
+            initialResume={profileResume}
+            onSave={saveProfileResume}
+          />
         ) : view === 'new' ? (
           <LauncherView
             key={launcherKey}
@@ -326,6 +345,7 @@ export function AppShell() {
             onRetryCapabilities={retryCapabilities}
             onOpenSettings={() => setSettingsOpen(true)}
             client={clientRef.current}
+            profileResume={profileResume}
           />
         ) : view === 'plaza' ? (
           <CapabilityPlaza onOpenCapability={() => selectView('new')} />

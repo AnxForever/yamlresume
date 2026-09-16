@@ -72,6 +72,7 @@ export interface LauncherViewProps {
   onRetryCapabilities: () => void
   onOpenSettings: () => void
   client: AgentApiClient
+  profileResume: string
 }
 
 interface CapabilityView {
@@ -109,6 +110,7 @@ export function LauncherView({
   onRetryCapabilities,
   onOpenSettings,
   client,
+  profileResume,
 }: LauncherViewProps) {
   const [jobDescription, setJobDescription] = useState('')
   const [candidateYaml, setCandidateYaml] = useState('')
@@ -178,10 +180,16 @@ export function LauncherView({
     setChatError(null)
     setChatBusy(true)
     const fileContext = files.map((file) => file.name).join(', ')
+    const context = [
+      profileResume ? `个人主页简历:\n${profileResume}` : '',
+      fileContext ? `已添加文件: ${fileContext}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n')
     const result = await client.chat(
       message,
       chatMessages,
-      fileContext || undefined
+      context || undefined
     )
     setChatBusy(false)
     if (result.kind === 'error') {
