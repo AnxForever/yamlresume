@@ -123,6 +123,69 @@ describe('ResumeTailoringAgent', () => {
     ])
   })
 
+  it('reports metadata from each rendered style preset', async () => {
+    const responses = [
+      {
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'Builds TypeScript systems',
+        requirements: [],
+        keywords: ['TypeScript'],
+      },
+      {
+        resume: candidate,
+        selectedEvidenceIds: [],
+        questions: [],
+        notes: [],
+      },
+    ]
+    const llm: LlmClient = {
+      async completeJson() {
+        return {
+          data: responses.shift(),
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+
+    const result = await new ResumeTailoringAgent(llm).run({
+      jobDescription: 'We need a TypeScript Engineer.',
+      candidate: { resume: candidate },
+      preferences: {
+        formats: ['yaml'],
+        styles: ['ats-compact', 'modern-classic', 'developer-two-column'],
+      },
+    })
+
+    expect(
+      result.variants.map(({ style, label, template }) => ({
+        style,
+        label,
+        template,
+      }))
+    ).toEqual([
+      { style: 'ats-compact', label: 'ATS Compact', template: 'jake' },
+      {
+        style: 'modern-classic',
+        label: 'Modern Classic',
+        template: 'moderncv-classic',
+      },
+      {
+        style: 'developer-two-column',
+        label: 'Developer Two Column',
+        template: 'deedy',
+      },
+    ])
+    expect(
+      result.variants.map((variant) => variant.artifacts[0]?.style)
+    ).toEqual(['ats-compact', 'modern-classic', 'developer-two-column'])
+  })
+
   it('accepts a wrapped, compatibly normalized job analysis', async () => {
     const responses = [
       {

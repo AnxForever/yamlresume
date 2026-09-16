@@ -44,7 +44,11 @@ import {
   INTERACTION_CONTROL_EXPECTED_SHAPE,
 } from '@/prompts'
 import { renderResumeVariant } from '@/rendering/artifacts'
-import { applyStylePreset, resolveStyleIDs } from '@/rendering/styles'
+import {
+  applyStylePreset,
+  getStylePreset,
+  resolveStyleIDs,
+} from '@/rendering/styles'
 import { buildResumeDiff } from '@/transparency/diff'
 import { buildQualityReport } from '@/transparency/quality'
 import { buildEvidenceIndex } from '@/validation/evidence'
@@ -448,15 +452,16 @@ export class ResumeTailoringAgent {
       throw new Error('At least one resume style variant is required')
     }
     const rendered = primaryVariant
-    const renderedVariants = styleIDs.map((style, index) => ({
-      style,
-      label: style,
-      template:
-        primaryResume.layouts?.find((layout) => layout.engine === 'latex')
-          ?.template ?? style,
-      artifacts: variants[index].artifacts,
-      failures: variants[index].failures,
-    }))
+    const renderedVariants = styleIDs.map((style, index) => {
+      const preset = getStylePreset(style)
+      return {
+        style,
+        label: preset.label,
+        template: preset.template,
+        artifacts: variants[index].artifacts,
+        failures: variants[index].failures,
+      }
+    })
     addTrace(trace, 'render_resume', 'completed', {
       styles: styleIDs.length,
       formats: formats.length,

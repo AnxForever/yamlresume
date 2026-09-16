@@ -46,7 +46,8 @@ Career Agent 不是一个“根据 JD 改几句话”的工具，而是一套围
 
 P0 已经具备可运行的后端骨架，但尚未达到“完成”状态。只有以下工作都有可复现证据后，才进入后续产品阶段：
 
-1. 多格式、多样式渲染完成系统测试，并修复样式 metadata 和 PDF 字体警告；
+1. 现有多格式、多样式渲染完成系统测试，并修复样式 metadata 和 PDF 字体警告；随后以
+   独立切片补齐求职场景的常见输入/输出格式，不把当前七种输出误写成最终范围；
 2. 用匿名真实案例建立 Eval Harness，记录事实保真、需求覆盖、Schema 成功率、延迟、token 和费用；
 3. Human-in-the-loop 可以暂停、持久化、接收回答并从正确阶段恢复；
 4. 异步 Run API、版本存储、取消/失败恢复和聚合观测完成验收；
@@ -59,7 +60,7 @@ P0 已经具备可运行的后端骨架，但尚未达到“完成”状态。�
 | ID | 用户结果 | 交付状态 | 当前证据 | 证据覆盖 | 下一道门禁 |
 | --- | --- | --- | --- | --- | --- |
 | RP-000 | Career Agent 理解长期目标、规划任务、选择能力并维护可恢复运行 | Planned | 产品边界和目标架构已记录，尚无顶层运行时 | Gap | 独立调研 Agent runtime、能力协议、状态模型、权限和 Eval；不得以简历工作流代替 |
-| RP-001 | 简历能力针对真实 JD 生成可信、可追溯的定制简历 | Implemented，尚未 operational | 后端工作流、同步/内存异步 Run、确定性 Eval、开发级 HITL 与单元/集成测试 | Partial | 完成 durable persistence、渲染硬化、匿名真实模型 Eval 和生产安全边界 |
+| RP-001 | 简历能力针对真实 JD 生成可信、可追溯的定制简历 | Implemented，尚未 operational | 后端工作流、同步/内存异步 Run、确定性 Eval、开发级 HITL、现有七格式渲染可靠性与单元/集成测试 | Partial | 完成常见文档格式扩展、durable persistence、匿名真实模型 Eval 和生产安全边界 |
 | RP-002 | Agent 主动提出必要问题，并让用户通过选项或合适的输入控件回答 | Implemented for development，尚不 durable | RA-011 Feature Brief、类型化控件、`needs_input`、回答 API、内存 checkpoint、恢复/幂等/隐私测试 | Partial | 增加事务版本锁、重启/多实例恢复、文件上传闭环、鉴权和前端可访问性验收 |
 | RP-003 | 根据目标岗位差距生成可执行、可动态调整的学习计划 | Idea | 用户需求和本路线图问题定义 | Gap | 调研学习闭环与衡量方法，定义能力矩阵、里程碑和 Eval |
 | RP-004 | 搜集可靠学习资料并辅导练习、项目和复盘 | Idea | 用户需求和来源/新鲜度原则 | Gap | 调研检索、引用、版权、新鲜度、难度匹配和反馈质量 |
@@ -136,12 +137,14 @@ completed / failed / cancelled
 
 ### P0：可信的 JD 定制简历
 
-- 多文件、图片、PDF、DOCX、Markdown、JSON、YAML 输入；
+- 多文件、图片、PDF、DOCX、Markdown、HTML、TXT、JSON、YAML 输入；按独立安全切片
+  增加 ODT、RTF 和旧版 DOC；
 - 候选人档案归一化和人工确认；
 - JD 结构化分析；
 - 证据 Grounding；
 - 简历生成、Diff、质量报告；
-- 多模板和多格式导出；
+- 多模板和多格式导出；除现有 YAML、JSON、Markdown、HTML、LaTeX、PDF、DOCX 外，
+  规划 TXT、RTF、ODT，并验证每种格式的样式保真与跨阅读器兼容；
 - Human-in-the-loop；
 - Eval、可观测性和费用统计。
 

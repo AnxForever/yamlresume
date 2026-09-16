@@ -259,6 +259,40 @@ function rendererIndex(
   return resume.layouts?.findIndex((layout) => layout.engine === engine) ?? -1
 }
 
+type TextOutputFormat = Exclude<OutputFormat, 'pdf' | 'docx'>
+
+function renderWithEngine(
+  resume: Resume,
+  engine: 'latex' | 'html' | 'markdown'
+): string {
+  const layoutIndex = rendererIndex(resume, engine)
+  if (layoutIndex < 0) {
+    throw new Error(`Missing ${engine} layout`)
+  }
+  return getResumeRenderer(resume, layoutIndex).render()
+}
+
+function renderTextContent(resume: Resume, format: TextOutputFormat): string {
+  let content: string
+  switch (format) {
+    case 'yaml':
+      content = stringify(resume, { lineWidth: 0 })
+      break
+    case 'json':
+      content = JSON.stringify(resume, null, 2)
+      break
+    case 'markdown':
+    case 'html':
+    case 'latex':
+      content = renderWithEngine(resume, format)
+      break
+  }
+  if (!content.trim()) {
+    throw new Error(`Empty ${format} artifact`)
+  }
+  return content
+}
+
 export async function renderResumeVariant(
   source: Resume,
   style: StylePresetID,
@@ -269,29 +303,21 @@ export async function renderResumeVariant(
   const artifacts: OutputArtifact[] = []
   const failures: ArtifactFailure[] = []
   const requested = [...new Set(options.formats)]
-  const yaml = stringify(resume, { lineWidth: 0 })
-  const json = JSON.stringify(resume, null, 2)
-  const markdownIndex = rendererIndex(resume, 'markdown')
-  const htmlIndex = rendererIndex(resume, 'html')
-  const latexIndex = rendererIndex(resume, 'latex')
-  const markdown =
-    markdownIndex >= 0 ? getResumeRenderer(resume, markdownIndex).render() : ''
-  const html =
-    htmlIndex >= 0 ? getResumeRenderer(resume, htmlIndex).render() : ''
-  const latex =
-    latexIndex >= 0 ? getResumeRenderer(resume, latexIndex).render() : ''
-  const textByFormat: Partial<Record<OutputFormat, string>> = {
-    yaml,
-    json,
-    markdown,
-    html,
-    latex,
+  const renderedText: Partial<Record<TextOutputFormat, string>> = {}
+  const textCache: Partial<Record<TextOutputFormat, string>> = {}
+  const getTextContent = (format: TextOutputFormat): string => {
+    const cached = textCache[format]
+    if (cached !== undefined) return cached
+    const content = renderTextContent(resume, format)
+    textCache[format] = content
+    return content
   }
 
   for (const format of requested) {
     const filename = `resume-${style}.${format}`
     try {
       if (format === 'pdf') {
+        const latex = getTextContent('latex')
         artifacts.push(
           binaryArtifact(
             format,
@@ -310,29 +336,25 @@ export async function renderResumeVariant(
           )
         )
       } else {
-        artifacts.push(
-          textArtifact(format, style, filename, textByFormat[format] ?? '')
-        )
+        const content = getTextContent(format)
+        renderedText[format] = content
+        artifacts.push(textArtifact(format, style, filename, content))
       }
-    } catch (error) {
+    } catch {
       failures.push({
         format,
         style,
         code: format === 'pdf' ? 'pdf_render_failed' : 'artifact_render_failed',
-        message: error instanceof Error ? error.message : String(error),
+        message: `Failed to render ${format.toUpperCase()} artifact.`,
       })
     }
   }
 
   return {
-    ...Object.fromEntries(
-      requested
-        .filter((format) => format in textByFormat)
-        .map((format) => [format, textByFormat[format]])
-    ),
+    ...renderedText,
     artifacts,
     failures,
-  } as RenderedResume
+  }
 }
 
 export { resumeToDocx }

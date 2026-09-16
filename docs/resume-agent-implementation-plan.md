@@ -24,8 +24,10 @@ personal data in a production database.
 - one-page or two-page target.
 - output formats and style presets.
 
-Candidate files can currently be normalized from text, structured documents,
-digital PDF, DOCX, HTML, Markdown, and supported image formats. The result is
+Candidate files can currently be normalized from declared text types, digital
+PDF, DOCX, HTML, Markdown, YAML, JSON, and supported image formats. ODT, RTF,
+and legacy DOC are planned but are not implemented; filename or caller-supplied
+MIME alone must not be treated as trusted binary identification. The result is
 marked for review. Asynchronous Runs can now pause after normalization for
 important structured questions, accept validated answers, and resume from JD
 analysis. This development loop is in-memory, so it must not be presented as
@@ -36,7 +38,9 @@ durable user confirmation across process restarts.
 - structured `JobSpec`.
 - requirement-to-evidence `MatchReport`.
 - generated and validated YAMLResume.
-- YAML, JSON, Markdown, HTML, LaTeX, PDF, and DOCX artifacts.
+- YAML, JSON, Markdown, HTML, LaTeX, PDF, and DOCX artifacts; TXT, RTF, and ODT
+  are planned as separately researched exporters rather than aliases of an
+  existing payload.
 - deterministic source-to-draft diff.
 - deterministic quality report.
 - follow-up questions and warnings.

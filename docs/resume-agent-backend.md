@@ -121,12 +121,14 @@ are documented in
 | ID | Capability | Delivery | Evidence | Coverage | Historical gap | Next acceptance evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | RA-001 | Validate candidate and API input | Implemented | Unit and API tests | Partial | None | Fuzz malformed YAML and oversized bodies |
+| RA-001B | Common resume/JD document ingestion | Planned | Current parser inventory and format roadmap | Gap | Inherited-unassessed | Research ODT/RTF/DOC adapters, content signatures, decompression limits and fixture corpus |
 | RA-002 | Structured JD analysis | Implemented | Zod contract, compatibility and Repair workflow tests | Partial | Backfilled | Golden JD evaluation set with field-level accuracy |
 | RA-003 | Candidate evidence index | Implemented | Stable source paths used by workflow test | Partial | Backfilled | Test every YAMLResume content section |
 | RA-004 | Requirement matching | Implemented | Deterministic lexical matcher | Gap | Inherited-unassessed | Compare lexical, embedding, and LLM reranking on eval set |
 | RA-005 | Evidence-constrained drafting | Implemented | Prompt policy, evidence-ID validation and Repair workflow test | Partial | Backfilled | Hallucination and omission evaluation suite |
 | RA-006 | Immutable-fact guard | Implemented | Rejects unsupported entries in tests | Partial | None | Add date/contact mutation cases and translated-name policy |
-| RA-007 | YAML/HTML/LaTeX rendering | Implemented | Uses `@yamlresume/core`; package tests | Partial | None | Add PDF compilation and page-count checks |
+| RA-007 | Multi-style YAML/JSON/Markdown/HTML/LaTeX/PDF/DOCX rendering | Implemented for development | Preset metadata, real renderer/DOCX and fake PDF compiler system tests | Partial | Backfilled | Real compiler sandbox, page-count/visual checks and cross-reader compatibility |
+| RA-007C | Common document export expansion | Planned | User requirement and RA-007B format matrix | Gap | None | Separate TXT, RTF and ODT Feature Briefs, exporters, fixtures and compatibility tests |
 | RA-008 | HTTP API | Implemented | End-to-end HTTP tests | Partial | None | Authentication, rate limits, request IDs, cancellation |
 | RA-009 | Asynchronous runs, persistence and resume versions | Implemented for development; not durable | In-memory `RunStore`, stage state machine, `POST/GET /v1/runs` and package/API tests | Partial | None | Add durable checkpoint storage, cancellation, retention and restart recovery |
 | RA-010 | Agent evaluation and operational observability | Implemented for development | Deterministic EvalCase runner, fictional fixture, safe aggregates and structured-output telemetry | Partial | None | Real-model adapter, authorized anonymized dataset, repeated sampling, cost and human calibration |
@@ -150,6 +152,23 @@ are documented in
 | Historical gap | Backfilled; inherited direct `safeParse` calls and JD-only fallback previously lacked shared Repair |
 | Remaining gap | None in RA-012 scope; anonymized real-provider rates and aggregate dashboards belong to RA-010 |
 | Last reviewed | 2026-09-16, Zod 4.3.6 and current `LlmClient` contract |
+
+### RA-007B evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | Style selection → deterministic render → encode/package → partial delivery |
+| User outcome | Every variant identifies its actual preset; successful artifacts are non-empty and verifiable; one format cannot leak or destroy the others |
+| Current state | Seven existing formats use stable first-seen order; text formats render inside their own failure scope; DOCX is a real OOXML package; PDF uses an injected compiler adapter |
+| Primary evidence | RFC 9512, IANA media registry, Node.js 22 Buffer, PKWARE APPNOTE, Microsoft WordprocessingML, reviewed 2026-09-16 |
+| Independent evidence | Current `@yamlresume/core` source/tests, `docx@9.7.1`, real local render/package tests and controlled failure experiments |
+| Decision | Adapt the existing deep render module; use preset as metadata source; retain only the real PDF compiler seam; reject framework/dependency expansion |
+| Edge cases | Duplicate formats, non-ASCII bytes, multiple styles, DOCX package signature, PDF default/override timeout, compiler leak, text-renderer leak, partial success, source immutability |
+| Acceptance | 18 focused tests across rendering/styles/workflow; complete Resume Agent package suite; TypeScript, Biome and diff checks |
+| Coverage | Covered for application-side contracts in RA-007B; RA-007 aggregate remains partial |
+| Historical gap | Backfilled; inherited rendering lacked adjacent tests and previously returned incorrect public metadata/raw error messages |
+| Remaining gap | Common TXT/RTF/ODT and legacy DOC ingestion are RA-001B/RA-007C; real PDF sandbox/page count and cross-reader DOCX/style fidelity are unverified |
+| Last reviewed | 2026-09-16, Node 22, `@yamlresume/core@0.12.2`, `docx@9.7.1` |
 
 ### RA-015A evidence detail
 
