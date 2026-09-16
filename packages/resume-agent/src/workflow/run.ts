@@ -46,6 +46,7 @@ export type RunAnswerErrorCode =
   | 'stale_interaction'
   | 'invalid_answer'
   | 'idempotency_conflict'
+  | 'answer_conflict'
   | 'run_checkpoint_missing'
 
 export class RunAnswerError extends Error {
@@ -59,6 +60,8 @@ export class RunAnswerError extends Error {
 }
 
 export interface StoredResumeAgentRun {
+  /** Internal store version; it is never copied into the public snapshot. */
+  revision: number
   snapshot: ResumeAgentRun
   request?: TailorResumeRequest
   checkpoint?: ResumeTailoringCheckpoint
@@ -75,7 +78,13 @@ interface InteractionAnswerReceipt {
 
 export interface RunStore {
   get(id: string): Promise<StoredResumeAgentRun | undefined>
-  save(run: StoredResumeAgentRun): Promise<void>
+  /** Atomically creates only an absent ID with revision 0. */
+  create(run: StoredResumeAgentRun): Promise<boolean>
+  /**
+   * Atomically replaces an existing record only when its revision matches the
+   * supplied revision. A successful write stores revision + 1.
+   */
+  compareAndSet(run: StoredResumeAgentRun): Promise<boolean>
 }
 
 export class InMemoryRunStore implements RunStore {
@@ -86,12 +95,26 @@ export class InMemoryRunStore implements RunStore {
     return run ? structuredClone(run) : undefined
   }
 
-  async save(run: StoredResumeAgentRun): Promise<void> {
+  async create(run: StoredResumeAgentRun): Promise<boolean> {
+    if (run.revision !== 0 || this.runs.has(run.snapshot.id)) return false
     this.runs.set(run.snapshot.id, structuredClone(run))
+    return true
+  }
+
+  async compareAndSet(run: StoredResumeAgentRun): Promise<boolean> {
+    const current = this.runs.get(run.snapshot.id)
+    if (!current || current.revision !== run.revision) return false
+    this.runs.set(
+      run.snapshot.id,
+      structuredClone({ ...run, revision: run.revision + 1 })
+    )
+    return true
   }
 }
 
 type ScheduledTask = () => Promise<void>
+
+const MAX_RUN_UPDATE_ATTEMPTS = 3
 
 const NEXT_STATUS: Record<AgentRunStatus, AgentRunStatus[]> = {
   queued: ['ingesting_inputs', 'failed'],
@@ -170,7 +193,12 @@ export class ResumeAgentRunService {
       createdAt: now,
       updatedAt: now,
     }
-    await this.store.save({ snapshot: run, request })
+    const created = await this.store.create({
+      revision: 0,
+      snapshot: run,
+      request,
+    })
+    if (!created) throw new Error('Run already exists')
     this.schedule(() => this.execute(run.id))
     return run
   }
@@ -278,12 +306,16 @@ export class ResumeAgentRunService {
         updatedAt: this.now().toISOString(),
         interactions: [remaining[0]],
       }
-      await this.store.save({
+      const updated = await this.store.compareAndSet({
+        ...current,
         snapshot,
         checkpoint,
         pendingInteractions: remaining,
         answerReceipts,
       })
+      if (!updated) {
+        return this.resolveAnswerConflict(id, answer, valueFingerprint)
+      }
       return snapshot
     }
 
@@ -294,9 +326,46 @@ export class ResumeAgentRunService {
       status: 'analyzing_jd',
       updatedAt: this.now().toISOString(),
     }
-    await this.store.save({ snapshot, checkpoint, answerReceipts })
+    const updated = await this.store.compareAndSet({
+      ...current,
+      snapshot,
+      checkpoint,
+      pendingInteractions: undefined,
+      answerReceipts,
+    })
+    if (!updated) {
+      return this.resolveAnswerConflict(id, answer, valueFingerprint)
+    }
     this.schedule(() => this.executeCompletion(id))
     return snapshot
+  }
+
+  private async resolveAnswerConflict(
+    id: string,
+    answer: InteractionAnswer,
+    valueFingerprint: string
+  ): Promise<ResumeAgentRun> {
+    const winner = await this.store.get(id)
+    const receipt = winner?.answerReceipts?.find(
+      (candidate) => candidate.idempotencyKey === answer.idempotencyKey
+    )
+    if (
+      winner &&
+      receipt?.interactionId === answer.interactionId &&
+      receipt.valueFingerprint === valueFingerprint
+    ) {
+      return winner.snapshot
+    }
+    if (receipt) {
+      throw new RunAnswerError(
+        'idempotency_conflict',
+        'Idempotency key was already used for a different answer'
+      )
+    }
+    throw new RunAnswerError(
+      'answer_conflict',
+      'Another answer was accepted before this answer'
+    )
   }
 
   private async executeCompletion(id: string): Promise<void> {
@@ -312,22 +381,36 @@ export class ResumeAgentRunService {
     }
   }
 
-  private async transition(id: string, status: AgentRunStatus): Promise<void> {
-    const current = await this.store.get(id)
-    if (!current) return
-    if (current.snapshot.status === status) return
-    if (!NEXT_STATUS[current.snapshot.status].includes(status)) {
-      throw new Error(
-        `Invalid run transition from ${current.snapshot.status} to ${status}`
-      )
+  private async updateStoredRun(
+    id: string,
+    derive: (current: StoredResumeAgentRun) => StoredResumeAgentRun | undefined
+  ): Promise<void> {
+    for (let attempt = 0; attempt < MAX_RUN_UPDATE_ATTEMPTS; attempt += 1) {
+      const current = await this.store.get(id)
+      if (!current) return
+      const next = derive(current)
+      if (!next) return
+      if (await this.store.compareAndSet(next)) return
     }
-    await this.store.save({
-      ...current,
-      snapshot: {
-        ...current.snapshot,
-        status,
-        updatedAt: this.now().toISOString(),
-      },
+    throw new Error('Run update conflict')
+  }
+
+  private async transition(id: string, status: AgentRunStatus): Promise<void> {
+    await this.updateStoredRun(id, (current) => {
+      if (current.snapshot.status === status) return undefined
+      if (!NEXT_STATUS[current.snapshot.status].includes(status)) {
+        throw new Error(
+          `Invalid run transition from ${current.snapshot.status} to ${status}`
+        )
+      }
+      return {
+        ...current,
+        snapshot: {
+          ...current.snapshot,
+          status,
+          updatedAt: this.now().toISOString(),
+        },
+      }
     })
   }
 
@@ -335,12 +418,10 @@ export class ResumeAgentRunService {
     id: string,
     checkpoint: ResumeTailoringCheckpoint
   ): Promise<void> {
-    const current = await this.store.get(id)
-    if (!current) return
-    await this.store.save({
-      snapshot: current.snapshot,
+    await this.updateStoredRun(id, (current) => ({
+      ...current,
       checkpoint,
-    })
+    }))
   }
 
   private async pause(
@@ -348,58 +429,60 @@ export class ResumeAgentRunService {
     checkpoint: ResumeTailoringCheckpoint,
     interactions: InteractionRequest[]
   ): Promise<void> {
-    const current = await this.store.get(id)
-    if (!current) return
-    if (!NEXT_STATUS[current.snapshot.status].includes('needs_input')) {
-      throw new Error(`Cannot pause run from ${current.snapshot.status}`)
-    }
-    await this.store.save({
-      snapshot: {
-        ...current.snapshot,
-        status: 'needs_input',
-        updatedAt: this.now().toISOString(),
-        interactions: [interactions[0]],
-      },
-      checkpoint,
-      pendingInteractions: interactions,
+    await this.updateStoredRun(id, (current) => {
+      if (!NEXT_STATUS[current.snapshot.status].includes('needs_input')) {
+        throw new Error(`Cannot pause run from ${current.snapshot.status}`)
+      }
+      return {
+        ...current,
+        snapshot: {
+          ...current.snapshot,
+          status: 'needs_input',
+          updatedAt: this.now().toISOString(),
+          interactions: [interactions[0]],
+        },
+        checkpoint,
+        pendingInteractions: interactions,
+      }
     })
   }
 
   private async fail(id: string): Promise<void> {
-    const current = await this.store.get(id)
-    if (!current || !NEXT_STATUS[current.snapshot.status].includes('failed')) {
-      return
-    }
-    await this.store.save({
-      ...current,
-      snapshot: {
-        ...current.snapshot,
-        status: 'failed',
-        updatedAt: this.now().toISOString(),
-        interactions: undefined,
-        error: {
-          code: 'agent_run_failed',
-          message: 'The resume tailoring run failed.',
+    await this.updateStoredRun(id, (current) => {
+      if (!NEXT_STATUS[current.snapshot.status].includes('failed')) {
+        return undefined
+      }
+      return {
+        ...current,
+        snapshot: {
+          ...current.snapshot,
+          status: 'failed',
+          updatedAt: this.now().toISOString(),
+          interactions: undefined,
+          error: {
+            code: 'agent_run_failed',
+            message: 'The resume tailoring run failed.',
+          },
         },
-      },
+      }
     })
   }
 
   private async finish(id: string, result: TailorResumeResult): Promise<void> {
-    const current = await this.store.get(id)
-    if (!current) return
-    if (!NEXT_STATUS[current.snapshot.status].includes('completed')) {
-      throw new Error(`Cannot complete run from ${current.snapshot.status}`)
-    }
-    await this.store.save({
-      ...current,
-      snapshot: {
-        ...current.snapshot,
-        status: 'completed',
-        updatedAt: this.now().toISOString(),
-        interactions: undefined,
-        result,
-      },
+    await this.updateStoredRun(id, (current) => {
+      if (!NEXT_STATUS[current.snapshot.status].includes('completed')) {
+        throw new Error(`Cannot complete run from ${current.snapshot.status}`)
+      }
+      return {
+        ...current,
+        snapshot: {
+          ...current.snapshot,
+          status: 'completed',
+          updatedAt: this.now().toISOString(),
+          interactions: undefined,
+          result,
+        },
+      }
     })
   }
 }

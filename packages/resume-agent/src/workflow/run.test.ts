@@ -26,7 +26,11 @@ import { describe, expect, it } from 'vitest'
 
 import type { LlmClient } from '@/contracts'
 import { ResumeTailoringAgent } from '@/workflow/agent'
-import { InMemoryRunStore, ResumeAgentRunService } from '@/workflow/run'
+import {
+  InMemoryRunStore,
+  ResumeAgentRunService,
+  type StoredResumeAgentRun,
+} from '@/workflow/run'
 
 const candidate = {
   content: {
@@ -66,7 +70,200 @@ function fakeAgent(): ResumeTailoringAgent {
   return new ResumeTailoringAgent(llm)
 }
 
+function questionAgent(): ResumeTailoringAgent {
+  const llm: LlmClient = {
+    async completeJson<T>() {
+      return {
+        data: {
+          resume: candidate,
+          sourceArtifactIds: ['candidate-source'],
+          questions: [
+            {
+              field: 'content.basics.name',
+              question: 'What is your full name?',
+              reason: 'The source name must be confirmed.',
+              severity: 'blocking',
+            },
+          ],
+          warnings: [],
+        } as T,
+        metadata: {
+          provider: 'fake',
+          model: 'fake-model',
+          durationMs: 1,
+          attempt: 1,
+        },
+      }
+    },
+  }
+  return new ResumeTailoringAgent(llm)
+}
+
+class ContendedRunStore extends InMemoryRunStore {
+  successfulCompareAndSets = 0
+  private blockedReads = 0
+  private barrier: Promise<void> = Promise.resolve()
+  private releaseBarrier: (() => void) | undefined
+
+  blockNextGets(count: number): void {
+    this.blockedReads = count
+    this.barrier = new Promise<void>((resolve) => {
+      this.releaseBarrier = resolve
+    })
+  }
+
+  resetSuccessfulCompareAndSets(): void {
+    this.successfulCompareAndSets = 0
+  }
+
+  override async get(id: string): Promise<StoredResumeAgentRun | undefined> {
+    const run = await super.get(id)
+    if (this.blockedReads > 0) {
+      this.blockedReads -= 1
+      if (this.blockedReads === 0) this.releaseBarrier?.()
+      await this.barrier
+    }
+    return run
+  }
+
+  override async compareAndSet(run: StoredResumeAgentRun): Promise<boolean> {
+    const updated = await super.compareAndSet(run)
+    if (updated) this.successfulCompareAndSets += 1
+    return updated
+  }
+}
+
+function storedRun(id: string): StoredResumeAgentRun {
+  return {
+    revision: 0,
+    snapshot: {
+      id,
+      status: 'queued',
+      createdAt: '2026-09-16T12:00:00.000Z',
+      updatedAt: '2026-09-16T12:00:00.000Z',
+    },
+  }
+}
+
+describe('InMemoryRunStore', () => {
+  it('creates a run only when its ID does not exist', async () => {
+    const store = new InMemoryRunStore()
+    const first = storedRun('run-create')
+
+    expect(await store.create(first)).toBe(true)
+    expect(
+      await store.create({
+        ...first,
+        snapshot: { ...first.snapshot, status: 'failed' },
+      })
+    ).toBe(false)
+    expect(await store.get('run-create')).toEqual(first)
+
+    const invalidInitialRevision = {
+      ...storedRun('run-invalid-initial-revision'),
+      revision: 1,
+    }
+    expect(await store.create(invalidInitialRevision)).toBe(false)
+    expect(await store.get('run-invalid-initial-revision')).toBeUndefined()
+  })
+
+  it('atomically updates a matching revision and increments it', async () => {
+    const store = new InMemoryRunStore()
+    const first = storedRun('run-cas-match')
+    await store.create(first)
+
+    expect(
+      await store.compareAndSet({
+        ...first,
+        snapshot: { ...first.snapshot, status: 'ingesting_inputs' },
+      })
+    ).toBe(true)
+    expect(await store.get('run-cas-match')).toEqual({
+      ...first,
+      revision: 1,
+      snapshot: { ...first.snapshot, status: 'ingesting_inputs' },
+    })
+  })
+
+  it('rejects a stale revision without changing the stored run', async () => {
+    const store = new InMemoryRunStore()
+    const stale = storedRun('run-cas-stale')
+    await store.create(stale)
+    await store.compareAndSet({
+      ...stale,
+      snapshot: { ...stale.snapshot, status: 'ingesting_inputs' },
+    })
+    const winner = await store.get('run-cas-stale')
+
+    expect(
+      await store.compareAndSet({
+        ...stale,
+        snapshot: { ...stale.snapshot, status: 'failed' },
+      })
+    ).toBe(false)
+    expect(await store.get('run-cas-stale')).toEqual(winner)
+  })
+
+  it('isolates create, compare-and-set, and get values by cloning', async () => {
+    const store = new InMemoryRunStore()
+    const created = storedRun('run-clone')
+    await store.create(created)
+    created.snapshot.status = 'failed'
+
+    const firstRead = await store.get('run-clone')
+    expect(firstRead?.snapshot.status).toBe('queued')
+    if (!firstRead) throw new Error('Expected stored run')
+    firstRead.snapshot.status = 'failed'
+    expect((await store.get('run-clone'))?.snapshot.status).toBe('queued')
+
+    const update = await store.get('run-clone')
+    if (!update) throw new Error('Expected stored run')
+    update.snapshot.status = 'ingesting_inputs'
+    await store.compareAndSet(update)
+    update.snapshot.status = 'failed'
+
+    expect(await store.get('run-clone')).toEqual({
+      ...storedRun('run-clone'),
+      revision: 1,
+      snapshot: {
+        ...storedRun('run-clone').snapshot,
+        status: 'ingesting_inputs',
+      },
+    })
+  })
+})
+
 describe('ResumeAgentRunService', () => {
+  it('keeps the revision and trusted workflow data out of public runs', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const store = new InMemoryRunStore()
+    const service = new ResumeAgentRunService(fakeAgent(), {
+      store,
+      idFactory: () => 'run-private-state',
+      schedule: (task) => tasks.push(task),
+    })
+
+    await service.start({
+      jobDescription: 'Private job description',
+      candidate: { resume: candidate },
+    })
+
+    const stored = await store.get('run-private-state')
+    expect(stored?.revision).toBe(0)
+    expect(stored?.request?.jobDescription).toBe('Private job description')
+    expect(await service.get('run-private-state')).toEqual(stored?.snapshot)
+    expect(await service.get('run-private-state')).not.toHaveProperty(
+      'revision'
+    )
+    expect(await service.get('run-private-state')).not.toHaveProperty('request')
+    expect(await service.get('run-private-state')).not.toHaveProperty(
+      'checkpoint'
+    )
+    expect(await service.get('run-private-state')).not.toHaveProperty(
+      'answerReceipts'
+    )
+  })
+
   it('returns a queued run before executing it to completion', async () => {
     const tasks: Array<() => Promise<void>> = []
     const service = new ResumeAgentRunService(fakeAgent(), {
@@ -394,6 +591,169 @@ describe('ResumeAgentRunService', () => {
       )
     ).toHaveLength(2)
     expect(modelCalls).toBe(3)
+  })
+
+  it('accepts two concurrent identical answers only once', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const store = new ContendedRunStore()
+    const service = new ResumeAgentRunService(questionAgent(), {
+      store,
+      idFactory: () => 'run-concurrent-replay',
+      schedule: (task) => tasks.push(task),
+    })
+    await service.start({
+      jobDescription: 'We need a TypeScript Engineer.',
+      candidate: {
+        resume: candidate,
+        files: [
+          {
+            id: 'candidate-source',
+            filename: 'candidate.txt',
+            text: 'Candidate profile whose name must be confirmed.',
+          },
+        ],
+      },
+    })
+    await tasks[0]?.()
+    store.resetSuccessfulCompareAndSets()
+    store.blockNextGets(2)
+    const answer = {
+      interactionId: 'candidate-normalization:1',
+      idempotencyKey: 'concurrent-answer-1',
+      value: 'Grace Hopper',
+    }
+
+    const [first, replay] = await Promise.all([
+      service.answer('run-concurrent-replay', answer),
+      service.answer('run-concurrent-replay', answer),
+    ])
+
+    expect(replay).toEqual(first)
+    expect(first.status).toBe('analyzing_jd')
+    expect(store.successfulCompareAndSets).toBe(1)
+    expect(tasks).toHaveLength(2)
+    expect(
+      (await store.get('run-concurrent-replay'))?.answerReceipts
+    ).toHaveLength(1)
+  })
+
+  it('rejects concurrent different answers that reuse an idempotency key', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const store = new ContendedRunStore()
+    const service = new ResumeAgentRunService(questionAgent(), {
+      store,
+      idFactory: () => 'run-concurrent-idempotency-conflict',
+      schedule: (task) => tasks.push(task),
+    })
+    await service.start({
+      jobDescription: 'We need a TypeScript Engineer.',
+      candidate: {
+        resume: candidate,
+        files: [
+          {
+            id: 'candidate-source',
+            filename: 'candidate.txt',
+            text: 'Candidate profile whose name must be confirmed.',
+          },
+        ],
+      },
+    })
+    await tasks[0]?.()
+    store.resetSuccessfulCompareAndSets()
+    store.blockNextGets(2)
+
+    const outcomes = await Promise.allSettled([
+      service.answer('run-concurrent-idempotency-conflict', {
+        interactionId: 'candidate-normalization:1',
+        idempotencyKey: 'reused-answer-key',
+        value: 'Grace Hopper',
+      }),
+      service.answer('run-concurrent-idempotency-conflict', {
+        interactionId: 'candidate-normalization:1',
+        idempotencyKey: 'reused-answer-key',
+        value: 'Ada Byron',
+      }),
+    ])
+
+    expect(
+      outcomes.filter(({ status }) => status === 'fulfilled')
+    ).toHaveLength(1)
+    expect(outcomes.filter(({ status }) => status === 'rejected')).toEqual([
+      expect.objectContaining({
+        reason: expect.objectContaining({ code: 'idempotency_conflict' }),
+      }),
+    ])
+    expect(store.successfulCompareAndSets).toBe(1)
+    expect(tasks).toHaveLength(2)
+    const stored = await store.get('run-concurrent-idempotency-conflict')
+    expect(stored?.snapshot.status).toBe('analyzing_jd')
+    expect(stored?.checkpoint?.candidate.content.basics.name).toMatch(
+      /^(Grace Hopper|Ada Byron)$/
+    )
+    expect(stored?.answerReceipts).toHaveLength(1)
+    expect(stored?.request?.jobDescription).toBe(
+      'We need a TypeScript Engineer.'
+    )
+    expect(stored?.revision).toBeGreaterThan(0)
+    const publicRun = await service.get('run-concurrent-idempotency-conflict')
+    expect(publicRun).toEqual(stored?.snapshot)
+    expect(publicRun).not.toHaveProperty('revision')
+    expect(publicRun).not.toHaveProperty('request')
+    expect(publicRun).not.toHaveProperty('checkpoint')
+    expect(publicRun).not.toHaveProperty('answerReceipts')
+  })
+
+  it('accepts only one of two different concurrent answer commands', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const store = new ContendedRunStore()
+    const service = new ResumeAgentRunService(questionAgent(), {
+      store,
+      idFactory: () => 'run-concurrent-answer-conflict',
+      schedule: (task) => tasks.push(task),
+    })
+    await service.start({
+      jobDescription: 'We need a TypeScript Engineer.',
+      candidate: {
+        resume: candidate,
+        files: [
+          {
+            id: 'candidate-source',
+            filename: 'candidate.txt',
+            text: 'Candidate profile whose name must be confirmed.',
+          },
+        ],
+      },
+    })
+    await tasks[0]?.()
+    store.resetSuccessfulCompareAndSets()
+    store.blockNextGets(2)
+
+    const outcomes = await Promise.allSettled([
+      service.answer('run-concurrent-answer-conflict', {
+        interactionId: 'candidate-normalization:1',
+        idempotencyKey: 'answer-command-a',
+        value: 'Grace Hopper',
+      }),
+      service.answer('run-concurrent-answer-conflict', {
+        interactionId: 'candidate-normalization:1',
+        idempotencyKey: 'answer-command-b',
+        value: 'Ada Byron',
+      }),
+    ])
+
+    expect(
+      outcomes.filter(({ status }) => status === 'fulfilled')
+    ).toHaveLength(1)
+    expect(outcomes.filter(({ status }) => status === 'rejected')).toEqual([
+      expect.objectContaining({
+        reason: expect.objectContaining({ code: 'answer_conflict' }),
+      }),
+    ])
+    expect(store.successfulCompareAndSets).toBe(1)
+    expect(tasks).toHaveLength(2)
+    expect(
+      (await store.get('run-concurrent-answer-conflict'))?.answerReceipts
+    ).toHaveLength(1)
   })
 
   it('rejects a stale interaction without changing the paused run', async () => {

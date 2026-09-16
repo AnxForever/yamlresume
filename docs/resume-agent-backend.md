@@ -106,12 +106,15 @@ to an existing `content.*` path, the resulting candidate is revalidated by
 `ResumeSchema`, and execution resumes at JD analysis without repeating input
 extraction or normalization.
 
-This is a development proof, not durable orchestration. The default adapter is
-in-memory and has no transactional compare-and-set, restart recovery,
-multi-instance coordination, authentication, retention, or binary file-answer
-loop. Completed public snapshots intentionally contain the generated resume
-and artifacts for the user; source requests, checkpoints, raw answers, and raw
-model completions remain private.
+This is a development proof, not durable orchestration. The default adapter
+uses an in-memory revision and atomic compare-and-set within one Node.js
+process. It has no restart recovery, multi-instance coordination, durable task
+queue, authentication, retention, or binary file-answer loop. Completed public
+snapshots intentionally contain the generated resume and artifacts for the
+user; revisions, source requests, checkpoints, answer receipts, raw answers,
+and raw model completions remain private. The concurrency contract and limits
+are documented in
+[`resume-agent-run-store-concurrency.zh-CN.md`](./resume-agent-run-store-concurrency.zh-CN.md).
 
 ## Feature evidence ledger
 
@@ -129,6 +132,7 @@ model completions remain private.
 | RA-010 | Agent evaluation and operational observability | Implemented for development | Deterministic EvalCase runner, fictional fixture, safe aggregates and structured-output telemetry | Partial | None | Real-model adapter, authorized anonymized dataset, repeated sampling, cost and human calibration |
 | RA-011 | Human-in-the-loop clarification | Implemented for development; not durable | Typed controls, `needs_input`, checkpoint, answer endpoint, validation/idempotency and resume tests | Partial | None | Durable transactional store, restart recovery, authentication, file-answer loop and later-stage interrupts |
 | RA-012 | Structured-output validation and bounded repair | Implemented | Shared module, three-boundary workflow tests, safe API error test | Covered | Backfilled | Operational provider comparison is tracked by RA-010 |
+| RA-015A | Revision-safe RunStore and atomic answer acceptance | Implemented for development; not durable | Atomic in-memory create/CAS, deterministic concurrent answer tests, clone and privacy tests | Covered for one process | Backfilled | Durable conditional-write adapter, transactional task dispatch and restart recovery |
 
 ### RA-012 evidence detail
 
@@ -147,6 +151,23 @@ model completions remain private.
 | Remaining gap | None in RA-012 scope; anonymized real-provider rates and aggregate dashboards belong to RA-010 |
 | Last reviewed | 2026-09-16, Zod 4.3.6 and current `LlmClient` contract |
 
+### RA-015A evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | Run creation and every stored state transition use create or revision compare-and-set |
+| User outcome | Concurrent answers cannot silently overwrite each other or schedule completion twice |
+| Current state | `InMemoryRunStore` atomically checks revision and increments it; answer CAS losers re-read the winner |
+| Primary evidence | RFC 9110 conditional request and idempotency semantics, reviewed 2026-09-16 |
+| Independent evidence | AWS DynamoDB optimistic locking and Builders' Library idempotent API guidance plus deterministic local contention tests |
+| Decision | Adapt versioned conditional writes to the existing Store port; reject last-writer-wins and blind answer retries |
+| Edge cases | Duplicate create, matching/stale revision, clone isolation, same-key same/different answer, different competing commands, retained checkpoint/receipt/request |
+| Acceptance | Focused Run tests, complete agent package tests, TypeScript, Biome and diff checks |
+| Coverage | Covered for one `InMemoryRunStore` instance in one process |
+| Historical gap | Backfilled; inherited `get → save` paths had no concurrent-answer evidence |
+| Remaining gap | No database, process restart, multi-instance coordination, transactional outbox or operational concurrency evidence |
+| Last reviewed | 2026-09-16 |
+
 ## Learning roadmap
 
 ### Milestone 1: Reliable single run
@@ -162,9 +183,10 @@ model-provider abstraction.
 ### Milestone 2: Human-in-the-loop runs
 
 - Development slice delivered: stable Run IDs, `needs_input`, typed controls,
-  safe answer application, idempotency receipts, and resume from JD analysis.
-- Next, replace the in-memory adapter with durable, versioned checkpoint
-  storage and prove restart and concurrent-answer recovery.
+  safe answer application, idempotency receipts, revision-safe in-memory
+  updates, and resume from JD analysis.
+- Next, implement the versioned Store contract with durable conditional writes
+  and transactional task dispatch, then prove restart recovery.
 - Extend interrupts only when a separately researched later-stage use case
   requires them.
 - Keep showing source-to-draft diff and evidence links in completed results.

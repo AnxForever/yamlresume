@@ -186,6 +186,8 @@ Delivered:
 
 - `RunStore` port, `InMemoryRunStore` adapter, and public run snapshots that do
   not expose source requests or raw errors;
+- versioned atomic create and compare-and-set semantics for every stored state
+  transition inside one adapter instance;
 - explicit queued, stage-driven, completed, and failed state transitions;
 - `POST /v1/runs` and `GET /v1/runs/{id}`;
 - request IDs and a data-safe terminal error state;
@@ -238,8 +240,8 @@ Verified tests:
 
 Known limits:
 
-- answer receipt updates are not transactionally safe under concurrent
-  requests; a durable adapter needs version or compare-and-set semantics;
+- the in-memory adapter now makes answer receipt/checkpoint updates atomic
+  within one process, but no durable adapter has proven the same contract;
 - `date` and `date_range` intentionally accept only day-precision
   `YYYY-MM-DD`; year/month-aware controls remain to be designed;
 - `file` validates references only; binary upload and re-normalization are not
@@ -249,6 +251,48 @@ Known limits:
   not yet an independently proven capability;
 - only post-normalization interruption is implemented; later-stage approvals
   require their own Feature Brief and Eval.
+
+### Unit 7C — Revision-safe Store and concurrent answer acceptance
+
+**Status:** implemented for development in one process; not durable or
+operational.
+
+Delivered:
+
+- an internal monotonic revision and separate atomic `create` / `compareAndSet`
+  Store operations;
+- a real synchronous check-and-set critical section in `InMemoryRunStore`, with
+  clone isolation at every Store boundary;
+- bounded CAS retries for safely recomputable workflow state transitions;
+- no blind retry for answer intent: CAS losers re-read the winner and resolve
+  to idempotent success, `idempotency_conflict`, or `answer_conflict`;
+- full-record derivation so concurrent updates do not erase requests,
+  checkpoints, receipts, or public state;
+- no revision or trusted workflow state in public Run snapshots.
+
+Verified tests:
+
+- create collision, matching revision, stale revision, and clone isolation;
+- concurrent identical answers produce one logical write and one completion
+  schedule;
+- same-key/different-value and different-command races accept one winner and
+  return stable domain conflicts;
+- conflict winners retain checkpoint, receipt, request, and public status;
+- all earlier sequential pause, answer, resume, and completion tests continue
+  to pass.
+
+Known limits:
+
+- records and queued tasks remain in memory and do not survive restart;
+- CAS is scoped to one Store instance and does not coordinate processes;
+- CAS success and completion-task scheduling are not one durable transaction;
+- a future adapter must use a database conditional write, not a read followed
+  by an unconditional update;
+- multi-region last-writer-wins storage does not satisfy this contract.
+
+Research, state transitions, RED → GREEN evidence, and reversal criteria are
+recorded in
+[`resume-agent-run-store-concurrency.zh-CN.md`](./resume-agent-run-store-concurrency.zh-CN.md).
 
 ### Unit 8 — Backend documentation and completion audit
 
