@@ -309,6 +309,11 @@ Provider message 和异常正文均未写入报告或文档。
 这组重复样本显示匹配器修复消除了上一轮两个确定性的 coverage assertion failure，但 Provider
 执行稳定性仍不足以宣称生产质量；当前证据适合指导下一轮诊断，不适合作为成功率门槛。
 
+随后对三个 case 各做一次受控错误分类复跑，三者均能完成（Grafana requirement/must-have
+`0.36/0.47`、Cloudflare `0.87/0.85`、Anthropic `0.47/0.44`）。这说明重复 campaign 中的两次
+`execution_failed` 更可能是 Provider/网络瞬态，而非稳定的业务代码回归；仍需更长序列、重试
+分布和运行监控后才能把该结论提升为 Operational 证据。
+
 ## 10. 验收门禁
 
 ```text
