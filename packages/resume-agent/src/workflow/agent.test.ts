@@ -293,6 +293,62 @@ describe('ResumeTailoringAgent', () => {
     expect(requests[1]?.user).toContain('Build reliable TypeScript platforms.')
   })
 
+  it('normalizes an omitted empty education collection from file input', async () => {
+    const responses = [
+      {
+        resume: {
+          content: {
+            basics: candidate.content.basics,
+            skills: [{ name: 'TypeScript' }],
+            projects: candidate.content.projects,
+          },
+          layouts: candidate.layouts,
+        },
+        sourceArtifactIds: ['artifact.candidate.txt'],
+        questions: [],
+        warnings: [],
+      },
+      {
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'Builds TypeScript systems',
+        requirements: [],
+        keywords: ['TypeScript'],
+      },
+      {
+        resume: candidate,
+        selectedEvidenceIds: [],
+        questions: [],
+        notes: [],
+      },
+    ]
+    const llm: LlmClient = {
+      async completeJson() {
+        return {
+          data: responses.shift(),
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+
+    const result = await new ResumeTailoringAgent(llm).run({
+      candidate: {
+        files: [{ filename: 'candidate.txt', text: 'Ada Lovelace' }],
+      },
+      jobDescription: 'We need a TypeScript Engineer.',
+      preferences: { formats: ['yaml'] },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.resume.content.education).toEqual([])
+    expect(result.resume.content.skills).toBeUndefined()
+  })
+
   it('reports metadata from each rendered style preset', async () => {
     const responses = [
       {

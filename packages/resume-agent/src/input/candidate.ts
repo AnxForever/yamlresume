@@ -32,6 +32,7 @@ import type {
 import { CandidateNormalizationResponseSchema } from '@/contracts'
 import { completeStructuredOutput } from '@/llm/structured-output'
 import { INTERACTION_CONTROL_EXPECTED_SHAPE } from '@/prompts'
+import { asRecord } from '@/resume-sections'
 import {
   CandidateValidationError,
   DraftValidationError,
@@ -91,6 +92,36 @@ function imageAttachments(artifacts: ExtractedArtifact[]) {
     }))
 }
 
+function normalizeCandidateResumeShape(value: unknown): unknown {
+  const resume = asRecord(value)
+  const content = asRecord(resume?.content)
+  if (!resume || !content) return value
+
+  let changed = false
+  const normalizedContent = { ...content }
+  if (!('education' in content)) {
+    normalizedContent.education = []
+    changed = true
+  }
+  const skills = Array.isArray(content.skills)
+    ? content.skills.filter((item) => {
+        const skill = asRecord(item)
+        return (
+          typeof skill?.name === 'string' &&
+          typeof skill.level === 'string' &&
+          skill.level.trim().length > 0
+        )
+      })
+    : undefined
+
+  if (skills !== undefined) {
+    normalizedContent.skills = skills.length > 0 ? skills : undefined
+    changed = true
+  }
+
+  return changed ? { ...resume, content: normalizedContent } : value
+}
+
 export async function normalizeCandidateInput(
   llm: LlmClient,
   input: CandidateInput,
@@ -135,7 +166,7 @@ export async function normalizeCandidateInput(
   let normalized: ReturnType<typeof parseCandidateResume>
   try {
     normalized = parseCandidateResume({
-      resume: parsed.resume,
+      resume: normalizeCandidateResumeShape(parsed.resume),
       files: [],
     })
   } catch (error) {
