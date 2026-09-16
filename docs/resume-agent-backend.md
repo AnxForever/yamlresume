@@ -138,7 +138,7 @@ private. See the
 | ID | Capability | Delivery | Evidence | Coverage | Historical gap | Next acceptance evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | RA-001 | Validate candidate and API input | Implemented | Unit and API tests | Partial | None | Fuzz malformed YAML and oversized bodies |
-| RA-001B | Common resume/JD document ingestion | Partial implementation; trusted detection and ODT extraction enabled for development | Content signatures, fatal text decoding, bounded DOCX/ODT ZIP inspection, namespace-aware ODT extraction, stable API/Run errors and adversarial tests | Partial | Backfilled | RTF extractor, CFB/DOC isolation, broader corpus, fuzz and operational limits |
+| RA-001B | Common resume/JD document ingestion | Partial implementation; trusted detection plus ODT/RTF extraction enabled for development | Content signatures, fatal text decoding, bounded DOCX/ODT ZIP inspection, namespace-aware ODT extraction, bounded RTF scanner, stable API/Run errors and adversarial tests | Partial | Backfilled | RTF real-provider/Run-restart evidence, CFB/DOC isolation, broader corpus, fuzz and operational limits |
 | RA-002 | Structured JD analysis | Implemented | Zod contract, compatibility and Repair workflow tests | Partial | Backfilled | Golden JD evaluation set with field-level accuracy |
 | RA-003 | Candidate evidence index | Implemented | Stable source paths used by workflow test | Partial | Backfilled | Test every YAMLResume content section |
 | RA-004 | Requirement matching | Implemented | Deterministic lexical matcher | Gap | Inherited-unassessed | Compare lexical, embedding, and LLM reranking on eval set |
@@ -206,7 +206,7 @@ private. See the
 | Acceptance | 55 focused evaluation tests, human-review module 100% coverage, TypeScript, package build, targeted Biome and safe real-run failure reports |
 | Coverage | Partial: application contracts and public-source development corpus are covered; model quality and representative candidate distribution are not |
 | Historical gap | Backfilled; earlier RA-010 relied on one fictional case and model-self-referential coverage without job-keyword gold assertions |
-| Remaining gap | Default Node fetch needs an experimental env-proxy switch here; current OpenAI credentials return 401 and Gemini-compatible configuration returns 400; no scored repeated baseline, token/cost rollup, authorized anonymized candidate set, held-out set, assignment UI, authorized blind pilot, chance-corrected IAA/CI, adjudication, review persistence or judge calibration |
+| Remaining gap | Default Node fetch needs an experimental env-proxy switch here; repeated DeepSeek observations exist but quality and execution stability are below acceptance; token/cost rollup, authorized anonymized candidate set, held-out set, assignment UI, authorized blind pilot, chance-corrected IAA/CI, adjudication, review persistence or judge calibration remain |
 | Last reviewed | 2026-09-16; source revisions and exact runtime evidence are in `resume-agent-public-job-evaluation.zh-CN.md` |
 
 ### RA-012 evidence detail
@@ -240,7 +240,7 @@ private. See the
 | Acceptance | 18 focused tests across rendering/styles/workflow; complete Resume Agent package suite; TypeScript, Biome and diff checks |
 | Coverage | Covered for application-side contracts in RA-007B; RA-007 aggregate remains partial |
 | Historical gap | Backfilled; inherited rendering lacked adjacent tests and previously returned incorrect public metadata/raw error messages |
-| Remaining gap | RTF/legacy DOC ingestion remains RA-001B; ODT input is development-grade and still lacks broader corpus/fuzz evidence; real PDF sandbox/page count and cross-reader DOCX/style fidelity are unverified |
+| Remaining gap | RTF/legacy DOC ingestion still has cross-provider/corpus gaps under RA-001B; ODT input is development-grade and still lacks broader corpus/fuzz evidence; real PDF sandbox/page count and cross-reader DOCX/style fidelity are unverified |
 | Last reviewed | 2026-09-16, Node 22, `@yamlresume/core@0.12.2`, `docx@9.7.1` |
 
 ### RA-007C evidence detail
