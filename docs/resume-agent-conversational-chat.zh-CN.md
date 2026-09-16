@@ -51,6 +51,10 @@ anonymous -> authenticated chat -> readyToGenerate hint
 
 ## Evidence ledger
 
+### Security follow-up
+
+个人主页简历当前仅保存在浏览器 `localStorage`，只适合作为本地开发 Beta：它不是机密存储，且退出登录不会自动清除。下一计划 RA-017-S 将迁移到按用户隔离的服务端 profile 存储，增加加密、删除和会话失效策略；在该切片完成前不得宣称生产级隐私保护。
+
 | Field | Evidence |
 | --- | --- |
 | Feature | 先对话收集意图，再进入简历生成工作流 |
