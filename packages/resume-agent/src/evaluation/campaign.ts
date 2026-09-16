@@ -32,6 +32,9 @@ import type {
 } from '@/evaluation/contracts'
 import { runEvaluation } from '@/evaluation/runner'
 
+const P95_PERCENTILE = 0.95
+const WILSON_95_Z_SCORE = 1.959_963_984_540_054
+
 const CampaignIdentifierSchema = z
   .string()
   .trim()
@@ -57,15 +60,38 @@ export type EvalCampaignConfigurationData = z.output<
   typeof EvalCampaignConfigurationSchema
 >
 
+export interface EvalCampaignConfidenceInterval {
+  confidenceLevel: 0.95
+  lower: number
+  upper: number
+  method: 'wilson'
+}
+
 export interface EvalCampaignAggregate {
   totalRuns: number
   totalCaseExecutions: number
   passed: number
   failed: number
   passRate: number
+  passRateConfidenceInterval: EvalCampaignConfidenceInterval | null
+  averageDurationMs: number | null
+  p95DurationMs: number | null
   scored: number
   averageRequirementCoverage: number
   averageMustHaveCoverage: number
+  failureCodeCounts: Record<EvalFailureCode, number>
+}
+
+export interface EvalCampaignCaseAggregate {
+  caseId: string
+  executions: number
+  passed: number
+  failed: number
+  passRate: number
+  passRateConfidenceInterval: EvalCampaignConfidenceInterval | null
+  averageDurationMs: number | null
+  p95DurationMs: number | null
+  scored: number
   failureCodeCounts: Record<EvalFailureCode, number>
 }
 
@@ -73,11 +99,70 @@ export interface EvalCampaignReport {
   version: 1
   configuration: EvalCampaignConfigurationData
   aggregate: EvalCampaignAggregate
+  caseAggregates: EvalCampaignCaseAggregate[]
   runs: EvalReport[]
 }
 
 function roundMetric(value: number): number {
   return Math.round(value * 10_000) / 10_000
+}
+
+function calculateWilsonInterval(
+  passed: number,
+  observations: number
+): EvalCampaignConfidenceInterval | null {
+  if (observations === 0) {
+    return null
+  }
+
+  const estimatedProportion = passed / observations
+  const zSquared = WILSON_95_Z_SCORE * WILSON_95_Z_SCORE
+  const denominator = 1 + zSquared / observations
+  const center =
+    (estimatedProportion + zSquared / (2 * observations)) / denominator
+  const margin =
+    (WILSON_95_Z_SCORE / denominator) *
+    Math.sqrt(
+      (estimatedProportion * (1 - estimatedProportion)) / observations +
+        zSquared / (4 * observations * observations)
+    )
+
+  return {
+    confidenceLevel: 0.95,
+    lower: roundMetric(Math.max(0, center - margin)),
+    upper: roundMetric(Math.min(1, center + margin)),
+    method: 'wilson',
+  }
+}
+
+function calculateDurationStatistics(durations: readonly number[]): {
+  averageDurationMs: number | null
+  p95DurationMs: number | null
+} {
+  if (durations.length === 0) {
+    return {
+      averageDurationMs: null,
+      p95DurationMs: null,
+    }
+  }
+
+  const sortedDurations = [...durations].sort((left, right) => left - right)
+  const percentilePosition = P95_PERCENTILE * (sortedDurations.length - 1)
+  const lowerIndex = Math.floor(percentilePosition)
+  const upperIndex = Math.ceil(percentilePosition)
+  const lowerDuration = sortedDurations[lowerIndex] as number
+  const upperDuration = sortedDurations[upperIndex] as number
+  const p95Duration =
+    lowerDuration +
+    (percentilePosition - lowerIndex) * (upperDuration - lowerDuration)
+
+  return {
+    averageDurationMs: roundMetric(
+      durations.reduce((total, duration) => total + duration, 0) /
+        durations.length
+    ),
+    p95DurationMs: roundMetric(p95Duration),
+  }
 }
 
 function aggregateRuns(runs: EvalReport[]): EvalCampaignAggregate {
@@ -96,6 +181,9 @@ function aggregateRuns(runs: EvalReport[]): EvalCampaignAggregate {
     (total, report) => total + report.averageMustHaveCoverage * report.scored,
     0
   )
+  const durationStatistics = calculateDurationStatistics(
+    runs.flatMap((report) => report.results.map((result) => result.durationMs))
+  )
 
   return {
     totalRuns: runs.length,
@@ -104,6 +192,11 @@ function aggregateRuns(runs: EvalReport[]): EvalCampaignAggregate {
     failed: totalCaseExecutions - passed,
     passRate:
       totalCaseExecutions === 0 ? 0 : roundMetric(passed / totalCaseExecutions),
+    passRateConfidenceInterval: calculateWilsonInterval(
+      passed,
+      totalCaseExecutions
+    ),
+    ...durationStatistics,
     scored,
     averageRequirementCoverage:
       scored === 0 ? 0 : roundMetric(requirementCoverageTotal / scored),
@@ -127,6 +220,63 @@ function aggregateRuns(runs: EvalReport[]): EvalCampaignAggregate {
   }
 }
 
+function aggregateCases(runs: EvalReport[]): EvalCampaignCaseAggregate[] {
+  type CaseAccumulator = Omit<
+    EvalCampaignCaseAggregate,
+    | 'averageDurationMs'
+    | 'p95DurationMs'
+    | 'passRate'
+    | 'passRateConfidenceInterval'
+  > & { durations: number[] }
+  const cases = new Map<string, CaseAccumulator>()
+
+  for (const report of runs) {
+    for (const result of report.results) {
+      const aggregate = cases.get(result.caseId) ?? {
+        caseId: result.caseId,
+        executions: 0,
+        passed: 0,
+        failed: 0,
+        durations: [],
+        scored: 0,
+        failureCodeCounts: {
+          assertion_failed: 0,
+          execution_failed: 0,
+          invalid_execution_result: 0,
+        },
+      }
+
+      aggregate.executions += 1
+      aggregate.durations.push(result.durationMs)
+      if (result.passed) {
+        aggregate.passed += 1
+      } else {
+        aggregate.failed += 1
+      }
+      if (
+        result.failureCode === null ||
+        result.failureCode === 'assertion_failed'
+      ) {
+        aggregate.scored += 1
+      }
+      if (result.failureCode !== null) {
+        aggregate.failureCodeCounts[result.failureCode] += 1
+      }
+      cases.set(result.caseId, aggregate)
+    }
+  }
+
+  return [...cases.values()].map(({ durations, ...aggregate }) => ({
+    ...aggregate,
+    passRate: roundMetric(aggregate.passed / aggregate.executions),
+    passRateConfidenceInterval: calculateWilsonInterval(
+      aggregate.passed,
+      aggregate.executions
+    ),
+    ...calculateDurationStatistics(durations),
+  }))
+}
+
 export async function runEvaluationCampaign(
   cases: readonly EvalCase[],
   execute: EvalExecute,
@@ -148,6 +298,7 @@ export async function runEvaluationCampaign(
     version: 1,
     configuration: parsedConfiguration,
     aggregate: aggregateRuns(runs),
+    caseAggregates: aggregateCases(runs),
     runs,
   }
 }

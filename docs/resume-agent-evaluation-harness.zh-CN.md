@@ -216,11 +216,38 @@ RED → GREEN、来源版本、运行证据和证据台账见
 
 1. 在受控环境注入真实 execute adapter，并把 provider、model、prompt revision 和 runtime revision 作为运行元数据，而不是写入 case；
 2. 建立经授权、去标识并人工复核的代表性数据集，分开 development set 与 held-out set；
-3. 每个配置对同一 case 重复运行，报告均值、离散程度、失败分布和置信区间，而不是只选一次最好结果；
+3. 在受控 Provider 环境使用已实现的逐 case、Wilson 区间、失败分布和 R7 latency 报告重复结果，
+   而不是只选一次最好结果；
 4. 接入 token、费用、端到端延迟、重试和 Provider 错误率，按配置汇总；
 5. 为事实忠实、表达质量等非确定性维度建立清晰 rubric 和盲化人工标注；记录标注者一致性与争议处理；
 6. 只有 judge 与人工 gold labels 达到预设一致性后，才将 LLM judge 用于规模化辅助评分，并持续检查位置、冗长、自偏好和模型漂移；
 7. 经过真实数据、重复运行和人工校准后，才评估是否把某些阈值提升为 CI 门禁。
+
+### RA-010C-C 统计报告契约
+
+旧 campaign aggregate 只有总体通过率和 coverage 均值，无法观察逐 case 波动、小样本不确定性与
+延迟长尾。2026-09-16 复核 OpenAI Evaluation Best Practices 以及 NIST/SEMATECH 的二项比例区间和
+百分位说明后，本切片决定在现有 `runEvaluationCampaign` 深模块内增加：
+
+- 总体和按输入顺序排列的逐 case aggregate；
+- 95% Wilson 通过率观察区间；
+- 覆盖全部执行尝试的平均延迟和 Hyndman-Fan R7 p95；
+- 空 observations 的 interval/latency `null` 语义，以及不产生非有限数字的回归测试。
+
+选择 Wilson 是为避免普通 Wald 区间在小样本和极端比例时越过 `[0, 1]`。选择 R7 是明确可复现的
+工程定义，不代表小样本 p95 是精确总体分位数。统计只读取既有安全 `EvalReport`，不得扩大到 JD、
+简历、Prompt、completion、异常正文或 Provider message。本切片不包含 token/费用、持久化、真实
+Provider 凭证、人工 rubric 或 CI 阈值；这些仍是独立的未验证生命周期。
+
+Wilson 区间的频率学解释假设 observations 近似独立同分布；缓存、模型滚动更新、共享限流和时间
+相关故障可能破坏该假设。配置元数据因此必须固定，区间只能展示当前小样本的不确定性，不能被解释
+为生产真实通过率或跨配置比较的充分证据。
+
+实现按三个关键 RED → GREEN 推进：缺少逐 case aggregate、缺少 Wilson interval、缺少 latency
+字段分别先得到定向失败，再以最小实现转绿；随后增加单 observation 极端比例、空集合、混合失败和
+敏感标记回归。2026-09-16 验证结果为 Eval 3 files / 41 tests、Resume Agent 全包 15 files /
+228 tests、TypeScript、ESM/DTS build、目标 Biome 与 diff check 通过。`license:check` 返回 0，但因
+环境缺少 `addlicense` binary 跳过了实际扫描；既有 TypeScript header 保持完整。
 
 ## 11. Feature evidence ledger
 
@@ -229,21 +256,25 @@ RED → GREEN、来源版本、运行证据和证据台账见
 | Parent / lifecycle | Resume Agent 质量评估：案例验证 -> 执行 -> 确定性断言 -> 安全汇总 |
 | Feature | 用同一批匿名案例比较 prompt、模型和 runtime 的基础设施 |
 | Delivery state | Implemented（development-only；非 Enabled / Operational） |
-| Current state | 版本化 EvalCase/数据集/execute 输出 Schema、顺序 runner、三类安全失败、聚合、一份虚构 fixture、三份公开 JD 派生 development cases、岗位关键词断言和 campaign 重复采样已实现 |
-| Primary evidence | OpenAI Evaluation best practices 与 Zod 4.3.6 维护者源码/测试，2026-09-16 查阅 |
+| Current state | 版本化 EvalCase/数据集/execute 输出 Schema、顺序 runner、三类安全失败、聚合、一份虚构 fixture、三份公开 JD 派生 development cases、岗位关键词断言、campaign 重复采样、逐 case/Wilson/R7 延迟统计已实现 |
+| Primary evidence | OpenAI Evaluation Best Practices、NIST/SEMATECH Wilson interval 与 percentile methods、Zod 4.3.6 维护者源码/测试，2026-09-16 查阅 |
 | Independent evidence | 本地 `TailorResumeRequestSchema`、`TailorResumeResult`、quality warning 与 fake workflow tests |
-| Decision | Adapt 任务特定 deterministic checks；在 execute 与评分之间验证最小观察面；公开 JD 只保留可追溯的改写摘要，候选人保持全合成；暂缓托管平台与未经人工校准的 LLM judge |
-| Edge cases | 非法/冲突 case、断言失败、敏感异常、无效 execute 输出、部分失败聚合、空集合、重复 ID、敏感 warning message |
-| Acceptance | RA-010 七个纵向行为、RA-010B 五个 RED -> GREEN 行为与混合聚合回归、RA-010C 七个 provenance/corpus/keyword/campaign 行为，共 34 个测试 |
+| Decision | Adapt 任务特定 deterministic checks；在 execute 与评分之间验证最小观察面；公开 JD 只保留可追溯的改写摘要，候选人保持全合成；重复报告采用 Wilson 95% 区间、R7 p95 与空 observation `null`；暂缓托管平台与未经人工校准的 LLM judge |
+| Edge cases | 非法/冲突 case、断言失败、敏感异常、无效 execute 输出、部分失败聚合、空集合、重复 ID、敏感 warning message、0/n 与 n/n、小样本 percentile、多 case 顺序、非有限统计值 |
+| Acceptance | RA-010/010B runner 29 tests、RA-010C campaign 10 tests、公开岗位 fixture 2 tests，共 41 个定向测试；RA-010C-C 记录三个 RED → GREEN 和四类边缘/隐私回归 |
 | Coverage | Partial |
-| Historical gap | Backfilled；RA-010 初版只依赖 TypeScript 返回类型，曾缺少 execute 输出的运行时验证 |
-| Remaining gap | 公开 JD 派生案例仍不是真实候选人分布；当前环境需要实验性 env-proxy，且现有 OpenAI 凭证返回 401、Gemini 配置返回 400；尚无可评分的重复真实模型结果、token/费用、人工标注或 judge 校准 |
+| Historical gap | Backfilled；RA-010 初版只依赖 TypeScript 返回类型，曾缺少 execute 输出的运行时验证；RA-010C 初版重复采样只有 point estimate，未评估小样本区间与 percentile 定义 |
+| Remaining gap | 公开 JD 派生案例仍不是真实候选人分布；当前环境需要实验性 env-proxy，且现有 OpenAI 凭证返回 401、Gemini 配置返回 400；尚无可评分的重复真实模型结果，observations 独立同分布假设未获运行证据，也没有 token/费用、人工标注或 judge 校准 |
 | Last reviewed | 2026-09-16，RA-010 基线 `ce7decd`，Zod 4.3.6、Vitest 4.0.16，RA-010C 公开来源版本见独立 Feature Brief |
 
 ## 12. 参考资料
 
 - OpenAI Evaluation best practices：
   <https://developers.openai.com/api/docs/guides/evaluation-best-practices>
+- NIST/SEMATECH Wilson proportion interval：
+  <https://itl.nist.gov/div898/handbook/prc/section2/prc241.htm>
+- NIST/SEMATECH percentile methods：
+  <https://www.itl.nist.gov/div898/handbook/prc/section2/prc262.htm>
 - Greenhouse Job Board API：
   <https://developers.greenhouse.io/job-board.html>
 - 本仓库结构化输出可靠性设计：

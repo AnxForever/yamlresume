@@ -135,6 +135,40 @@ runEvaluationCampaign(cases, execute, {
 - coverage 按每轮 `scored` 数量加权，不把执行失败伪造成 0 分样本；
 - 输出只包含安全配置、`EvalReport[]` 和安全聚合。
 
+### 6.1 RA-010C-C：统计可信的重复运行报告
+
+现有 aggregate 可以回答“本次 campaign 一共通过多少次”，却不能回答同一个 case 是否稳定、
+小样本结果有多不确定，或延迟分布是否出现长尾。OpenAI Evaluation Best Practices 明确指出生成式
+系统具有波动，应持续、重复地使用任务特定指标评估，并用人工判断校准自动指标。NIST 对二项比例
+区间的说明推荐 Wilson 方法，因为普通 Wald 区间会在小样本和接近 0/1 时产生不可能的边界；NIST
+也指出百分位插值不存在唯一通用定义，小样本下 R6、R7、R8 会给出不同结果。
+
+本切片采用（adapt）以下契约：
+
+- 总体和逐 case 都报告通过/失败、`scored`、稳定失败码计数和通过率；逐 case 按输入顺序排列；
+- 通过率分母包括每次执行尝试；只有通过 `EvalExecutionResultSchema` 的结果进入 `scored`；
+- 总体和逐 case 的通过率同时报告 95% Wilson interval，使用双侧标准正态临界值，计算后限制在
+  `[0, 1]` 并统一四位小数；它只描述当前 observations 的不确定性，不是模型真实通过率的精确概率；
+- 延迟统计覆盖成功、断言失败、无效结果和执行异常，因为这些都是用户实际等待的执行尝试；
+- p95 固定采用 Hyndman-Fan R7 线性插值，即位置 `1 + p(n - 1)`。选择 R7 是因为它是 R 与
+  Excel 的常用默认值，且 NIST 将 R6/R7/R8 都列为通常可接受的方法；报告不得称其为“精确 p95”；
+- 空 case 集合保留既有 `passRate: 0` 以兼容旧报告，但新增 confidence interval、平均延迟和 p95
+  使用 `null` 表示没有 observation，不能生成 `NaN`、`Infinity` 或伪造的零延迟；
+- 新字段是 `EvalCampaignReport` version 1 的 additive development contract；本切片不新增依赖、
+  持久化、token/费用、Provider adapter 或人工 rubric。
+
+Wilson 的频率学解释还依赖 observations 近似独立同分布。Provider 缓存、模型滚动更新、共享限流、
+时间相关故障或 prompt/runtime 漂移都会破坏这个假设。因此 report 保留 provider、model、prompt 与
+runtime revision，区间只用于暴露当前固定配置下的小样本宽度；它不能证明未来流量中的真实成功率，
+也不能把相邻配置的 observations 混在一起计算。
+
+安全界面不变：统计实现只消费 `EvalReport.results` 中的 case ID、布尔值、稳定失败码和毫秒耗时。
+报告不得增加 request、JD、简历、Prompt、completion、Provider message、异常正文或凭证。
+
+已验收行为是：单 case 一过一败；Wilson 的 `0/n`、`n/n`、`1/2` 和单 observation；可控时钟下的
+总体/逐 case 平均值与 R7 p95；多 case 原始顺序和不同失败类型；空集合；以及序列化报告的敏感
+标记回归。
+
 ## 7. 隐私、版权与安全边界
 
 ### 7.1 为什么不提交原始公开 JD
@@ -170,9 +204,17 @@ completion、warning message、Zod issue 或异常正文。真实执行诊断也
 6. **来源版本：** RED 时 `sourceUpdatedAt` 为 `undefined`；GREEN 后三例固定到 Greenhouse 返回的
    带时区更新时间。
 7. **配置安全：** strict config 拒绝额外 `apiKey`，21 次采样也在执行 case 前拒绝。
+8. **逐 case 稳定性：** RED 时 `caseAggregates` 为 `undefined`；GREEN 后同一 case 两次一过一败
+   得到 2 次执行、50% 通过率、2 个 scored 和准确失败码计数，并保持输入顺序。
+9. **Wilson 区间：** RED 时总体 interval 为 `undefined`；GREEN 后总体和逐 case 的 `1/2` 得到
+   `[0.0945, 0.9055]`，后续回归覆盖单 observation 的 `0/n` 与 `n/n` 边界。
+10. **延迟分布：** RED 时 aggregate 没有 latency 字段；GREEN 后可控时钟下 10ms/30ms 的平均值为
+    20ms，R7 p95 为 29ms；空 observations 返回 `null`。
+11. **混合失败与隐私：** 回归覆盖合法断言失败、执行异常和无效结果的 `scored`/失败计数语义，
+    并证明新增统计不会序列化 request、候选人或异常标记。
 
-当前定向结果：3 个测试文件、34 个测试通过，其中 RA-010C 新增 7 个测试，原 RA-010/010B 回归
-29 个测试继续通过。
+当前定向结果：campaign 10 个测试通过；runner + campaign 共 39 个测试通过。包含公开岗位 fixture
+时，3 个测试文件共 41 个测试；相对 RA-010C-C 开始前新增 7 个 campaign 行为测试。
 
 ## 9. 2026-09-16 真实运行证据
 
@@ -213,6 +255,22 @@ git diff --check
 pnpm license:check
 ```
 
+RA-010C-C 在 2026-09-16 的本地验证：
+
+- `pnpm agent test src/evaluation/runner.test.ts src/evaluation/campaign.test.ts
+  src/evaluation/fixtures/public-job-derived.test.ts`：3 files / 41 tests 通过；
+- `pnpm agent test`：15 files / 228 tests 通过；这次全包结果同时包含共享工作树中尚未提交的 ODT
+  输入测试，RA-010C-C 自身的定向证据仍以上一项为准；
+- `pnpm agent test:cov src/evaluation/campaign.test.ts`：campaign module 的 statements、branches、
+  functions、lines 均为 100%；该命令只用于本 module 覆盖率，不把同进程加载的其他 module 低覆盖
+  误写成项目整体覆盖率；
+- `pnpm --filter @yamlresume/resume-agent exec tsc --noEmit`：通过；
+- `pnpm agent build`：ESM 与 DTS 构建通过；
+- 两个 campaign TypeScript 文件的目标 Biome：通过；
+- 四个本切片文件的 `git diff --check`：通过；
+- `pnpm license:check`：退出码 0，但共享 `scripts/addlicense.mjs` 报告环境缺少 `addlicense` binary，
+  因此跳过实际扫描；两个既有 TypeScript 文件仍保留完整 MIT header。
+
 真实模型验收还需在允许 Node `fetch` 访问 Provider 的受控环境中：
 
 1. 固定 provider、model、prompt revision 和 runtime revision；
@@ -228,7 +286,7 @@ pnpm license:check
 | --- | --- | --- | --- | --- | --- | --- |
 | RA-010C-A | 公开 JD → 可追溯 development case | Implemented for development | 3 个一手来源、版本化 provenance、Schema 与生产 Resume parser tests | Partial | none | 岗位族、语言、地区和非技术岗位覆盖很窄 |
 | RA-010C-B | 模型解析 JD → 关键术语断言 | Implemented | required keyword RED/GREEN 与安全报告 | Partial | backfilled | 同义词、责任语义和人工 gold labels 未覆盖 |
-| RA-010C-C | 配置 → 重复采样 → 安全聚合 | Implemented for development | 重复运行、加权聚合、无界次数与 secret-bearing config tests | Partial | none | token、费用、置信区间和持久化未实现 |
+| RA-010C-C | 配置 → 重复采样 → 统计可信的安全聚合 | Implemented for development | 重复运行、逐 case 稳定性、Wilson 95% 区间、R7 latency、空 observation、混合失败和隐私回归；campaign 10 tests | Partial | backfilled | 尚无可评分真实 Provider observations；独立同分布假设未获运行证据；token、费用和持久化未实现 |
 | RA-010C-D | corpus → 真实 Agent/Provider → 可评分结果 | Implemented but not operational | 默认网络、env-proxy、OpenAI 401 与 Gemini 400 均产生安全分类证据 | Gap | none | 需有效 Provider 凭证/配置并取得重复、可评分结果 |
 | RA-010C-E | 模型结果 → 人工质量判断 | Planned | OpenAI eval guidance 与本地质量风险审计 | Gap | none | rubric、盲化标注、一致性与争议流程均未实现 |
 
@@ -236,6 +294,10 @@ pnpm license:check
 
 - OpenAI Evaluation best practices：
   <https://developers.openai.com/api/docs/guides/evaluation-best-practices>
+- NIST/SEMATECH Wilson proportion interval：
+  <https://itl.nist.gov/div898/handbook/prc/section2/prc241.htm>
+- NIST/SEMATECH percentile methods：
+  <https://www.itl.nist.gov/div898/handbook/prc/section2/prc262.htm>
 - Greenhouse Job Board API：
   <https://developers.greenhouse.io/job-board.html>
 - Grafana Labs source posting：
