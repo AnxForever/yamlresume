@@ -33,6 +33,8 @@ import { CandidateNormalizationResponseSchema } from '@/contracts'
 import { completeStructuredOutput } from '@/llm/structured-output'
 import { INTERACTION_CONTROL_EXPECTED_SHAPE } from '@/prompts'
 import {
+  CandidateValidationError,
+  DraftValidationError,
   parseCandidateResume,
   validateNormalizationFacts,
 } from '@/validation/resume'
@@ -130,13 +132,31 @@ export async function normalizeCandidateInput(
     )
   }
 
-  const normalized = parseCandidateResume({
-    resume: parsed.resume,
-    files: [],
-  })
+  let normalized: ReturnType<typeof parseCandidateResume>
+  try {
+    normalized = parseCandidateResume({
+      resume: parsed.resume,
+      files: [],
+    })
+  } catch (error) {
+    if (error instanceof CandidateValidationError) {
+      throw new CandidateValidationError(
+        error.message,
+        'candidate_normalization'
+      )
+    }
+    throw error
+  }
   if (hasCanonical) {
-    const original = parseCandidateResume(input)
-    validateNormalizationFacts(original, normalized)
+    try {
+      const original = parseCandidateResume(input)
+      validateNormalizationFacts(original, normalized)
+    } catch (error) {
+      if (error instanceof DraftValidationError) {
+        throw new DraftValidationError(error.message)
+      }
+      throw error
+    }
   }
 
   const questions = parsed.questions as FollowUpQuestion[]

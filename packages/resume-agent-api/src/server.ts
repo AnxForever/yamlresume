@@ -32,6 +32,7 @@ import {
 } from 'node:http'
 import { dirname, resolve } from 'node:path'
 import {
+  type AgentValidationStage,
   ArtifactInputError,
   CandidateValidationError,
   ChatRequestSchema,
@@ -95,6 +96,7 @@ interface ApiErrorBody {
   error: {
     code: string
     message: string
+    stage?: AgentValidationStage
     details?: ApiErrorDetail[]
   }
   meta: ApiMeta
@@ -148,13 +150,19 @@ function error(
   code: string,
   message: string,
   requestId: string,
-  details?: ApiErrorDetail[]
+  details?: ApiErrorDetail[],
+  stage?: AgentValidationStage
 ): void {
   json(
     response,
     status,
     {
-      error: { code, message, ...(details?.length ? { details } : {}) },
+      error: {
+        code,
+        message,
+        ...(stage ? { stage } : {}),
+        ...(details?.length ? { details } : {}),
+      },
       meta: { apiVersion: API_VERSION, requestId },
     },
     requestId
@@ -1003,7 +1011,15 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
         runError instanceof CandidateValidationError ||
         runError instanceof DraftValidationError
       ) {
-        error(response, 422, 'agent_validation_failed', message, requestId)
+        error(
+          response,
+          422,
+          'agent_validation_failed',
+          message,
+          requestId,
+          undefined,
+          runError.stage
+        )
         return
       }
       if (runError instanceof LlmConfigurationError) {

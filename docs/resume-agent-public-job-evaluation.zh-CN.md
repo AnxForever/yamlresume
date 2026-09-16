@@ -275,6 +275,11 @@ Provider message 和异常正文均未写入报告或文档。
 `execution_failed = 3`、`invalid_execution_result = 0`。Wilson 95% 区间为 `[0.0301, 0.5635]`，
 样本太小且方差明显，不能作为生产成功率估计。
 
+为支持下一轮诊断，API 的 `agent_validation_failed` 现在可携带受限的 `stage` 枚举
+（`candidate_input`、`candidate_normalization` 或 `draft_validation`）。该字段只描述工作流阶段，
+不包含 JD、候选人材料、模型 completion 或底层异常；它用于区分线上 422 的来源，不改变评分规则，
+也不能把失败运行计入 `scored`。
+
 ## 10. 验收门禁
 
 ```text

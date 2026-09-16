@@ -655,6 +655,13 @@ components:
                 - agent_failed
             message:
               type: string
+            stage:
+              type: string
+              description: Safe workflow stage for validation failures; never contains input or provider output.
+              enum:
+                - candidate_input
+                - candidate_normalization
+                - draft_validation
             details:
               type: array
               items:

@@ -188,6 +188,7 @@ export {
 export { buildResumeDiff } from './transparency/diff'
 export { buildQualityReport } from './transparency/quality'
 export { buildEvidenceIndex } from './validation/evidence'
+export type { AgentValidationStage } from './validation/resume'
 export {
   CandidateValidationError,
   DraftValidationError,

@@ -403,8 +403,9 @@ pnpm agent test src/workflow/agent.test.ts -t "ingests RTF"
 ```
 
 结果：1 个测试通过（同文件其余 9 个测试按过滤条件跳过）。该证据把问题边界收窄为：RTF
-提取和本地 Agent seam 已可工作；线上 422 仍需在不保存原文或 completion 的前提下，增加安全
-的阶段/错误码观测，继续区分候选归一化、结构化输出与草稿验证失败。没有因此把真实 DeepSeek
+提取和本地 Agent seam 已可工作；API 现在在 422 验证错误中返回稳定的 `stage` 枚举，可在不
+保存原文或 completion 的前提下区分候选归一化与草稿验证失败。仍需用真实 Provider 复跑确认
+阶段分布。没有因此把真实 DeepSeek
 RTF 成功率标为 Operational，也没有放宽验证规则。
 
 ## 12. 会推翻方案的证据

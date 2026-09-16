@@ -34,14 +34,27 @@ import {
   RESUME_SECTION_IDENTITIES,
 } from '@/resume-sections'
 
+export type AgentValidationStage =
+  | 'candidate_input'
+  | 'candidate_normalization'
+  | 'draft_validation'
+
 export class CandidateValidationError extends Error {
-  constructor(message: string) {
+  readonly stage: AgentValidationStage
+
+  constructor(
+    message: string,
+    stage: 'candidate_input' | 'candidate_normalization' = 'candidate_input'
+  ) {
     super(message)
     this.name = 'CandidateValidationError'
+    this.stage = stage
   }
 }
 
 export class DraftValidationError extends Error {
+  readonly stage = 'draft_validation' as const
+
   constructor(message: string) {
     super(message)
     this.name = 'DraftValidationError'

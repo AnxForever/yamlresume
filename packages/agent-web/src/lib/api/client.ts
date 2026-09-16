@@ -48,6 +48,7 @@ export interface ApiErrorDetail {
 export interface ApiFailure {
   code: string
   message: string
+  stage?: 'candidate_input' | 'candidate_normalization' | 'draft_validation'
   details?: ApiErrorDetail[]
   requestId?: string
   status?: number
@@ -384,7 +385,12 @@ export class AgentApiClient {
 
     const envelope = (payload ?? {}) as {
       data?: T
-      error?: { code?: string; message?: string; details?: ApiErrorDetail[] }
+      error?: {
+        code?: string
+        message?: string
+        stage?: ApiFailure['stage']
+        details?: ApiErrorDetail[]
+      }
       meta?: { requestId?: string }
     }
     const resolvedRequestId =
@@ -396,6 +402,7 @@ export class AgentApiClient {
         error: {
           code: envelope.error?.code ?? 'unknown_error',
           message: envelope.error?.message ?? `请求失败（${response.status}）`,
+          ...(envelope.error?.stage ? { stage: envelope.error.stage } : {}),
           ...(envelope.error?.details
             ? { details: envelope.error.details }
             : {}),

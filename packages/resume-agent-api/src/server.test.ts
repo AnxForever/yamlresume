@@ -28,6 +28,7 @@ import { join } from 'node:path'
 
 import type { LlmClient } from '@yamlresume/resume-agent'
 import {
+  CandidateValidationError,
   ResumeAgentRunService,
   ResumeTailoringAgent,
   renderResumeVariant,
@@ -903,6 +904,41 @@ describe('agent API', () => {
       expect(payload.error?.code).toBe('structured_output_validation_failed')
       expect(responseText).not.toContain('Secret Company')
       expect(responseText).not.toContain('sensitive-model-output')
+    }, agent)
+  })
+
+  it('exposes only a stable validation stage for provider-produced resume errors', async () => {
+    const agent = {
+      async run() {
+        throw new CandidateValidationError(
+          'Candidate resume does not match YAMLResume schema (content)',
+          'candidate_normalization'
+        )
+      },
+    } as unknown as ResumeTailoringAgent
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/tailor-resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobDescription:
+            'Secret Company needs a TypeScript Engineer for private systems.',
+          candidate: { resume: candidate },
+        }),
+      })
+      const responseText = await response.text()
+      const payload = JSON.parse(responseText) as {
+        error?: { code?: string; stage?: string; message?: string }
+      }
+
+      expect(response.status).toBe(422)
+      expect(payload.error).toMatchObject({
+        code: 'agent_validation_failed',
+        stage: 'candidate_normalization',
+      })
+      expect(responseText).not.toContain('Secret Company')
+      expect(responseText).not.toContain('private systems')
     }, agent)
   })
 })
