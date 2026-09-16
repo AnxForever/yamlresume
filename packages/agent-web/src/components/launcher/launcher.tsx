@@ -127,6 +127,7 @@ export function LauncherView({
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatBusy, setChatBusy] = useState(false)
   const [chatError, setChatError] = useState<string | null>(null)
+  const [chatReady, setChatReady] = useState(false)
 
   const capabilityView =
     capabilities.kind === 'ready' ? asCapabilityView(capabilities.data) : null
@@ -237,6 +238,44 @@ export function LauncherView({
       { role: 'user', content: message },
       { role: 'assistant', content: result.data.reply },
     ])
+    setChatReady(result.data.readyToGenerate)
+  }
+
+  async function handleGenerateFromChat() {
+    if (!chatReady || submitting || !capabilitiesReady) return
+    const preset =
+      presets.find((entry) => entry.id === effectivePresetId) ?? presets[0]
+    if (!preset) return
+    const transcript = chatMessages
+      .map((entry) => `${entry.role}: ${entry.content}`)
+      .join('\n')
+    const file = new File([transcript], 'conversation.txt', {
+      type: 'text/plain',
+    })
+    setSubmitting(true)
+    setSubmitError(null)
+    try {
+      const result = await onSubmitRun({
+        jobDescription: transcript,
+        candidateYaml: '',
+        preferences: preset.preferences,
+        jobFiles: [],
+        candidateFiles: [
+          {
+            id: 'conversation',
+            name: file.name,
+            size: file.size,
+            role: 'candidate',
+            file,
+          },
+        ],
+        title: preset.title,
+      })
+      if (result.kind === 'ok') onSubmitted(result.runId)
+      else setSubmitError(friendlySubmitError(result.error))
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -247,7 +286,7 @@ export function LauncherView({
           <h1 className="text-foreground-strong text-[24px] font-semibold tracking-tight">
             为这份岗位定制简历
           </h1>
-          <p className="text-foreground mt-1.5 text-[15px]">
+          <p className="text-foreground mt-2 text-[15px]">
             粘贴 JD 和你的简历，生成可追溯、能过 ATS 的定制版本。
           </p>
         </div>
@@ -269,7 +308,7 @@ export function LauncherView({
               <p className="text-foreground-strong text-sm font-medium">
                 还差一步：需要先在本机启动后端
               </p>
-              <p className="text-foreground-muted mt-1.5 text-sm leading-relaxed">
+              <p className="text-foreground-muted mt-2 text-sm leading-relaxed">
                 Career Agent
                 的简历处理跑在一个本机后端服务上（它保管你的材料，不经过第三方）。
                 在项目目录打开终端运行：
@@ -339,6 +378,8 @@ export function LauncherView({
         chatBusy={chatBusy}
         chatError={chatError}
         onChat={() => void handleChat()}
+        chatReady={chatReady}
+        onGenerateFromChat={() => void handleGenerateFromChat()}
       />
     </div>
   )

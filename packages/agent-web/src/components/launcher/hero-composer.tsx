@@ -61,7 +61,7 @@ function FileChips({ files, onRemove }: FileChipsProps) {
       {files.map((file) => (
         <li
           key={file.id}
-          className="bg-[var(--overlay-subtle)] text-foreground flex items-center gap-2 rounded-full py-1 pl-2.5 pr-1.5 text-xs"
+          className="bg-[var(--overlay-subtle)] text-foreground flex items-center gap-2 rounded-full py-1 pl-3 pr-2 text-xs"
         >
           <FileText size={14} className="text-foreground-muted" />
           <span className="max-w-[160px] truncate">{file.name}</span>
@@ -102,6 +102,8 @@ export interface HeroComposerProps {
   chatBusy: boolean
   chatError: string | null
   onChat: () => void
+  chatReady: boolean
+  onGenerateFromChat: () => void
 }
 
 export function HeroComposer({
@@ -124,6 +126,8 @@ export function HeroComposer({
   chatBusy,
   chatError,
   onChat,
+  chatReady,
+  onGenerateFromChat,
 }: HeroComposerProps) {
   const jobFileInput = useRef<HTMLInputElement>(null)
   const candidateFileInput = useRef<HTMLInputElement>(null)
@@ -242,6 +246,16 @@ export function HeroComposer({
             {chatBusy ? '发送中…' : '发送'}
           </button>
         </div>
+        {chatReady ? (
+          <button
+            type="button"
+            onClick={onGenerateFromChat}
+            disabled={submitting}
+            className="bg-secondary-emphasis text-secondary-foreground mt-3 rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            根据这段对话生成简历
+          </button>
+        ) : null}
       </section>
       {/* Hero card: the job description is the primary "task". */}
       <div
