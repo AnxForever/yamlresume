@@ -63,6 +63,16 @@ export interface ChatResponse {
   readyToGenerate: boolean
 }
 
+export interface AuthUser {
+  id: string
+  email: string
+  createdAt: string
+}
+export interface AuthSession {
+  user: AuthUser
+  expiresAt: string
+}
+
 /**
  * Discriminated on a string `kind`, not a boolean `ok`.
  *
@@ -161,6 +171,28 @@ export class AgentApiClient {
 
   async health(): Promise<ApiResult<{ ok: boolean }>> {
     return this.send<{ ok: boolean }>('GET', '/healthz')
+  }
+
+  async login(
+    email: string,
+    password: string
+  ): Promise<ApiResult<AuthSession>> {
+    return this.send<AuthSession>('POST', '/v1/auth/login', { email, password })
+  }
+  async register(
+    email: string,
+    password: string
+  ): Promise<ApiResult<AuthSession>> {
+    return this.send<AuthSession>('POST', '/v1/auth/register', {
+      email,
+      password,
+    })
+  }
+  async me(): Promise<ApiResult<AuthSession>> {
+    return this.send<AuthSession>('GET', '/v1/auth/me')
+  }
+  async logout(): Promise<ApiResult<null>> {
+    return this.send<null>('POST', '/v1/auth/logout')
   }
 
   async capabilities(): Promise<ApiResult<AgentCapabilities>> {

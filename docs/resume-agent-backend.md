@@ -164,7 +164,7 @@ private. See the
 | --- | --- |
 | Parent / lifecycle | untrusted candidate/JD upload → type detection → parser selection or safe rejection |
 | User outcome | Signed and container formats cannot silently masquerade as text or select the wrong parser; failures are stable and do not reveal document content |
-| Current state | Existing text/PDF/DOCX/image paths use content-aware detection; DOCX/ODT ZIP packages are distinguished; RTF header is recognized but its extractor is not enabled; legacy DOC remains planned |
+| Current state | Existing text/PDF/DOCX/image paths use content-aware detection; DOCX/ODT ZIP packages are distinguished; RTF header and bounded visible-text extraction are enabled for development; legacy DOC remains planned |
 | Primary evidence | OWASP File Upload Cheat Sheet, OASIS OpenDocument 1.3 Packages, PKWARE ZIP APPNOTE, Node.js 22 `TextDecoder`/`zlib`, reviewed 2026-09-16 |
 | Independent evidence | Existing `docx@9.7.1` and ODT writer packages, real PDF/image fixtures, Mammoth behavior, adversarial ZIP mutations and LibreOffice 24.2.7.2 as a later compatibility oracle |
 | Decision | Combine allowlisted auxiliary claims with content evidence; adopt a bounded internal ZIP index; reject MIME-only routing, unknown-binary text fallback, transitive JSZip and implicit LibreOffice runtime conversion |
@@ -172,7 +172,7 @@ private. See the
 | Acceptance | 27 focused input tests, async Run and HTTP error tests, complete Agent/API suites, package type/build/Biome/license/diff gates; exact results live in `resume-agent-common-document-ingestion.zh-CN.md` |
 | Coverage | Partial: application-side A1 detection and error delivery are covered; CFB/DOC, real heterogeneous corpus, fuzz, time/memory isolation and operational telemetry are absent |
 | Historical gap | Backfilled; inherited routing trusted caller MIME and defaulted unknown extensions/binary to text |
-| Remaining gap | RTF visible-text extraction, legacy DOC parser isolation, cross-OS fixtures and production abuse evidence; ODT is tracked below |
+| Remaining gap | RTF real-provider/Run-restart evidence, legacy DOC parser isolation, cross-OS fixtures and production abuse evidence; ODT is tracked below |
 | Last reviewed | 2026-09-16, Node 22.21.1, Mammoth 1.12.3, `docx` 9.7.1 |
 
 ### RA-001B-B evidence detail
@@ -181,7 +181,7 @@ private. See the
 | --- | --- |
 | Parent / lifecycle | trusted ODT package → manifest/XML validation → visible text → candidate/JD normalization |
 | User outcome | Users can submit ODT resumes and job descriptions without leaking review metadata, hidden content, scripts or embedded objects into the model context |
-| Current state | ODT is enabled for development through `extractArtifact`, synchronous HTTP, asynchronous Run/restart and advertised capabilities/OpenAPI; RTF and legacy DOC remain planned |
+| Current state | ODT and RTF are enabled for development through `extractArtifact`, synchronous HTTP, asynchronous Run/restart and advertised capabilities/OpenAPI; legacy DOC remains planned |
 | Primary evidence | OASIS OpenDocument 1.3 Parts 2/3, OWASP XML Security Cheat Sheet, PKWARE APPNOTE and Node.js 22 `TextDecoder`/`zlib`, reviewed 2026-09-16 |
 | Independent evidence | Repository ODT exporter plus three system ODTs; LibreOffice 24.2.7.2 direct/PDF conversions and the existing PDF extractor |
 | Decision | Reuse the bounded ZIP module and keep one deep internal namespace-aware XML scanner; reject transitive parser dependencies and implicit LibreOffice runtime conversion |

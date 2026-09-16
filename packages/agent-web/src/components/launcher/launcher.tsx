@@ -24,7 +24,7 @@
 
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { LogoMark } from '@/components/brand/logo'
 import type { SubmitRunResult } from '@/components/shell/app-shell'
 import type { AgentApiClient, ChatMessage } from '@/lib/api/client'
@@ -188,36 +188,6 @@ export function LauncherView({
 
   function handleRemoveFile(id: string) {
     setFiles((prev) => prev.filter((file) => file.id !== id))
-  }
-
-  async function handleSubmit() {
-    if (blockers.length > 0 || submitting || !capabilitiesReady) {
-      return
-    }
-    const preset =
-      presets.find((entry) => entry.id === effectivePresetId) ?? presets[0]
-    if (!preset) {
-      return
-    }
-    setSubmitError(null)
-    setSubmitting(true)
-    try {
-      const result = await onSubmitRun({
-        jobDescription,
-        candidateYaml,
-        preferences: preset.preferences,
-        jobFiles: files.filter((file) => file.role === 'job'),
-        candidateFiles: files.filter((file) => file.role === 'candidate'),
-        title: preset.title,
-      })
-      if (result.kind === 'ok') {
-        onSubmitted(result.runId)
-      } else {
-        setSubmitError(friendlySubmitError(result.error))
-      }
-    } finally {
-      setSubmitting(false)
-    }
   }
 
   async function handleChat() {

@@ -224,6 +224,75 @@ describe('ResumeTailoringAgent', () => {
     expect(requests[1]?.user).toContain('Build reliable TypeScript platforms.')
   })
 
+  it('ingests RTF candidate and job files through the complete workflow', async () => {
+    const requests: JsonCompletionRequest[] = []
+    const responses = [
+      {
+        resume: candidate,
+        sourceArtifactIds: ['artifact.candidate.rtf'],
+        questions: [],
+        warnings: [],
+      },
+      {
+        targetTitle: 'Platform Engineer',
+        seniority: 'senior',
+        summary: 'Builds reliable TypeScript platforms',
+        requirements: [],
+        keywords: ['TypeScript'],
+      },
+      {
+        resume: candidate,
+        selectedEvidenceIds: [],
+        questions: [],
+        notes: [],
+      },
+    ]
+    const llm: LlmClient = {
+      async completeJson(request) {
+        requests.push(request)
+        return {
+          data: responses.shift(),
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const candidateRtf = Buffer.from(
+      String.raw`{\rtf1\ansi\deff0\uc1\b Ada Lovelace\b0\par Built TypeScript services.}`
+    )
+    const jobRtf = Buffer.from(
+      String.raw`{\rtf1\ansi\deff0\uc1 Platform Engineer\par Build reliable TypeScript platforms.}`
+    )
+
+    const result = await new ResumeTailoringAgent(llm).run({
+      jobFiles: [
+        {
+          filename: 'role.rtf',
+          contentBase64: jobRtf.toString('base64'),
+        },
+      ],
+      candidate: {
+        files: [
+          {
+            filename: 'candidate.rtf',
+            contentBase64: candidateRtf.toString('base64'),
+          },
+        ],
+      },
+      preferences: { formats: ['yaml'] },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(requests[0]?.user).toContain('Ada Lovelace')
+    expect(requests[0]?.user).toContain('Built TypeScript services.')
+    expect(requests[1]?.user).toContain('Platform Engineer')
+    expect(requests[1]?.user).toContain('Build reliable TypeScript platforms.')
+  })
+
   it('reports metadata from each rendered style preset', async () => {
     const responses = [
       {

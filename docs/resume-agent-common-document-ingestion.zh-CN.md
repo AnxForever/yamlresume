@@ -383,9 +383,29 @@ fuzz、worker 隔离与生产 telemetry 仍是后续门禁。
 运行时依赖。RTF 已从“仅能识别 header”推进为 `extractArtifact` 可用的 `kind: text` 输入；
 `rtf.test.ts` 覆盖可见正文、段落、转义、负 Unicode code unit 与 surrogate pair、`uc` fallback、
 metadata/pict/field/未知 starred destination、`bin` payload 和截断 group。2026-09-16 门禁为
-focused 输入 48/48、完整 resume-agent 250/250、TypeScript、build、目标 Biome 与
+focused 输入 48/48、完整 resume-agent 252/252、TypeScript、build、目标 Biome 与
 `git diff --check` 通过。该证据仍只支持 `Implemented for development`；没有把 RTF 的跨平台
-兼容性、字体表 code page、真实候选/JD Run 重启和生产隔离误写成已完成。
+兼容性、字体表 code page、真实 Provider 成功率和生产隔离误写成已完成。
+
+### 11.6 RA-001B-C 纵向工作流验收
+
+为定位线上真实 RTF 请求返回 `agent_validation_failed` 的边界，新增了不依赖 Provider 的公开
+工作流集成测试 `ResumeTailoringAgent.run`。合成 RTF 候选人与 JD 经过同一 `extractArtifacts`、
+候选归一化、岗位分析、证据匹配、草稿验证和渲染路径；fake LLM 只替代模型响应，不替代输入
+提取或 Agent seam。测试确认候选归一化请求包含可见的 `Ada Lovelace` 与 `Built TypeScript
+services.`，岗位分析请求包含 `Platform Engineer` 与 `Build reliable TypeScript platforms.`，
+并以 `yaml` 产物完成整条流程。
+
+验证命令：
+
+```text
+pnpm agent test src/workflow/agent.test.ts -t "ingests RTF"
+```
+
+结果：1 个测试通过（同文件其余 9 个测试按过滤条件跳过）。该证据把问题边界收窄为：RTF
+提取和本地 Agent seam 已可工作；线上 422 仍需在不保存原文或 completion 的前提下，增加安全
+的阶段/错误码观测，继续区分候选归一化、结构化输出与草稿验证失败。没有因此把真实 DeepSeek
+RTF 成功率标为 Operational，也没有放宽验证规则。
 
 ## 12. 会推翻方案的证据
 

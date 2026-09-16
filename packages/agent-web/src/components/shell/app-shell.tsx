@@ -25,6 +25,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { AuthView } from '@/components/auth/auth-view'
 import {
   type LauncherSubmitPayload,
   LauncherView,
@@ -91,6 +92,10 @@ export function AppShell() {
   const [recentRuns, setRecentRuns] = useState<
     Array<{ id: string; title: string; subtitle: string }>
   >([])
+  const [authSession, setAuthSession] = useState<
+    import('@/lib/api/client').AuthSession | null
+  >(null)
+  const [authChecked, setAuthChecked] = useState(false)
   const clientRef = useRef<AgentApiClient | null>(null)
 
   // Settings live in localStorage, which is only available after mount.
@@ -147,6 +152,11 @@ export function AppShell() {
 
   useEffect(() => {
     clientRef.current = new AgentApiClient({ baseUrl: settings.baseUrl })
+    setAuthChecked(false)
+    void clientRef.current.me().then((result) => {
+      if (result.kind === 'ok') setAuthSession(result.data)
+      setAuthChecked(true)
+    })
   }, [settings.baseUrl])
 
   const checkHealth = useCallback(async () => {
@@ -272,6 +282,19 @@ export function AppShell() {
   }
 
   const launcherKey = activeRunId ?? view
+
+  if (!authChecked || !clientRef.current) {
+    return (
+      <div className="text-foreground-muted flex min-h-screen items-center justify-center text-sm">
+        正在连接账户…
+      </div>
+    )
+  }
+  if (!authSession) {
+    return (
+      <AuthView client={clientRef.current} onAuthenticated={setAuthSession} />
+    )
+  }
 
   return (
     <div className="flex h-screen gap-3 p-3">
