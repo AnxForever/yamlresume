@@ -439,6 +439,36 @@ describe('agent API', () => {
     })
   })
 
+  it('accepts an RTF job file through the synchronous HTTP contract', async () => {
+    const rtf = Buffer.from(
+      String.raw`{\rtf1\ansi\deff0\uc1 Platform Engineer\par Build reliable TypeScript platforms.}`
+    )
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/tailor-resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobFiles: [
+            {
+              filename: 'role.rtf',
+              contentBase64: rtf.toString('base64'),
+            },
+          ],
+          candidate: { resume: candidate },
+          preferences: { formats: ['yaml'] },
+        }),
+      })
+      const payload = (await response.json()) as {
+        data?: { status?: string; jobSpec?: { targetTitle?: string } }
+      }
+
+      expect(response.status).toBe(200)
+      expect(payload.data?.status).toBe('completed')
+      expect(payload.data?.jobSpec?.targetTitle).toBe('TypeScript Engineer')
+    })
+  })
+
   it('returns a private-safe HTTP error for a corrupted ODT upload', async () => {
     const privateMarker = 'PRIVATE_ODT_JOB_DETAIL_57326'
     const privateResume = {

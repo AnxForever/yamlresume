@@ -408,6 +408,10 @@ pnpm agent test src/workflow/agent.test.ts -t "ingests RTF"
 阶段分布。没有因此把真实 DeepSeek
 RTF 成功率标为 Operational，也没有放宽验证规则。
 
+同步 HTTP 也新增了 `role.rtf` 的 `contentBase64` 回归：21 个 API 测试中的 RTF 用例通过，证明
+RTF JD 能沿着 API 输入、提取器和 Agent seam 完成开发级请求；该 fake-provider 证据不代表真实
+Provider 的生成质量或线上部署已通过。
+
 ## 12. 会推翻方案的证据
 
 - 若授权样本显示 DOC 使用率极低且隔离成本过高，可保持 adapter 与明确转换指引，不能用
