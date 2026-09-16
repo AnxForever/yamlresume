@@ -76,6 +76,27 @@ interface InteractionAnswerReceipt {
   answeredAt: string
 }
 
+export type RunTaskKind = 'prepare' | 'complete'
+
+export interface RunTask {
+  id: string
+  runId: string
+  kind: RunTaskKind
+  createdAt: string
+}
+
+export interface ClaimedRunTask extends RunTask {
+  attempt: number
+  leaseOwner: string
+  leaseExpiresAt: string
+}
+
+export interface ClaimRunTaskOptions {
+  workerId: string
+  now: Date
+  leaseDurationMs: number
+}
+
 export interface RunStore {
   get(id: string): Promise<StoredResumeAgentRun | undefined>
   /** Atomically creates only an absent ID with revision 0. */
@@ -85,6 +106,19 @@ export interface RunStore {
    * supplied revision. A successful write stores revision + 1.
    */
   compareAndSet(run: StoredResumeAgentRun): Promise<boolean>
+}
+
+export interface DurableRunStore extends RunStore {
+  createWithTask(run: StoredResumeAgentRun, task: RunTask): Promise<boolean>
+  compareAndSetWithTask(
+    run: StoredResumeAgentRun,
+    task: RunTask
+  ): Promise<boolean>
+  claimNextTask(
+    options: ClaimRunTaskOptions
+  ): Promise<ClaimedRunTask | undefined>
+  acknowledgeTask(taskId: string, leaseOwner: string): Promise<boolean>
+  releaseTask(taskId: string, leaseOwner: string): Promise<boolean>
 }
 
 export class InMemoryRunStore implements RunStore {
@@ -115,6 +149,8 @@ export class InMemoryRunStore implements RunStore {
 type ScheduledTask = () => Promise<void>
 
 const MAX_RUN_UPDATE_ATTEMPTS = 3
+const DEFAULT_TASK_LEASE_MS = 60_000
+const DEFAULT_RECOVERY_LIMIT = 100
 
 const NEXT_STATUS: Record<AgentRunStatus, AgentRunStatus[]> = {
   queued: ['ingesting_inputs', 'failed'],
@@ -130,11 +166,49 @@ const NEXT_STATUS: Record<AgentRunStatus, AgentRunStatus[]> = {
   failed: [],
 }
 
+const ACTIVE_STATUS_RANK: Partial<Record<AgentRunStatus, number>> = {
+  queued: 0,
+  ingesting_inputs: 1,
+  normalizing_candidate: 2,
+  analyzing_jd: 3,
+  matching_evidence: 4,
+  drafting: 5,
+  validating: 6,
+  rendering: 7,
+}
+
 export interface ResumeAgentRunServiceOptions {
   store?: RunStore
   idFactory?: () => string
   now?: () => Date
   schedule?: (task: ScheduledTask) => void
+  workerId?: string
+  taskLeaseMs?: number
+}
+
+function isDurableRunStore(store: RunStore): store is DurableRunStore {
+  const candidate = store as Partial<DurableRunStore>
+  return (
+    typeof candidate.createWithTask === 'function' &&
+    typeof candidate.compareAndSetWithTask === 'function' &&
+    typeof candidate.claimNextTask === 'function' &&
+    typeof candidate.acknowledgeTask === 'function' &&
+    typeof candidate.releaseTask === 'function'
+  )
+}
+
+function createRunTask(
+  runId: string,
+  kind: RunTaskKind,
+  targetRevision: number,
+  createdAt: string
+): RunTask {
+  return {
+    id: `${runId}:${kind}:${targetRevision}`,
+    runId,
+    kind,
+    createdAt,
+  }
 }
 
 function defaultSchedule(task: ScheduledTask): void {
@@ -171,18 +245,31 @@ function removeAnsweredQuestion(
 
 export class ResumeAgentRunService {
   private readonly store: RunStore
+  private readonly durableStore: DurableRunStore | undefined
   private readonly idFactory: () => string
   private readonly now: () => Date
   private readonly schedule: (task: ScheduledTask) => void
+  private readonly workerId: string
+  private readonly taskLeaseMs: number
 
   constructor(
     private readonly agent: ResumeTailoringAgent,
     options: ResumeAgentRunServiceOptions = {}
   ) {
     this.store = options.store ?? new InMemoryRunStore()
+    this.durableStore = isDurableRunStore(this.store) ? this.store : undefined
     this.idFactory = options.idFactory ?? randomUUID
     this.now = options.now ?? (() => new Date())
     this.schedule = options.schedule ?? defaultSchedule
+    this.workerId = options.workerId ?? randomUUID()
+    this.taskLeaseMs = options.taskLeaseMs ?? DEFAULT_TASK_LEASE_MS
+    if (
+      !this.workerId.trim() ||
+      !Number.isSafeInteger(this.taskLeaseMs) ||
+      this.taskLeaseMs <= 0
+    ) {
+      throw new Error('Run task worker configuration is invalid')
+    }
   }
 
   async start(request: TailorResumeRequest): Promise<ResumeAgentRun> {
@@ -193,13 +280,23 @@ export class ResumeAgentRunService {
       createdAt: now,
       updatedAt: now,
     }
-    const created = await this.store.create({
+    const storedRun = {
       revision: 0,
       snapshot: run,
       request,
-    })
+    }
+    const created = this.durableStore
+      ? await this.durableStore.createWithTask(
+          storedRun,
+          createRunTask(run.id, 'prepare', 0, now)
+        )
+      : await this.store.create(storedRun)
     if (!created) throw new Error('Run already exists')
-    this.schedule(() => this.execute(run.id))
+    if (this.durableStore) {
+      this.schedule(() => this.claimAndExecuteNextTask())
+    } else {
+      this.schedule(() => this.execute(run.id))
+    }
     return run
   }
 
@@ -207,21 +304,84 @@ export class ResumeAgentRunService {
     return (await this.store.get(id))?.snapshot
   }
 
+  async recoverPendingTasks(
+    limit: number = DEFAULT_RECOVERY_LIMIT
+  ): Promise<number> {
+    if (!this.durableStore) return 0
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+      throw new Error('Run task recovery limit is invalid')
+    }
+    let recovered = 0
+    while (recovered < limit) {
+      const task = await this.durableStore.claimNextTask({
+        workerId: this.workerId,
+        now: this.now(),
+        leaseDurationMs: this.taskLeaseMs,
+      })
+      if (!task) break
+      recovered += 1
+      this.schedule(() => this.executeClaimedTask(task))
+    }
+    return recovered
+  }
+
+  private async claimAndExecuteNextTask(): Promise<void> {
+    if (!this.durableStore) return
+    try {
+      const task = await this.durableStore.claimNextTask({
+        workerId: this.workerId,
+        now: this.now(),
+        leaseDurationMs: this.taskLeaseMs,
+      })
+      if (task) await this.executeClaimedTask(task)
+    } catch {
+      // The committed task remains available or leased for later recovery.
+    }
+  }
+
+  private async executeClaimedTask(task: ClaimedRunTask): Promise<void> {
+    if (!this.durableStore) return
+    try {
+      if (task.kind === 'prepare') {
+        await this.execute(task.runId)
+      } else {
+        await this.executeCompletion(task.runId)
+      }
+      await this.durableStore.acknowledgeTask(task.id, task.leaseOwner)
+    } catch {
+      try {
+        await this.durableStore.releaseTask(task.id, task.leaseOwner)
+      } catch {
+        // A later lease expiry can make the task recoverable again.
+      }
+    }
+  }
+
   private async execute(id: string): Promise<void> {
     try {
       const stored = await this.store.get(id)
       if (!stored?.request) return
-      const checkpoint = await this.agent.prepare(stored.request, {
-        onStatus: (status) => this.transition(id, status),
-      })
-      const interactions = createInteractionRequests(
-        checkpoint.questions
-      ).filter((interaction) => interaction.severity !== 'optional')
-      if (interactions[0]) {
-        await this.pause(id, checkpoint, interactions)
+      if (
+        stored.snapshot.status === 'completed' ||
+        stored.snapshot.status === 'failed' ||
+        stored.snapshot.status === 'needs_input'
+      ) {
         return
       }
-      await this.saveCheckpoint(id, checkpoint)
+      let checkpoint = stored.checkpoint
+      if (!checkpoint) {
+        checkpoint = await this.agent.prepare(stored.request, {
+          onStatus: (status) => this.transition(id, status),
+        })
+        const interactions = createInteractionRequests(
+          checkpoint.questions
+        ).filter((interaction) => interaction.severity !== 'optional')
+        if (interactions[0]) {
+          await this.pause(id, checkpoint, interactions)
+          return
+        }
+        await this.saveCheckpoint(id, checkpoint)
+      }
       const result = await this.agent.complete(checkpoint, {
         onStatus: (status) => this.transition(id, status),
       })
@@ -326,17 +486,32 @@ export class ResumeAgentRunService {
       status: 'analyzing_jd',
       updatedAt: this.now().toISOString(),
     }
-    const updated = await this.store.compareAndSet({
+    const nextStoredRun: StoredResumeAgentRun = {
       ...current,
       snapshot,
       checkpoint,
       pendingInteractions: undefined,
       answerReceipts,
-    })
+    }
+    const updated = this.durableStore
+      ? await this.durableStore.compareAndSetWithTask(
+          nextStoredRun,
+          createRunTask(
+            id,
+            'complete',
+            current.revision + 1,
+            snapshot.updatedAt
+          )
+        )
+      : await this.store.compareAndSet(nextStoredRun)
     if (!updated) {
       return this.resolveAnswerConflict(id, answer, valueFingerprint)
     }
-    this.schedule(() => this.executeCompletion(id))
+    if (this.durableStore) {
+      this.schedule(() => this.claimAndExecuteNextTask())
+    } else {
+      this.schedule(() => this.executeCompletion(id))
+    }
     return snapshot
   }
 
@@ -371,7 +546,13 @@ export class ResumeAgentRunService {
   private async executeCompletion(id: string): Promise<void> {
     try {
       const stored = await this.store.get(id)
-      if (!stored?.checkpoint) return
+      if (
+        !stored?.checkpoint ||
+        stored.snapshot.status === 'completed' ||
+        stored.snapshot.status === 'failed'
+      ) {
+        return
+      }
       const result = await this.agent.complete(stored.checkpoint, {
         onStatus: (status) => this.transition(id, status),
       })
@@ -398,6 +579,15 @@ export class ResumeAgentRunService {
   private async transition(id: string, status: AgentRunStatus): Promise<void> {
     await this.updateStoredRun(id, (current) => {
       if (current.snapshot.status === status) return undefined
+      const currentRank = ACTIVE_STATUS_RANK[current.snapshot.status]
+      const nextRank = ACTIVE_STATUS_RANK[status]
+      if (
+        currentRank !== undefined &&
+        nextRank !== undefined &&
+        nextRank < currentRank
+      ) {
+        return undefined
+      }
       if (!NEXT_STATUS[current.snapshot.status].includes(status)) {
         throw new Error(
           `Invalid run transition from ${current.snapshot.status} to ${status}`

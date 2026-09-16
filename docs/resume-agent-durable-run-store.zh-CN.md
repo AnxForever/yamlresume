@@ -3,7 +3,7 @@
 > Feature ID：RA-015B
 > 状态：Implemented for development（仅同主机 SQLite；不是 Enabled 或 Operational）
 > 最后审阅：2026-09-16
-> 范围：为版本化 `RunStore` 提供可重启、同主机跨进程共享的 SQLite adapter；本切片不实现 outbox worker、跨主机数据库或生产部署声明。
+> 范围：记录 RA-015B 引入的可重启、同主机跨进程 SQLite adapter；当前代码已由 RA-015C 将 schema v1 迁移到 v2 并加入 transactional outbox，但仍不包含跨主机数据库或生产部署声明。
 
 ## 1. 问题与用户结果
 
@@ -15,7 +15,7 @@ RA-015A 已阻止单个 `InMemoryRunStore` 内的 stale overwrite，但进程退
 - adapter 继续满足 clone 隔离和公开 Run 隐私边界；
 - 数据库 schema 有明确版本，连接可显式关闭，测试不会遗留文件或句柄。
 
-这只解决 durable state，不解决“状态已提交但任务未调度”的双写窗口；该问题属于 RA-015C transactional outbox。
+RA-015B 提交时只解决 durable state，未解决“状态已提交但任务未调度”的双写窗口。该历史缺口已由 RA-015C transactional outbox 在当前 schema v2 中补上；heartbeat、自动 poller 与生产 worker 仍未实现。
 
 ## 2. 研究证据与技术选择
 
@@ -58,7 +58,7 @@ try {
 - 路径为空时使用稳定配置错误；目录创建由部署者负责，adapter 不猜测文件系统布局。
 - `close()` 幂等；关闭后的业务方法返回稳定 Store 错误，而不是泄露 SQLite 原始消息。
 
-### 3.2 Schema v1
+### 3.2 RA-015B 引入的 schema v1
 
 ```sql
 CREATE TABLE resume_agent_runs (
@@ -80,6 +80,8 @@ WHERE id = ? AND revision = ?;
 
 - `changes === 1` 表示成功；`0` 表示 missing 或 revision conflict，且不改变状态。
 - `get` 解析 JSON 后校验 id、revision、snapshot 最小形状；损坏记录只抛数据安全的 `RunStoreError`，不回显数据库正文或 SQLite 原始 error message。
+
+当前 adapter 的 `user_version` 已是 2。RA-015C 保留上述 Run table 与 CAS 语义，通过 v1→v2 migration 新增 `resume_agent_tasks`；详见 [`resume-agent-run-outbox-recovery.zh-CN.md`](./resume-agent-run-outbox-recovery.zh-CN.md)。
 
 ## 4. 状态与失败语义
 
@@ -146,10 +148,10 @@ ready + compareAndSet(expected r)
 | --- | --- | --- | --- |
 | 磁盘 reopen | 官方 API、SQLite transaction 文档、本地 close/reopen test | Covered for local file | 断电/文件系统故障未注入 |
 | SQL CAS | SQLite serializable/single-writer、双连接唯一 winner test | Covered for one host | 多主机数据库未实现 |
-| migration | schema v1 初始化、重复打开、future version 拒绝 | Covered for v1 | RA-015C 需要 schema v2 |
+| migration | schema v1 初始化、重复打开、future version 拒绝；RA-015C v1→v2 保留 Run test | Covered through current v2 | 更复杂的多步/回滚 migration 尚无 production evidence |
 | safe errors | 私密路径、循环正文、损坏记录注入 tests | Covered | 磁盘满/权限变化故障未注入 |
 | public privacy | SQLite service 关闭/重建 test | Covered | API 进程自动装配未启用 |
-| outbox / crash dispatch | 无 | Not implemented in RA-015B | RA-015C |
+| outbox / crash dispatch | RA-015C 同事务 task 与显式 restart drain tests | Implemented after RA-015B | heartbeat、自动 poller 与 operational worker |
 | multi-host / production DB | 无 | Not implemented | 独立 adapter 与部署验证 |
 
 ## 9. 可能推翻方案的证据
@@ -162,8 +164,8 @@ ready + compareAndSet(expected r)
 
 ## 10. 明确延期
 
-- RA-015C：transactional outbox、lease、ack/retry、answer CAS 与 completion enqueue 同事务、进程重启 drain。
-- RA-015D：两个 service/worker 的 claim 竞争、lease 过期接管、故障注入与 operational 指标。
+- RA-015C 已实现：transactional outbox、lease、owner-only ack/release、answer CAS 与 completion enqueue 同事务、显式进程重启 drain。
+- RA-015D：补强多 worker 故障注入、claim fencing/长任务 lease 风险与 operational 指标设计；仍不宣称生产多主机调度。
 - 生产 adapter：PostgreSQL/托管数据库、连接池、加密、备份、retention 和 runbook。
 
 ## 11. 验证记录

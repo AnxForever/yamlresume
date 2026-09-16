@@ -109,15 +109,17 @@ extraction or normalization.
 This is a development proof, not production orchestration. The default adapter
 uses an in-memory revision and atomic compare-and-set within one Node.js
 process. An opt-in SQLite adapter persists the same versioned Store contract
-across restarts and coordinates connections on one host, but uses Node's
-active-development synchronous SQLite API. Neither adapter yet provides a
-transactional task outbox, automatic restart drain, authentication, retention,
-or a binary file-answer loop. Completed public snapshots intentionally contain
+across restarts, coordinates connections on one host, and transactionally
+stores workflow tasks with Run mutations, but uses Node's active-development
+synchronous SQLite API. It provides explicit bounded restart drain, not an
+automatic worker, heartbeat, authentication, retention, or a binary
+file-answer loop. Completed public snapshots intentionally contain
 the generated resume and artifacts for the user; revisions, source requests,
 checkpoints, answer receipts, raw answers, and raw model completions remain
 private. See the
 [`concurrency`](./resume-agent-run-store-concurrency.zh-CN.md) and
-[`durable Store`](./resume-agent-durable-run-store.zh-CN.md) briefs.
+[`durable Store`](./resume-agent-durable-run-store.zh-CN.md), and
+[`transactional outbox`](./resume-agent-run-outbox-recovery.zh-CN.md) briefs.
 
 ## Feature evidence ledger
 
@@ -133,12 +135,13 @@ private. See the
 | RA-007 | Multi-style YAML/JSON/Markdown/HTML/LaTeX/PDF/DOCX rendering | Implemented for development | Preset metadata, real renderer/DOCX and fake PDF compiler system tests | Partial | Backfilled | Real compiler sandbox, page-count/visual checks and cross-reader compatibility |
 | RA-007C | Common document export expansion | Planned | User requirement and RA-007B format matrix | Gap | None | Separate TXT, RTF and ODT Feature Briefs, exporters, fixtures and compatibility tests |
 | RA-008 | HTTP API | Implemented | End-to-end HTTP tests | Partial | None | Authentication, rate limits, request IDs, cancellation |
-| RA-009 | Asynchronous runs, persistence and resume versions | Implemented for development; not durable | In-memory `RunStore`, stage state machine, `POST/GET /v1/runs` and package/API tests | Partial | None | Add durable checkpoint storage, cancellation, retention and restart recovery |
+| RA-009 | Asynchronous runs, persistence and resume versions | Implemented for development; durable adapter opt-in | In-memory default, SQLite Run/task persistence and explicit restart drain, stage state machine, `POST/GET /v1/runs` and package/API tests | Partial | None | Wire a production worker, cancellation, retention and operational recovery |
 | RA-010 | Agent evaluation and operational observability | Implemented for development | Deterministic EvalCase runner, fictional fixture, safe aggregates and structured-output telemetry | Partial | None | Real-model adapter, authorized anonymized dataset, repeated sampling, cost and human calibration |
-| RA-011 | Human-in-the-loop clarification | Implemented for development; not durable | Typed controls, `needs_input`, checkpoint, answer endpoint, validation/idempotency and resume tests | Partial | None | Durable transactional store, restart recovery, authentication, file-answer loop and later-stage interrupts |
+| RA-011 | Human-in-the-loop clarification | Implemented for development; durable adapter opt-in | Typed controls, `needs_input`, durable checkpoint/receipt/task transaction, answer endpoint and restart tests | Partial | None | Production worker, authentication, file-answer loop and later-stage interrupts |
 | RA-012 | Structured-output validation and bounded repair | Implemented | Shared module, three-boundary workflow tests, safe API error test | Covered | Backfilled | Operational provider comparison is tracked by RA-010 |
-| RA-015A | Revision-safe RunStore and atomic answer acceptance | Implemented for development | Atomic in-memory create/CAS, deterministic concurrent answer tests, clone and privacy tests | Covered for one process | Backfilled | RA-015B adds durable CAS; transactional task dispatch and restart drain remain RA-015C |
-| RA-015B | Durable versioned RunStore | Implemented for development; not operational | SQLite schema v1, disk reopen, SQL CAS across connections, safe failure and privacy tests | Covered for one host | None | Transactional outbox/restart drain, async production driver, encryption and retention |
+| RA-015A | Revision-safe RunStore and atomic answer acceptance | Implemented for development | Atomic in-memory create/CAS, deterministic concurrent answer tests, clone and privacy tests; durable realization tracked by RA-015B/C | Covered for one process | Backfilled | Operational multi-instance evidence remains RA-015D |
+| RA-015B | Durable versioned RunStore | Implemented for development; not operational | SQLite schema introduced at v1, disk reopen, SQL CAS across connections, safe failure and privacy tests; current adapter migrated to v2 | Covered for one host | None | Async production driver, encryption and retention |
+| RA-015C | Transactional Run outbox and restart recovery | Implemented for development; explicit drain only | Run + task atomic transactions, v1→v2 migration, lease/ack/release, lost-hint restart and terminal replay tests | Partial | None | No heartbeat, automatic poller, DLQ/backoff, long-task fencing or operational evidence |
 
 ### RA-012 evidence detail
 
@@ -191,6 +194,23 @@ private. See the
 | Remaining gap | No database, process restart, multi-instance coordination, transactional outbox or operational concurrency evidence |
 | Last reviewed | 2026-09-16 |
 
+### RA-015C evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | Durable Run mutation → enqueue → claim → execute → ack/release → restart recovery |
+| User outcome | A committed start or final answer cannot become permanently stuck only because its in-memory schedule hint was lost |
+| Current state | SQLite schema v2 stores Run mutation and task in one transaction; services explicitly drain ready or expired tasks with bounded leases |
+| Primary evidence | AWS transactional outbox and SQS visibility-timeout guidance; SQLite transactions and `RETURNING`, reviewed 2026-09-16 |
+| Independent evidence | Real local SQLite close/reopen, two-connection contention, lease-expiry and lost-ack experiments |
+| Decision | Adapt transactional outbox and visibility lease to the existing RunStore seam; reject exactly-once and hidden background timers |
+| Edge cases | v1 migration, duplicate create, stale CAS, task collision rollback, two claimers, owner-only ack/release, lost schedule hints, expired terminal replay |
+| Acceptance | 20 focused SQLite tests, 18 Run tests, 149-test package suite, TypeScript, build, Biome and diff checks |
+| Coverage | Partial: covered for explicit same-host development recovery; not for long-running leases or production operation |
+| Historical gap | None; RA-015B explicitly recorded the dual-write gap before RA-015C |
+| Remaining gap | No heartbeat/fencing, automatic poller, DLQ/backoff, multi-host adapter, power-loss injection, metrics or runbook |
+| Last reviewed | 2026-09-16, Node 22.21.1 `node:sqlite`, schema v2 |
+
 ## Learning roadmap
 
 ### Milestone 1: Reliable single run
@@ -208,8 +228,10 @@ model-provider abstraction.
 - Development slice delivered: stable Run IDs, `needs_input`, typed controls,
   safe answer application, idempotency receipts, revision-safe in-memory
   updates, and resume from JD analysis.
-- Next, implement the versioned Store contract with durable conditional writes
-  and transactional task dispatch, then prove restart recovery.
+- Development proof delivered: versioned durable conditional writes,
+  transactional task dispatch, and explicit restart recovery on one host.
+- Next, harden lease fencing and failure injection, then design the production
+  worker lifecycle without overclaiming operational readiness.
 - Extend interrupts only when a separately researched later-stage use case
   requires them.
 - Keep showing source-to-draft diff and evidence links in completed results.

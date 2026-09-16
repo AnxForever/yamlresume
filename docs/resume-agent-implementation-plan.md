@@ -183,8 +183,8 @@ Tests:
 
 ### Unit 7A — Asynchronous run protocol
 
-**Status:** implemented for development with an in-memory adapter; durable
-persistence and cancellation remain planned.
+**Status:** implemented for development; in-memory remains the default, while
+same-host durable persistence is opt-in. Cancellation remains planned.
 
 Delivered:
 
@@ -208,14 +208,15 @@ Verified tests:
 Known limits:
 
 - in-memory runs do not survive restarts and are not shared across instances;
-- in-memory checkpoints now support Unit 7B, but there is no durable queue,
-  cancellation, retention policy, or restart recovery;
+- the opt-in SQLite adapter persists checkpoints and task rows and supports
+  explicit restart drain, but there is no automatic worker, cancellation or
+  retention policy;
 - these limits must be addressed before calling the protocol operational.
 
 ### Unit 7B — Structured human-in-the-loop interaction
 
-**Status:** implemented for development with an in-memory checkpoint; not
-durable or operational.
+**Status:** implemented for development; in-memory is the default, with an
+opt-in same-host durable checkpoint/outbox path. It is not operational.
 
 Delivered:
 
@@ -244,8 +245,9 @@ Verified tests:
 
 Known limits:
 
-- the in-memory adapter now makes answer receipt/checkpoint updates atomic
-  within one process, but no durable adapter has proven the same contract;
+- the in-memory adapter makes answer receipt/checkpoint updates atomic within
+  one process; the SQLite adapter proves the durable transaction and explicit
+  restart path on one host, but not a production worker lifecycle;
 - `date` and `date_range` intentionally accept only day-precision
   `YYYY-MM-DD`; year/month-aware controls remain to be designed;
 - `file` validates references only; binary upload and re-normalization are not
@@ -287,9 +289,9 @@ Verified tests:
 
 Known limits:
 
-- records and queued tasks remain in memory and do not survive restart;
-- CAS is scoped to one Store instance and does not coordinate processes;
-- CAS success and completion-task scheduling are not one durable transaction;
+- the default in-memory adapter still loses records and queued work on restart;
+- durable cross-process CAS and transactional task dispatch require opting into
+  the SQLite adapter delivered by Units 7D/7E;
 - a future adapter must use a database conditional write, not a read followed
   by an unconditional update;
 - multi-region last-writer-wins storage does not satisfy this contract.
@@ -330,11 +332,54 @@ Known limits:
 - WAL coordinates connections on one host, not deployments on different hosts
   or network filesystems;
 - persisted private inputs are not encrypted by this adapter;
-- state CAS and task scheduling are still separate operations; crash recovery
-  and a transactional outbox remain Unit 7E / RA-015C.
+- the RA-015B historical adapter had separate state CAS and scheduling; current
+  schema v2 adds Unit 7E transactional task rows, while heartbeat, automatic
+  polling and production operation remain out of scope.
 
 The research, schema, error model and evidence ledger are recorded in
 [`resume-agent-durable-run-store.zh-CN.md`](./resume-agent-durable-run-store.zh-CN.md).
+
+### Unit 7E — Transactional outbox and explicit restart recovery
+
+**Status:** implemented for development on one host; explicit drain only, not
+enabled or operational.
+
+Delivered:
+
+- schema v2 with a durable task table and v1→v2 migration that preserves Runs;
+- `createWithTask` and `compareAndSetWithTask` transactions, so Run mutation
+  and prepare/completion enqueue commit or roll back together;
+- atomic oldest-ready claim with a bounded lease and attempt counter;
+- owner-only ack/release plus lease-expiry takeover;
+- schedule hints for the normal path and bounded `recoverPendingTasks()` for an
+  explicit startup/recovery lifecycle;
+- at-least-once replay rules for terminal Runs and Runs that already have a
+  checkpoint, without an exactly-once claim.
+
+Verified tests:
+
+- task-insert collision rolls back the corresponding Run mutation;
+- two connections have one claim winner, and stale owners cannot ack/release a
+  task after takeover;
+- lost start and final-answer schedule hints recover after close/reopen;
+- two services racing to drain execute the current lease once;
+- a lost acknowledgement causes terminal replay without a second model call;
+- prior in-memory Run and durable Store behavior remains green.
+
+Known limits:
+
+- there is no automatic poller, heartbeat, lease extension, DLQ, retry backoff
+  or jitter;
+- a long LLM call can outlive its lease and be executed concurrently after
+  takeover; unfinished non-terminal stages may therefore call the model more
+  than once;
+- `recoverPendingTasks(limit)` claims before scheduled execution, so queued
+  callbacks consume lease time;
+- SQLite remains a synchronous, same-host development adapter; no multi-host
+  or production operational evidence exists.
+
+The research, state machine, RED → GREEN record and evidence ledger are in
+[`resume-agent-run-outbox-recovery.zh-CN.md`](./resume-agent-run-outbox-recovery.zh-CN.md).
 
 ### Unit 8 — Backend documentation and completion audit
 
@@ -365,8 +410,8 @@ pnpm check:ci
 - authentication and multi-user tenancy;
 - production database and encrypted object storage;
 - production-grade OCR for image-only PDFs;
-- durable/restart-resumable Human-in-the-loop storage and transactional answer
-  coordination;
+- automatic durable worker lifecycle, heartbeat/fencing, cancellation and
+  operational restart recovery;
 - binary file answers and candidate re-normalization after upload;
 - automated web browsing or job application;
 - PDF compilation sandbox and page-count optimization;

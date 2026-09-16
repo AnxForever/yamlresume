@@ -24,9 +24,15 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 
-import type { RunStore, StoredResumeAgentRun } from '@/workflow/run'
+import type {
+  ClaimedRunTask,
+  ClaimRunTaskOptions,
+  DurableRunStore,
+  RunTask,
+  StoredResumeAgentRun,
+} from '@/workflow/run'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000
 
 export type RunStoreErrorCode =
@@ -34,6 +40,7 @@ export type RunStoreErrorCode =
   | 'open_failed'
   | 'unsupported_schema'
   | 'closed'
+  | 'invalid_task'
   | 'serialization_failed'
   | 'corrupt_record'
   | 'storage_failed'
@@ -54,6 +61,16 @@ interface StoredRow {
   record_json: string
 }
 
+interface TaskRow {
+  id: string
+  run_id: string
+  kind: string
+  created_at: number | bigint
+  attempts: number | bigint
+  lease_owner: string
+  lease_expires_at: number | bigint
+}
+
 function runStoreErrorMessage(code: RunStoreErrorCode): string {
   switch (code) {
     case 'invalid_configuration':
@@ -64,6 +81,8 @@ function runStoreErrorMessage(code: RunStoreErrorCode): string {
       return 'Run store schema is not supported'
     case 'closed':
       return 'Run store is closed'
+    case 'invalid_task':
+      return 'Run task is invalid'
     case 'serialization_failed':
       return 'Run store record could not be serialized'
     case 'corrupt_record':
@@ -80,6 +99,64 @@ function serializeRecord(run: StoredResumeAgentRun): string {
     return serialized
   } catch {
     throw new RunStoreError('serialization_failed')
+  }
+}
+
+function taskCreatedAt(task: RunTask, runId: string): number {
+  const createdAt = Date.parse(task.createdAt)
+  if (
+    !task.id.trim() ||
+    task.runId !== runId ||
+    (task.kind !== 'prepare' && task.kind !== 'complete') ||
+    !Number.isSafeInteger(createdAt)
+  ) {
+    throw new RunStoreError('invalid_task')
+  }
+  return createdAt
+}
+
+function claimTimes(options: ClaimRunTaskOptions): {
+  now: number
+  leaseExpiresAt: number
+} {
+  const now = options.now.getTime()
+  const leaseExpiresAt = now + options.leaseDurationMs
+  if (
+    !options.workerId.trim() ||
+    !Number.isSafeInteger(now) ||
+    !Number.isSafeInteger(options.leaseDurationMs) ||
+    options.leaseDurationMs <= 0 ||
+    !Number.isSafeInteger(leaseExpiresAt)
+  ) {
+    throw new RunStoreError('invalid_task')
+  }
+  return { now, leaseExpiresAt }
+}
+
+function parseClaimedTask(row: TaskRow): ClaimedRunTask {
+  const createdAt = Number(row.created_at)
+  const attempt = Number(row.attempts)
+  const leaseExpiresAt = Number(row.lease_expires_at)
+  if (
+    !row.id ||
+    !row.run_id ||
+    (row.kind !== 'prepare' && row.kind !== 'complete') ||
+    !row.lease_owner ||
+    !Number.isSafeInteger(createdAt) ||
+    !Number.isSafeInteger(attempt) ||
+    attempt < 1 ||
+    !Number.isSafeInteger(leaseExpiresAt)
+  ) {
+    throw new RunStoreError('corrupt_record')
+  }
+  return {
+    id: row.id,
+    runId: row.run_id,
+    kind: row.kind,
+    createdAt: new Date(createdAt).toISOString(),
+    attempt,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: new Date(leaseExpiresAt).toISOString(),
   }
 }
 
@@ -135,6 +212,28 @@ function migrate(database: DatabaseSync): void {
         revision INTEGER NOT NULL CHECK (revision >= 0),
         record_json TEXT NOT NULL CHECK (json_valid(record_json))
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS resume_agent_tasks (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('prepare', 'complete')),
+        created_at INTEGER NOT NULL,
+        available_at INTEGER NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        lease_owner TEXT,
+        lease_expires_at INTEGER,
+        FOREIGN KEY (run_id) REFERENCES resume_agent_runs(id) ON DELETE CASCADE,
+        CHECK (
+          (lease_owner IS NULL AND lease_expires_at IS NULL) OR
+          (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+        )
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS resume_agent_tasks_ready
+      ON resume_agent_tasks (
+        available_at,
+        lease_expires_at,
+        created_at,
+        id
+      );
       PRAGMA user_version = ${SCHEMA_VERSION};
       COMMIT;
     `)
@@ -148,7 +247,7 @@ function migrate(database: DatabaseSync): void {
   }
 }
 
-export class SqliteRunStore implements RunStore {
+export class SqliteRunStore implements DurableRunStore {
   private closed = false
 
   private constructor(private readonly database: DatabaseSync) {}
@@ -227,6 +326,43 @@ export class SqliteRunStore implements RunStore {
     }
   }
 
+  async createWithTask(
+    run: StoredResumeAgentRun,
+    task: RunTask
+  ): Promise<boolean> {
+    this.ensureOpen()
+    if (run.revision !== 0) return false
+    const recordJson = serializeRecord(run)
+    const createdAt = taskCreatedAt(task, run.snapshot.id)
+    try {
+      this.database.exec('BEGIN IMMEDIATE')
+      const result = this.database
+        .prepare(
+          `INSERT INTO resume_agent_runs (id, revision, record_json)
+           VALUES (?, ?, ?)
+           ON CONFLICT(id) DO NOTHING`
+        )
+        .run(run.snapshot.id, run.revision, recordJson)
+      if (Number(result.changes) !== 1) {
+        this.database.exec('ROLLBACK')
+        return false
+      }
+      this.database
+        .prepare(
+          `INSERT INTO resume_agent_tasks (
+             id, run_id, kind, created_at, available_at
+           ) VALUES (?, ?, ?, ?, ?)`
+        )
+        .run(task.id, task.runId, task.kind, createdAt, createdAt)
+      this.database.exec('COMMIT')
+      return true
+    } catch (error) {
+      this.rollback()
+      if (error instanceof RunStoreError) throw error
+      throw new RunStoreError('storage_failed')
+    }
+  }
+
   async compareAndSet(run: StoredResumeAgentRun): Promise<boolean> {
     this.ensureOpen()
     if (
@@ -252,6 +388,123 @@ export class SqliteRunStore implements RunStore {
     }
   }
 
+  async compareAndSetWithTask(
+    run: StoredResumeAgentRun,
+    task: RunTask
+  ): Promise<boolean> {
+    this.ensureOpen()
+    if (
+      !Number.isSafeInteger(run.revision) ||
+      run.revision < 0 ||
+      run.revision >= Number.MAX_SAFE_INTEGER
+    ) {
+      throw new RunStoreError('serialization_failed')
+    }
+    const nextRevision = run.revision + 1
+    const recordJson = serializeRecord({ ...run, revision: nextRevision })
+    const createdAt = taskCreatedAt(task, run.snapshot.id)
+    try {
+      this.database.exec('BEGIN IMMEDIATE')
+      const result = this.database
+        .prepare(
+          `UPDATE resume_agent_runs
+           SET revision = ?, record_json = ?
+           WHERE id = ? AND revision = ?`
+        )
+        .run(nextRevision, recordJson, run.snapshot.id, run.revision)
+      if (Number(result.changes) !== 1) {
+        this.database.exec('ROLLBACK')
+        return false
+      }
+      this.database
+        .prepare(
+          `INSERT INTO resume_agent_tasks (
+             id, run_id, kind, created_at, available_at
+           ) VALUES (?, ?, ?, ?, ?)`
+        )
+        .run(task.id, task.runId, task.kind, createdAt, createdAt)
+      this.database.exec('COMMIT')
+      return true
+    } catch (error) {
+      this.rollback()
+      if (error instanceof RunStoreError) throw error
+      throw new RunStoreError('storage_failed')
+    }
+  }
+
+  async claimNextTask(
+    options: ClaimRunTaskOptions
+  ): Promise<ClaimedRunTask | undefined> {
+    this.ensureOpen()
+    const { now, leaseExpiresAt } = claimTimes(options)
+    try {
+      const row = this.database
+        .prepare(
+          `UPDATE resume_agent_tasks
+           SET lease_owner = ?, lease_expires_at = ?, attempts = attempts + 1
+           WHERE id = (
+             SELECT id FROM resume_agent_tasks
+             WHERE available_at <= ?
+               AND (lease_owner IS NULL OR lease_expires_at <= ?)
+             ORDER BY created_at, id
+             LIMIT 1
+           )
+           RETURNING
+             id,
+             run_id,
+             kind,
+             created_at,
+             attempts,
+             lease_owner,
+             lease_expires_at`
+        )
+        .get(options.workerId, leaseExpiresAt, now, now) as unknown as
+        | TaskRow
+        | undefined
+      return row ? parseClaimedTask(row) : undefined
+    } catch (error) {
+      if (error instanceof RunStoreError) throw error
+      throw new RunStoreError('storage_failed')
+    }
+  }
+
+  async acknowledgeTask(taskId: string, leaseOwner: string): Promise<boolean> {
+    this.ensureOpen()
+    if (!taskId.trim() || !leaseOwner.trim()) {
+      throw new RunStoreError('invalid_task')
+    }
+    try {
+      const result = this.database
+        .prepare(
+          `DELETE FROM resume_agent_tasks
+           WHERE id = ? AND lease_owner = ?`
+        )
+        .run(taskId, leaseOwner)
+      return Number(result.changes) === 1
+    } catch {
+      throw new RunStoreError('storage_failed')
+    }
+  }
+
+  async releaseTask(taskId: string, leaseOwner: string): Promise<boolean> {
+    this.ensureOpen()
+    if (!taskId.trim() || !leaseOwner.trim()) {
+      throw new RunStoreError('invalid_task')
+    }
+    try {
+      const result = this.database
+        .prepare(
+          `UPDATE resume_agent_tasks
+           SET lease_owner = NULL, lease_expires_at = NULL
+           WHERE id = ? AND lease_owner = ?`
+        )
+        .run(taskId, leaseOwner)
+      return Number(result.changes) === 1
+    } catch {
+      throw new RunStoreError('storage_failed')
+    }
+  }
+
   close(): void {
     if (this.closed) return
     this.closed = true
@@ -264,5 +517,13 @@ export class SqliteRunStore implements RunStore {
 
   private ensureOpen(): void {
     if (this.closed) throw new RunStoreError('closed')
+  }
+
+  private rollback(): void {
+    try {
+      this.database.exec('ROLLBACK')
+    } catch {
+      // The failing statement may already have ended the transaction.
+    }
   }
 }

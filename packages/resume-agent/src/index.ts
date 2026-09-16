@@ -139,9 +139,14 @@ export {
   validateInteractionAnswer,
 } from './workflow/interaction'
 export type {
+  ClaimedRunTask,
+  ClaimRunTaskOptions,
+  DurableRunStore,
   ResumeAgentRunServiceOptions,
   RunAnswerErrorCode,
   RunStore,
+  RunTask,
+  RunTaskKind,
   StoredResumeAgentRun,
 } from './workflow/run'
 export {

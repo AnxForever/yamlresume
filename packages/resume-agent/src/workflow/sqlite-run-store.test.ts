@@ -31,7 +31,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { LlmClient } from '@/contracts'
 import { ResumeTailoringAgent } from '@/workflow/agent'
 import {
+  type ClaimedRunTask,
+  type ClaimRunTaskOptions,
+  type DurableRunStore,
   ResumeAgentRunService,
+  type RunTask,
   type StoredResumeAgentRun,
 } from '@/workflow/run'
 import { RunStoreError, SqliteRunStore } from '@/workflow/sqlite-run-store'
@@ -67,6 +71,19 @@ function storedRun(id: string): StoredResumeAgentRun {
   }
 }
 
+function runTask(
+  runId: string,
+  id = `${runId}:prepare:0`,
+  kind: RunTask['kind'] = 'prepare'
+): RunTask {
+  return {
+    id,
+    runId,
+    kind,
+    createdAt: '2026-09-16T12:00:00.000Z',
+  }
+}
+
 function unusedAgent(): ResumeTailoringAgent {
   const llm: LlmClient = {
     async completeJson() {
@@ -74,6 +91,142 @@ function unusedAgent(): ResumeTailoringAgent {
     },
   }
   return new ResumeTailoringAgent(llm)
+}
+
+const completeCandidate = {
+  content: {
+    basics: { name: 'Ada Lovelace', email: 'ada@example.com' },
+    education: [],
+  },
+  layouts: [
+    { engine: 'latex', template: 'jake' },
+    { engine: 'html', template: 'calm' },
+  ],
+}
+
+function completingAgent(name = 'Ada Lovelace'): ResumeTailoringAgent {
+  const completedCandidate = {
+    ...completeCandidate,
+    content: {
+      ...completeCandidate.content,
+      basics: { ...completeCandidate.content.basics, name },
+    },
+  }
+  const responses = [
+    {
+      targetTitle: 'TypeScript Engineer',
+      seniority: 'junior',
+      summary: 'TypeScript engineer',
+      requirements: [],
+      keywords: [],
+    },
+    {
+      resume: completedCandidate,
+      selectedEvidenceIds: [],
+      questions: [],
+      notes: [],
+    },
+  ]
+  const llm: LlmClient = {
+    async completeJson() {
+      return {
+        data: responses.shift(),
+        metadata: {
+          provider: 'fake',
+          model: 'fake-model',
+          durationMs: 1,
+          attempt: 1,
+        },
+      }
+    },
+  }
+  return new ResumeTailoringAgent(llm)
+}
+
+function questionAgent(): ResumeTailoringAgent {
+  const llm: LlmClient = {
+    async completeJson<T>() {
+      return {
+        data: {
+          resume: completeCandidate,
+          sourceArtifactIds: ['candidate-source'],
+          questions: [
+            {
+              field: 'content.basics.name',
+              question: 'What is your full name?',
+              reason: 'The source name must be confirmed.',
+              severity: 'blocking',
+            },
+          ],
+          warnings: [],
+        } as T,
+        metadata: {
+          provider: 'fake',
+          model: 'fake-model',
+          durationMs: 1,
+          attempt: 1,
+        },
+      }
+    },
+  }
+  return new ResumeTailoringAgent(llm)
+}
+
+function countingFailAgent(calls: { count: number }): ResumeTailoringAgent {
+  const llm: LlmClient = {
+    async completeJson() {
+      calls.count += 1
+      throw new Error('A terminal task replay must not call the model')
+    },
+  }
+  return new ResumeTailoringAgent(llm)
+}
+
+class LostAcknowledgementStore implements DurableRunStore {
+  private loseNextAcknowledgement = true
+
+  constructor(private readonly delegate: DurableRunStore) {}
+
+  get(id: string): Promise<StoredResumeAgentRun | undefined> {
+    return this.delegate.get(id)
+  }
+
+  create(run: StoredResumeAgentRun): Promise<boolean> {
+    return this.delegate.create(run)
+  }
+
+  compareAndSet(run: StoredResumeAgentRun): Promise<boolean> {
+    return this.delegate.compareAndSet(run)
+  }
+
+  createWithTask(run: StoredResumeAgentRun, task: RunTask): Promise<boolean> {
+    return this.delegate.createWithTask(run, task)
+  }
+
+  compareAndSetWithTask(
+    run: StoredResumeAgentRun,
+    task: RunTask
+  ): Promise<boolean> {
+    return this.delegate.compareAndSetWithTask(run, task)
+  }
+
+  claimNextTask(
+    options: ClaimRunTaskOptions
+  ): Promise<ClaimedRunTask | undefined> {
+    return this.delegate.claimNextTask(options)
+  }
+
+  async acknowledgeTask(taskId: string, leaseOwner: string): Promise<boolean> {
+    if (this.loseNextAcknowledgement) {
+      this.loseNextAcknowledgement = false
+      return false
+    }
+    return this.delegate.acknowledgeTask(taskId, leaseOwner)
+  }
+
+  releaseTask(taskId: string, leaseOwner: string): Promise<boolean> {
+    return this.delegate.releaseTask(taskId, leaseOwner)
+  }
 }
 
 afterEach(async () => {
@@ -84,6 +237,243 @@ afterEach(async () => {
 })
 
 describe('SqliteRunStore', () => {
+  it('migrates schema v1 to the outbox schema without losing runs', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const { DatabaseSync } = await import('node:sqlite')
+    const legacyDatabase = new DatabaseSync(databasePath)
+    const run = storedRun('run-schema-v1')
+    try {
+      legacyDatabase.exec(`
+        CREATE TABLE resume_agent_runs (
+          id TEXT PRIMARY KEY,
+          revision INTEGER NOT NULL CHECK (revision >= 0),
+          record_json TEXT NOT NULL CHECK (json_valid(record_json))
+        ) STRICT;
+        PRAGMA user_version = 1;
+      `)
+      legacyDatabase
+        .prepare(
+          `INSERT INTO resume_agent_runs (id, revision, record_json)
+           VALUES (?, ?, ?)`
+        )
+        .run(run.snapshot.id, run.revision, JSON.stringify(run))
+    } finally {
+      legacyDatabase.close()
+    }
+
+    const store = await openStore(databasePath)
+    expect(await store.get(run.snapshot.id)).toEqual(run)
+    store.close()
+
+    const migratedDatabase = new DatabaseSync(databasePath)
+    try {
+      expect(
+        migratedDatabase.prepare('PRAGMA user_version').get()
+      ).toMatchObject({ user_version: 2 })
+      expect(
+        migratedDatabase
+          .prepare(
+            `SELECT name FROM sqlite_master
+             WHERE type = 'table' AND name = 'resume_agent_tasks'`
+          )
+          .get()
+      ).toEqual({ name: 'resume_agent_tasks' })
+    } finally {
+      migratedDatabase.close()
+    }
+  })
+
+  it('atomically creates a run and exactly one outbox task', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const store = await openStore(databasePath)
+    const run = storedRun('run-create-with-task')
+
+    expect(await store.createWithTask(run, runTask(run.snapshot.id))).toBe(true)
+    expect(
+      await store.createWithTask(
+        { ...run, snapshot: { ...run.snapshot, status: 'failed' } },
+        runTask(run.snapshot.id, `${run.snapshot.id}:duplicate`)
+      )
+    ).toBe(false)
+    expect(await store.get(run.snapshot.id)).toEqual(run)
+    store.close()
+
+    const { DatabaseSync } = await import('node:sqlite')
+    const database = new DatabaseSync(databasePath)
+    try {
+      expect(
+        database
+          .prepare(
+            'SELECT id, run_id, kind FROM resume_agent_tasks ORDER BY id'
+          )
+          .all()
+      ).toEqual([
+        {
+          id: `${run.snapshot.id}:prepare:0`,
+          run_id: run.snapshot.id,
+          kind: 'prepare',
+        },
+      ])
+    } finally {
+      database.close()
+    }
+  })
+
+  it('atomically compare-and-sets a run and its outbox task', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const store = await openStore(databasePath)
+    const stale = storedRun('run-cas-with-task')
+    await store.create(stale)
+    const winner = {
+      ...stale,
+      snapshot: { ...stale.snapshot, status: 'analyzing_jd' as const },
+    }
+
+    expect(
+      await store.compareAndSetWithTask(
+        winner,
+        runTask(
+          stale.snapshot.id,
+          `${stale.snapshot.id}:complete:1`,
+          'complete'
+        )
+      )
+    ).toBe(true)
+    expect(
+      await store.compareAndSetWithTask(
+        { ...stale, snapshot: { ...stale.snapshot, status: 'failed' } },
+        runTask(stale.snapshot.id, `${stale.snapshot.id}:stale-task`)
+      )
+    ).toBe(false)
+    expect(await store.get(stale.snapshot.id)).toEqual({
+      ...winner,
+      revision: 1,
+    })
+    store.close()
+
+    const { DatabaseSync } = await import('node:sqlite')
+    const database = new DatabaseSync(databasePath)
+    try {
+      expect(
+        database.prepare('SELECT id FROM resume_agent_tasks ORDER BY id').all()
+      ).toEqual([{ id: `${stale.snapshot.id}:complete:1` }])
+    } finally {
+      database.close()
+    }
+  })
+
+  it('rolls back the run mutation when its task insert fails', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const firstRun = storedRun('run-task-collision-a')
+    const sharedTaskId = 'shared-task-id'
+    await store.createWithTask(
+      firstRun,
+      runTask(firstRun.snapshot.id, sharedTaskId)
+    )
+    const secondRun = storedRun('run-task-collision-b')
+
+    await expect(
+      store.createWithTask(
+        secondRun,
+        runTask(secondRun.snapshot.id, sharedTaskId)
+      )
+    ).rejects.toMatchObject({ code: 'storage_failed' })
+    expect(await store.get(secondRun.snapshot.id)).toBeUndefined()
+
+    await expect(
+      store.compareAndSetWithTask(
+        {
+          ...firstRun,
+          snapshot: { ...firstRun.snapshot, status: 'ingesting_inputs' },
+        },
+        runTask(firstRun.snapshot.id, sharedTaskId)
+      )
+    ).rejects.toMatchObject({ code: 'storage_failed' })
+    expect(await store.get(firstRun.snapshot.id)).toEqual(firstRun)
+  })
+
+  it('leases a task to only one of two competing connections', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const firstStore = await openStore(databasePath)
+    const secondStore = await openStore(databasePath)
+    const run = storedRun('run-claim-race')
+    const task = runTask(run.snapshot.id)
+    await firstStore.createWithTask(run, task)
+    const claimOptions = {
+      workerId: 'worker-a',
+      now: new Date('2026-09-16T12:00:00.000Z'),
+      leaseDurationMs: 30_000,
+    }
+
+    const [firstClaim, secondClaim] = await Promise.all([
+      firstStore.claimNextTask(claimOptions),
+      secondStore.claimNextTask({ ...claimOptions, workerId: 'worker-b' }),
+    ])
+    const claims = [firstClaim, secondClaim].filter(
+      (claim) => claim !== undefined
+    )
+
+    expect(claims).toEqual([
+      {
+        ...task,
+        attempt: 1,
+        leaseOwner: expect.stringMatching(/^worker-[ab]$/),
+        leaseExpiresAt: '2026-09-16T12:00:30.000Z',
+      },
+    ])
+  })
+
+  it('requires the lease owner to ack or release and supports expiry takeover', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const run = storedRun('run-lease-lifecycle')
+    await store.createWithTask(run, runTask(run.snapshot.id))
+    const firstClaim = await store.claimNextTask({
+      workerId: 'worker-a',
+      now: new Date('2026-09-16T12:00:00.000Z'),
+      leaseDurationMs: 30_000,
+    })
+    if (!firstClaim) throw new Error('Expected claimed task')
+
+    expect(await store.acknowledgeTask(firstClaim.id, 'worker-b')).toBe(false)
+    expect(await store.releaseTask(firstClaim.id, 'worker-b')).toBe(false)
+    expect(
+      await store.claimNextTask({
+        workerId: 'worker-b',
+        now: new Date('2026-09-16T12:00:29.999Z'),
+        leaseDurationMs: 30_000,
+      })
+    ).toBeUndefined()
+
+    const takeover = await store.claimNextTask({
+      workerId: 'worker-b',
+      now: new Date('2026-09-16T12:00:30.000Z'),
+      leaseDurationMs: 30_000,
+    })
+    expect(takeover).toMatchObject({
+      id: firstClaim.id,
+      attempt: 2,
+      leaseOwner: 'worker-b',
+    })
+    expect(await store.acknowledgeTask(firstClaim.id, 'worker-a')).toBe(false)
+    expect(await store.releaseTask(firstClaim.id, 'worker-a')).toBe(false)
+    expect(await store.releaseTask(firstClaim.id, 'worker-b')).toBe(true)
+
+    const released = await store.claimNextTask({
+      workerId: 'worker-c',
+      now: new Date('2026-09-16T12:00:30.000Z'),
+      leaseDurationMs: 30_000,
+    })
+    expect(released).toMatchObject({ attempt: 3, leaseOwner: 'worker-c' })
+    expect(await store.acknowledgeTask(firstClaim.id, 'worker-c')).toBe(true)
+    expect(
+      await store.claimNextTask({
+        workerId: 'worker-d',
+        now: new Date('2026-09-16T12:01:00.000Z'),
+        leaseDurationMs: 30_000,
+      })
+    ).toBeUndefined()
+  })
+
   it('persists a run across closing and reopening the database', async () => {
     const databasePath = await temporaryDatabasePath()
     const firstStore = await openStore(databasePath)
@@ -332,5 +722,192 @@ describe('SqliteRunStore', () => {
     expect(publicRun).not.toHaveProperty('request')
     expect(publicRun).not.toHaveProperty('checkpoint')
     expect(publicRun).not.toHaveProperty('answerReceipts')
+  })
+
+  it('recovers a committed start task when the original schedule hint is lost', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const originalTasks: Array<() => Promise<void>> = []
+    const originalStore = await openStore(databasePath)
+    const originalService = new ResumeAgentRunService(completingAgent(), {
+      store: originalStore,
+      idFactory: () => 'run-recover-start',
+      now: () => new Date('2026-09-16T12:00:00.000Z'),
+      schedule: (task) => originalTasks.push(task),
+    })
+    await originalService.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    expect(originalTasks).toHaveLength(1)
+    originalStore.close()
+
+    const recoveredTasks: Array<() => Promise<void>> = []
+    const recoveredStore = await openStore(databasePath)
+    const recoveredService = new ResumeAgentRunService(completingAgent(), {
+      store: recoveredStore,
+      now: () => new Date('2026-09-16T12:01:00.000Z'),
+      schedule: (task) => recoveredTasks.push(task),
+    })
+    expect(await recoveredService.recoverPendingTasks()).toBe(1)
+    expect(recoveredTasks).toHaveLength(1)
+
+    await recoveredTasks[0]?.()
+
+    expect((await recoveredService.get('run-recover-start'))?.status).toBe(
+      'completed'
+    )
+    expect(await recoveredService.recoverPendingTasks()).toBe(0)
+  })
+
+  it('recovers completion after an answered run loses its schedule hint', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const originalTasks: Array<() => Promise<void>> = []
+    const originalStore = await openStore(databasePath)
+    const originalService = new ResumeAgentRunService(questionAgent(), {
+      store: originalStore,
+      idFactory: () => 'run-recover-answer',
+      now: () => new Date('2026-09-16T12:00:00.000Z'),
+      schedule: (task) => originalTasks.push(task),
+    })
+    await originalService.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: {
+        resume: completeCandidate,
+        files: [
+          {
+            id: 'candidate-source',
+            filename: 'candidate.txt',
+            text: 'Candidate profile whose name must be confirmed.',
+          },
+        ],
+      },
+    })
+    await originalTasks[0]?.()
+    expect((await originalService.get('run-recover-answer'))?.status).toBe(
+      'needs_input'
+    )
+
+    const accepted = await originalService.answer('run-recover-answer', {
+      interactionId: 'candidate-normalization:1',
+      idempotencyKey: 'durable-answer-1',
+      value: 'Grace Hopper',
+    })
+    expect(accepted.status).toBe('analyzing_jd')
+    expect(originalTasks).toHaveLength(2)
+    originalStore.close()
+
+    const recoveredTasks: Array<() => Promise<void>> = []
+    const recoveredStore = await openStore(databasePath)
+    const recoveredService = new ResumeAgentRunService(
+      completingAgent('Grace Hopper'),
+      {
+        store: recoveredStore,
+        now: () => new Date('2026-09-16T12:01:00.000Z'),
+        schedule: (task) => recoveredTasks.push(task),
+      }
+    )
+    expect(await recoveredService.recoverPendingTasks()).toBe(1)
+    expect(recoveredTasks).toHaveLength(1)
+
+    await recoveredTasks[0]?.()
+
+    expect((await recoveredService.get('run-recover-answer'))?.status).toBe(
+      'completed'
+    )
+    expect(
+      (await recoveredStore.get('run-recover-answer'))?.answerReceipts
+    ).toHaveLength(1)
+    expect(await recoveredService.recoverPendingTasks()).toBe(0)
+  })
+
+  it('lets only one of two services drain and execute a pending task', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const originalStore = await openStore(databasePath)
+    const originalService = new ResumeAgentRunService(completingAgent(), {
+      store: originalStore,
+      idFactory: () => 'run-two-workers',
+      now: () => new Date('2026-09-16T12:00:00.000Z'),
+      schedule: () => undefined,
+    })
+    await originalService.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    originalStore.close()
+
+    const firstTasks: Array<() => Promise<void>> = []
+    const secondTasks: Array<() => Promise<void>> = []
+    const firstStore = await openStore(databasePath)
+    const secondStore = await openStore(databasePath)
+    const firstService = new ResumeAgentRunService(completingAgent(), {
+      store: firstStore,
+      workerId: 'worker-first',
+      now: () => new Date('2026-09-16T12:01:00.000Z'),
+      schedule: (task) => firstTasks.push(task),
+    })
+    const secondService = new ResumeAgentRunService(completingAgent(), {
+      store: secondStore,
+      workerId: 'worker-second',
+      now: () => new Date('2026-09-16T12:01:00.000Z'),
+      schedule: (task) => secondTasks.push(task),
+    })
+
+    const recovered = await Promise.all([
+      firstService.recoverPendingTasks(),
+      secondService.recoverPendingTasks(),
+    ])
+    expect(recovered.sort()).toEqual([0, 1])
+    expect([...firstTasks, ...secondTasks]).toHaveLength(1)
+
+    await [...firstTasks, ...secondTasks][0]?.()
+
+    expect((await firstService.get('run-two-workers'))?.status).toBe(
+      'completed'
+    )
+    expect(await firstService.recoverPendingTasks()).toBe(0)
+    expect(await secondService.recoverPendingTasks()).toBe(0)
+  })
+
+  it('acks an expired replay without rerunning a terminal workflow', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const originalTasks: Array<() => Promise<void>> = []
+    const originalStore = await openStore(databasePath)
+    const service = new ResumeAgentRunService(completingAgent(), {
+      store: new LostAcknowledgementStore(originalStore),
+      idFactory: () => 'run-terminal-replay',
+      workerId: 'worker-before-crash',
+      taskLeaseMs: 1_000,
+      now: () => new Date('2026-09-16T12:00:00.000Z'),
+      schedule: (task) => originalTasks.push(task),
+    })
+    await service.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    await originalTasks[0]?.()
+    expect((await service.get('run-terminal-replay'))?.status).toBe('completed')
+    originalStore.close()
+
+    const replayCalls = { count: 0 }
+    const replayTasks: Array<() => Promise<void>> = []
+    const replayStore = await openStore(databasePath)
+    const replayService = new ResumeAgentRunService(
+      countingFailAgent(replayCalls),
+      {
+        store: replayStore,
+        workerId: 'worker-after-crash',
+        taskLeaseMs: 1_000,
+        now: () => new Date('2026-09-16T12:00:01.000Z'),
+        schedule: (task) => replayTasks.push(task),
+      }
+    )
+    expect(await replayService.recoverPendingTasks()).toBe(1)
+    await replayTasks[0]?.()
+
+    expect(replayCalls.count).toBe(0)
+    expect((await replayService.get('run-terminal-replay'))?.status).toBe(
+      'completed'
+    )
+    expect(await replayService.recoverPendingTasks()).toBe(0)
   })
 })
