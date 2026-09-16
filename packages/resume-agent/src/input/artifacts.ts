@@ -22,6 +22,9 @@
  * IN THE SOFTWARE.
  */
 
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import mammoth from 'mammoth'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 
@@ -47,6 +50,88 @@ const IMAGE_MEDIA_TYPES = new Set([
   'image/png',
   'image/webp',
 ])
+const PDF_STANDARD_FONT_DATA_URL = fileURLToPath(
+  new URL(
+    '../../standard_fonts/',
+    import.meta.resolve('pdfjs-dist/legacy/build/pdf.mjs')
+  )
+)
+const PDF_STANDARD_FONT_WARNING =
+  'PDF standard font resources are unavailable or invalid; extracted text may be incomplete'
+const MIN_STANDARD_FONT_BYTES = 1024
+
+type PdfBinaryDataKind = 'cMapUrl' | 'standardFontDataUrl' | 'wasmUrl'
+
+interface PdfBinaryDataFactoryOptions {
+  cMapUrl?: string | null
+  standardFontDataUrl?: string | null
+  wasmUrl?: string | null
+}
+
+function hasValidStandardFontHeader(
+  filename: string,
+  data: Uint8Array
+): boolean {
+  if (data.byteLength < MIN_STANDARD_FONT_BYTES) return false
+
+  if (filename.endsWith('.ttf')) {
+    const signature = String.fromCharCode(...data.subarray(0, 4))
+    return (
+      (data[0] === 0 && data[1] === 1 && data[2] === 0 && data[3] === 0) ||
+      signature === 'OTTO' ||
+      signature === 'true' ||
+      signature === 'typ1'
+    )
+  }
+
+  if (filename.endsWith('.pfb')) {
+    return data[0] === 1 && data[1] === 0 && data[2] === 4 && data[3] === 2
+  }
+
+  return false
+}
+
+function createPdfBinaryDataFactory(resourceWarnings: Set<string>) {
+  return class PdfBinaryDataFactory {
+    readonly #baseUrls: PdfBinaryDataFactoryOptions
+
+    constructor(baseUrls: PdfBinaryDataFactoryOptions) {
+      this.#baseUrls = baseUrls
+    }
+
+    async fetch({
+      kind,
+      filename,
+    }: {
+      kind: PdfBinaryDataKind
+      filename: string
+    }): Promise<Uint8Array> {
+      const baseUrl = this.#baseUrls[kind]
+      if (!baseUrl) {
+        throw new Error('PDF binary resource location is not configured')
+      }
+
+      try {
+        const data = await readFile(join(baseUrl, filename))
+        if (
+          kind === 'standardFontDataUrl' &&
+          !hasValidStandardFontHeader(filename, data)
+        ) {
+          throw new Error('Standard font resource is invalid')
+        }
+        return new Uint8Array(data)
+      } catch {
+        if (kind === 'standardFontDataUrl') {
+          resourceWarnings.add(PDF_STANDARD_FONT_WARNING)
+          throw new Error(
+            'PDF standard font resource is unavailable or invalid'
+          )
+        }
+        throw new Error('PDF binary resource is unavailable or invalid')
+      }
+    }
+  }
+}
 
 export class ArtifactInputError extends Error {
   constructor(message: string) {
@@ -125,10 +210,28 @@ function textFromBuffer(buffer: Buffer, mediaType: string): string {
   return mediaType === 'text/html' ? stripHtml(text) : text
 }
 
-async function extractPdfText(buffer: Buffer): Promise<string> {
+function pdfExtractionErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.name === 'InvalidPDFException') {
+      return 'Could not extract PDF text: invalid or corrupted PDF'
+    }
+    if (error.name === 'PasswordException') {
+      return 'Could not extract PDF text: password-protected PDF is not supported'
+    }
+  }
+
+  return 'Could not extract PDF text: PDF parsing failed'
+}
+
+async function extractPdfText(
+  buffer: Buffer
+): Promise<{ text: string; warnings: string[] }> {
+  const resourceWarnings = new Set<string>()
   const loadingTask = getDocument({
+    BinaryDataFactory: createPdfBinaryDataFactory(resourceWarnings),
     data: new Uint8Array(buffer),
     disableFontFace: true,
+    standardFontDataUrl: PDF_STANDARD_FONT_DATA_URL,
     useSystemFonts: false,
   })
   const document = await loadingTask.promise
@@ -149,7 +252,10 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
     document.cleanup()
   }
 
-  return pages.join('\n\n').trim()
+  return {
+    text: pages.join('\n\n').trim(),
+    warnings: [...resourceWarnings],
+  }
 }
 
 function kindFor(mediaType: string): ExtractedArtifact['kind'] {
@@ -210,7 +316,9 @@ export async function extractArtifact(
 
   if (mediaType === 'application/pdf') {
     try {
-      const text = await extractPdfText(buffer)
+      const result = await extractPdfText(buffer)
+      const { text } = result
+      warnings.push(...result.warnings)
       if (!text) {
         warnings.push(
           'PDF contains no extractable text; image/OCR processing is required'
@@ -218,9 +326,7 @@ export async function extractArtifact(
       }
       return { id, filename: file.filename, mediaType, kind, text, warnings }
     } catch (error) {
-      throw new ArtifactInputError(
-        `Could not extract PDF text from ${file.filename}: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new ArtifactInputError(pdfExtractionErrorMessage(error))
     }
   }
 
