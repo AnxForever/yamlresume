@@ -64,6 +64,18 @@ Nginx 配置必须在 reload 前通过 `nginx -t`。新服务至少验收：Basi
 - 首次 systemd 启动发现 `MemoryDenyWriteExecute` 与 V8 JIT 冲突并产生 SIGTRAP；根因确认后移除该项，其他隔离规则保留。Web 对 SIGTERM 返回 143，unit 用 `SuccessExitStatus=143` 明确为正常关闭；API SIGTERM 为 clean exit。
 - 旧 Deeix 容器、两个 volume、两个镜像、memory MCP unit 与目录已删除；Nginx ACME webroot 已改名。删除前的一致性备份位于 `/root/backups/deeix-chat-20260916T090100Z`，归档 SHA-256 为 `8096a2eeee31b79891df68f6e78481cbdba8a79e687af5f769971c3eef478cb6`，仅 root 可访问。
 
+### 2026-09-16 Chat/RTF API 更新
+
+在完成回滚演练后，使用解析真实 release 路径的复制流程发布 API-only release
+`/opt/yamlresume-agent/releases/20260916T094702Z`。生产环境显式设置
+`RESUME_AGENT_AUTH_MODE=disabled`，保持当前个人部署的应用层匿名模式；公网边界仍由 Nginx Basic
+Auth 保护，不把该配置描述成多用户应用认证。
+
+公网验收：未认证 `/api/healthz` 返回 401，认证后 health 返回 200；capabilities 报告
+`POST /v1/chat`、`application/rtf`、`providerConfigured=true`、SQLite RunStore；真实 HTTPS
+`POST /api/v1/chat` 返回 200 和合法的 `{ reply, readyToGenerate }`。Web 未重启，API/Web 均为
+`active`，SQLite 与 Provider env 未改动。
+
 ### 2026-09-16 API-only upgrade rehearsal
 
 一次只替换 API/Agent dist 的升级演练未进入可用状态：新二进制在监听前以稳定错误
