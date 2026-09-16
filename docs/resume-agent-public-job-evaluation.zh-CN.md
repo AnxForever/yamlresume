@@ -270,6 +270,11 @@ completion、warning message、Zod issue 或异常正文。真实执行诊断也
 进行多次重复 campaign，再讨论阈值或 Operational 状态。原始 JD、候选简历、Prompt、completion、
 Provider message 和异常正文均未写入报告或文档。
 
+随后以同一 prompt/runtime 配置重复 2 次（共 6 次 case execution）：仅 1 次通过，整体
+`passRate = 0.1667`，`scored = 3`；失败计数为 `assertion_failed = 2`、
+`execution_failed = 3`、`invalid_execution_result = 0`。Wilson 95% 区间为 `[0.0301, 0.5635]`，
+样本太小且方差明显，不能作为生产成功率估计。
+
 ## 10. 验收门禁
 
 ```text
