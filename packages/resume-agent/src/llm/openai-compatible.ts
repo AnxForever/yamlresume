@@ -58,38 +58,49 @@ export class LlmConfigurationError extends Error {
   }
 }
 
+export type LlmRequestErrorReason =
+  | 'request_failed'
+  | 'timeout'
+  | 'network_error'
+  | 'http_status'
+  | 'response_body_invalid_json'
+  | 'response_content_missing'
+  | 'response_content_invalid_json'
+
 export class LlmRequestError extends Error {
+  readonly reason: LlmRequestErrorReason
   readonly retryable: boolean
   readonly status?: number
 
   constructor(
     message: string,
-    options: { retryable?: boolean; status?: number } = {}
+    options: {
+      reason?: LlmRequestErrorReason
+      retryable?: boolean
+      status?: number
+    } = {}
   ) {
     super(message)
     this.name = 'LlmRequestError'
+    this.reason = options.reason ?? 'request_failed'
     this.retryable = options.retryable ?? false
     this.status = options.status
   }
-}
 
-interface ChatCompletionResponse {
-  id?: string
-  model?: string
-  choices?: Array<{
-    message?: {
-      content?: string | null
+  toJSON(): {
+    name: string
+    message: string
+    reason: LlmRequestErrorReason
+    retryable: boolean
+    status?: number
+  } {
+    return {
+      name: this.name,
+      message: this.message,
+      reason: this.reason,
+      retryable: this.retryable,
+      ...(this.status === undefined ? {} : { status: this.status }),
     }
-  }>
-  usage?: {
-    prompt_tokens?: number
-    completion_tokens?: number
-    completion_tokens_details?: {
-      reasoning_tokens?: number
-    }
-  }
-  error?: {
-    message?: string
   }
 }
 
@@ -101,26 +112,62 @@ function stripJsonFence(content: string): string {
   return trimmed
 }
 
-function getContent(payload: ChatCompletionResponse): string {
-  const content = payload.choices?.[0]?.message?.content
-  if (!content) {
-    throw new LlmRequestError('LLM returned an empty response', {
-      retryable: true,
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function getContent(payload: unknown): string {
+  let content: unknown
+  if (isRecord(payload) && Array.isArray(payload.choices)) {
+    const choice = payload.choices[0]
+    if (isRecord(choice) && isRecord(choice.message)) {
+      content = choice.message.content
+    }
+  }
+
+  if (typeof content !== 'string' || content.trim().length === 0) {
+    throw new LlmRequestError('LLM response did not include message content', {
+      reason: 'response_content_missing',
+      retryable: false,
     })
   }
   return content
 }
 
 function sleep(milliseconds: number): Promise<void> {
+  if (milliseconds === 0) return Promise.resolve()
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
-function usageFrom(payload: ChatCompletionResponse) {
-  if (!payload.usage) return undefined
+function optionalTokenCount(
+  record: Record<string, unknown>,
+  key: string
+): number | undefined {
+  const value = record[key]
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined
+}
+
+function stringField(payload: unknown, key: string): string | undefined {
+  if (!isRecord(payload)) return undefined
+  const value = payload[key]
+  return typeof value === 'string' && value.trim().length > 0
+    ? value
+    : undefined
+}
+
+function usageFrom(payload: unknown): LlmCallMetadata['usage'] | undefined {
+  if (!isRecord(payload) || !isRecord(payload.usage)) return undefined
+  const details = isRecord(payload.usage.completion_tokens_details)
+    ? payload.usage.completion_tokens_details
+    : undefined
   return {
-    inputTokens: payload.usage.prompt_tokens,
-    outputTokens: payload.usage.completion_tokens,
-    reasoningTokens: payload.usage.completion_tokens_details?.reasoning_tokens,
+    inputTokens: optionalTokenCount(payload.usage, 'prompt_tokens'),
+    outputTokens: optionalTokenCount(payload.usage, 'completion_tokens'),
+    reasoningTokens: details
+      ? optionalTokenCount(details, 'reasoning_tokens')
+      : undefined,
   }
 }
 
@@ -134,8 +181,8 @@ export class OpenAICompatibleClient implements LlmClient {
   constructor(config: OpenAICompatibleConfig) {
     this.config = {
       apiKey: config.apiKey,
-      baseUrl: config.baseUrl.replace(/\/$/, ''),
-      model: config.model,
+      baseUrl: config.baseUrl.trim().replace(/\/+$/, ''),
+      model: config.model.trim(),
       provider: config.provider ?? 'openai-compatible',
       timeoutMs: config.timeoutMs ?? 60_000,
       maxRetries: config.maxRetries ?? 2,
@@ -145,7 +192,7 @@ export class OpenAICompatibleClient implements LlmClient {
         : { temperature: config.temperature }),
     }
 
-    if (!this.config.apiKey) {
+    if (!this.config.apiKey.trim()) {
       throw new LlmConfigurationError(
         'An API key is required for the LLM client'
       )
@@ -193,15 +240,15 @@ export class OpenAICompatibleClient implements LlmClient {
         const normalized =
           error instanceof LlmRequestError
             ? error
-            : new LlmRequestError(
-                `LLM request failed: ${error instanceof Error ? error.message : String(error)}`,
-                { retryable: true }
-              )
+            : new LlmRequestError('LLM request failed', {
+                reason: 'request_failed',
+                retryable: false,
+              })
         lastError = normalized
         if (!normalized.retryable || attempt === attempts) {
           throw normalized
         }
-        await sleep(this.config.retryDelayMs * attempt)
+        await sleep(this.config.retryDelayMs * 2 ** (attempt - 1))
       }
     }
 
@@ -217,7 +264,11 @@ export class OpenAICompatibleClient implements LlmClient {
     startedAt: number
   ): Promise<LlmCompletion<T>> {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs)
+    let didTimeout = false
+    const timeout = setTimeout(() => {
+      didTimeout = true
+      controller.abort()
+    }, this.config.timeoutMs)
     const requestBody = {
       model: this.config.model,
       ...(this.config.temperature === undefined
@@ -252,26 +303,23 @@ export class OpenAICompatibleClient implements LlmClient {
         signal: controller.signal,
       })
 
-      let payload: ChatCompletionResponse
+      const responseBody = await response.text()
+      let payload: unknown
       try {
-        payload = (await response.json()) as ChatCompletionResponse
-      } catch (error) {
-        throw new LlmRequestError(
-          `LLM returned a non-JSON response: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          {
-            retryable: isRetryableStatus(response.status),
-            status: response.status,
-          }
-        )
+        payload = JSON.parse(responseBody) as unknown
+      } catch {
+        throw new LlmRequestError('LLM response body was not valid JSON', {
+          reason: 'response_body_invalid_json',
+          retryable: isRetryableStatus(response.status),
+          status: response.status,
+        })
       }
 
       if (!response.ok) {
         throw new LlmRequestError(
-          payload.error?.message ??
-            `LLM request failed with status ${response.status}`,
+          `LLM request failed with HTTP status ${response.status}`,
           {
+            reason: 'http_status',
             retryable: isRetryableStatus(response.status),
             status: response.status,
           }
@@ -283,35 +331,36 @@ export class OpenAICompatibleClient implements LlmClient {
         data = JSON.parse(stripJsonFence(getContent(payload))) as T
       } catch (error) {
         if (error instanceof LlmRequestError) throw error
-        throw new LlmRequestError(
-          `LLM returned invalid JSON: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          { retryable: true }
-        )
+        throw new LlmRequestError('LLM message content was not valid JSON', {
+          reason: 'response_content_invalid_json',
+          retryable: false,
+        })
       }
 
+      const model = stringField(payload, 'model') ?? this.config.model
+      const requestId = stringField(payload, 'id')
+      const usage = usageFrom(payload)
       const metadata: LlmCallMetadata = {
         provider: this.config.provider,
-        model: payload.model ?? this.config.model,
+        model,
         durationMs: Date.now() - startedAt,
         attempt,
-        ...(payload.id ? { requestId: payload.id } : {}),
-        ...(usageFrom(payload) ? { usage: usageFrom(payload) } : {}),
+        ...(requestId ? { requestId } : {}),
+        ...(usage ? { usage } : {}),
       }
       return { data, metadata }
     } catch (error) {
       if (error instanceof LlmRequestError) throw error
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new LlmRequestError(
-          `LLM request timed out after ${this.config.timeoutMs}ms`,
-          { retryable: true }
-        )
+      if (didTimeout) {
+        throw new LlmRequestError('LLM request timed out', {
+          reason: 'timeout',
+          retryable: true,
+        })
       }
-      throw new LlmRequestError(
-        `LLM request failed: ${error instanceof Error ? error.message : String(error)}`,
-        { retryable: true }
-      )
+      throw new LlmRequestError('LLM network request failed', {
+        reason: 'network_error',
+        retryable: true,
+      })
     } finally {
       clearTimeout(timeout)
     }
