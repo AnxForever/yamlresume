@@ -1,0 +1,270 @@
+# Resume Agent 常见文档输入 Feature Brief
+
+> Feature ID：RA-001B
+> 状态：Planned；研究与契约已就绪，尚未实现
+> 最后审阅：2026-09-16
+> 范围：可信文件识别，以及 ODT、RTF、旧版 DOC 的文本提取；不包含 OCR、宏执行或通用 Office 转换服务。
+
+## 1. 用户问题与结果
+
+求职者和招聘方不会只使用 YAML、PDF 或 DOCX。旧简历、学校模板和招聘网站附件中仍会出现
+ODT、RTF 与 Word 97–2003 `.doc`。当前实现对这些文件没有可靠支持，并且未知扩展名会回退成
+`text/plain`，声明的 `mediaType` 也会直接覆盖扩展名推断。这会产生两类错误：
+
+- 用户上传常见文档后得到乱码或模糊的“不支持”错误；
+- 攻击者可把二进制内容声明为文本，绕过预期的解析边界。
+
+本切片的目标不是制造一个“任何文件都能读”的转换器，而是让受支持格式可识别、可限额、
+可提取、可解释失败。完成后，用户可以把 ODT、RTF、旧 DOC 作为简历或 JD 输入；系统会先
+核对内容特征，再调用对应 extractor，并且不会执行宏、嵌入对象或外部引用。
+
+## 2. 当前实现审计
+
+本地证据来自 `packages/resume-agent/src/input/artifacts.ts`、相邻测试和输入 Schema：
+
+1. 已实现纯文本、YAML、JSON、Markdown、HTML、数字 PDF、DOCX，以及声明为
+   PNG/JPEG/WebP/GIF 的图片输入；每文件限制 12 MiB，总计限制 30 MiB。
+2. 二进制内容由 base64 解码；PDF 使用 `pdfjs-dist`，DOCX 使用 `mammoth`。
+3. `inferMediaType` 优先信任上传方声明的 MIME；未知扩展名默认为 `text/plain`。
+4. `.txt`、`.html`、`.htm`、`.gif` 等已有能力也没有完整的扩展名映射。
+5. 目前没有 magic bytes、ZIP 内部 entry、ODF mimetype 或 OLE stream 核验。
+6. DOCX 失败消息会拼接底层异常，尚未满足统一的数据安全错误契约。
+7. 压缩文件只限制上传字节，没有限制 entry 数、解压总量、压缩比或 XML 复杂度。
+
+因此“现有测试通过”只能证明已覆盖样例，不能证明不可信文件上传边界安全。
+
+## 3. 研究证据与决策
+
+### 3.1 主要证据
+
+- OWASP File Upload Cheat Sheet：扩展名、上传方 `Content-Type` 与文件签名都不能单独成为
+  信任依据；应组合 allowlist、类型核验、大小限制、隔离和安全失败。
+- OASIS OpenDocument 1.3 Part 2 Packages：ODT 是有固定 mimetype 与 manifest 约束的
+  ZIP package，不是“任意 ZIP 内找 XML”。
+- Microsoft `[MS-DOC]`：`.doc` 是 Word 97–2003 的二进制格式，必须按其 OLE/Compound
+  File 结构处理，不能以 DOCX 或纯文本方式读取。
+- Microsoft RTF 规范：RTF 是带嵌套 group、control word、字符集和 Unicode 规则的交换
+  格式；简单删除控制词会破坏文本并可能把隐藏 destination 当正文。
+
+### 3.2 独立证据
+
+- 当前真实 parser 与测试证明 PDF/DOCX 路径存在，但检测发生在解析之前的边界仍是缺口。
+- `word-extractor@1.0.4`（MIT，npm 元数据最后更新 2022-06-29）声明可从 Buffer 读取
+  OLE `.doc` 与 DOCX，并处理 Unicode；它是技术 spike 候选，不是已批准依赖。
+- 本机存在 LibreOffice，可用于开发期兼容性对照；它不是 runtime 隐式依赖，不能因此
+  把部署环境标记为支持 DOC/ODT。
+
+### 3.3 Adopt / Adapt / Reject
+
+| 候选 | 决策 | 原因 |
+| --- | --- | --- |
+| 多信号识别：内容特征 + package 结构 + 扩展名/MIME 一致性 | Adopt | 直接修复当前信任边界 |
+| ODT 的受限 ZIP + streaming XML 提取 | Adopt | 格式结构明确，可设置 entry 与解压上限 |
+| RTF 的有界 reader/tokenizer | Adapt | 只提取可见文本；忽略格式但必须保留 Unicode 与段落 |
+| `word-extractor` 直接进主进程 | Spike only | 维护活跃度、资源上限、损坏样本和错误泄漏尚未验证 |
+| `LegacyDocExtractor` adapter + 隔离执行 | Adopt | 将复杂二进制解析与 Agent 工作流隔开 |
+| 按 MIME 或扩展名直接选 parser | Reject | 上传方可控，冲突时可能选错解析器 |
+| LibreOffice 作为静默必需依赖 | Reject | 部署不可移植，进程/临时文件/宏策略不透明 |
+| “所有 Office 文件”总开关 | Reject | XLSX/PPTX/Pages 与简历/JD 核心用例不同 |
+
+## 4. 产品范围与优先级
+
+### Must have
+
+- 对现有 PDF、DOCX、图片和新增 ODT、RTF、DOC 建立统一可信识别。
+- ODT、RTF、DOC 可从 `contentBase64` 提取可见正文。
+- 扩展名、声明 MIME 与内容不一致时稳定失败，不静默猜测。
+- 压缩、XML、RTF nesting、DOC parser 输出和最终文本都有硬上限。
+- 错误只返回稳定 code/message，不包含文档正文、底层 parser message 或本地路径。
+- 每种格式有正常、Unicode、损坏、伪装、超限和空正文 fixture。
+
+### Should have
+
+- UTF-8 BOM、UTF-16 LE/BE 纯文本识别；不确定 legacy code page 时明确失败或警告。
+- 对 ODT/DOCX 加密 package、外部实体、嵌入对象与宏给出稳定不支持结果。
+- 记录安全的格式、上传字节数、提取字符数、耗时和 warning code；不记录正文。
+
+### Won't have in RA-001B
+
+- 扫描 PDF/图片 OCR、手写识别和版面重建；
+- 宏、OLE object、脚本、远程链接或嵌入文件执行；
+- XLS/XLSX、PPT/PPTX、Apple Pages；
+- 密码破解、损坏文件修复和通用格式转换；
+- 仅凭“LibreOffice 能打开”宣称 production operational。
+
+## 5. 识别契约
+
+识别先于解析，并返回内部的、不可由调用方直接指定的结论：
+
+```ts
+type SupportedInputFormat =
+  | 'plain-text'
+  | 'html'
+  | 'yaml'
+  | 'json'
+  | 'markdown'
+  | 'pdf'
+  | 'docx'
+  | 'odt'
+  | 'rtf'
+  | 'doc'
+  | 'png'
+  | 'jpeg'
+  | 'webp'
+  | 'gif'
+
+interface DetectedInputFormat {
+  format: SupportedInputFormat
+  canonicalMediaType: string
+  confidence: 'signature-and-container' | 'signature' | 'validated-text'
+}
+```
+
+### 5.1 信号规则
+
+| 格式 | 必要内容证据 | 辅助证据 |
+| --- | --- | --- |
+| PDF | PDF header，并交由 PDF parser 二次确认 | `.pdf`、`application/pdf` |
+| DOCX | ZIP 且包含合法 OOXML content types 与 `word/document.xml` | `.docx`、OOXML MIME |
+| ODT | ZIP、ODF `mimetype` 值、manifest 与 `content.xml` | `.odt`、ODT MIME |
+| DOC | CFB header 且存在 Word document streams | `.doc`、`application/msword` |
+| RTF | 可接受 BOM/空白后的 RTF control header，reader 完整消费结构 | `.rtf`、RTF MIME |
+| 图片 | 对应 magic bytes | 扩展名、image MIME |
+| 文本 | 无已知 binary signature、编码有效、无 NUL/binary 启发式冲突 | 文本 MIME、allowlist 扩展名 |
+
+声明 MIME、扩展名和内容结论冲突时返回 `file_type_mismatch`。未知 binary 返回
+`unsupported_file_type`，不得回退到 UTF-8。`InputFile.text` 表示调用方已提供解码后的文本，
+仍受字符上限约束，但不伪装成已验证的 DOC/ODT/RTF binary。
+
+## 6. 提取器边界
+
+```ts
+interface ArtifactExtractor {
+  readonly format: SupportedInputFormat
+  extract(buffer: Uint8Array, limits: ExtractionLimits): Promise<ExtractedText>
+}
+
+interface ExtractionLimits {
+  maxInputBytes: number
+  maxEntries: number
+  maxExpandedBytes: number
+  maxExtractedCharacters: number
+  maxNestingDepth: number
+}
+
+interface ExtractedText {
+  text: string
+  warningCodes: string[]
+}
+```
+
+深模块只公开识别与提取结果；ZIP entry、XML namespace、RTF state stack、OLE streams、
+parser 选择和错误清洗都封装在输入模块内。下游 evidence/prompt 继续只消费规范化文本和安全
+warning，不接触原始 parser 对象。
+
+初始开发阈值应集中为单一配置并由 fixture 校准，建议起点：每文件上传 12 MiB、archive
+entry 128 个、展开数据 32 MiB、提取文本 1,000,000 字符、XML/RTF nesting 128 层。
+这些是拒绝服务防线，不是产品承诺；变更必须有大文件基准证据。
+
+## 7. 格式策略
+
+### 7.1 ODT
+
+- 只读取 `mimetype`、`META-INF/manifest.xml` 和 `content.xml` 所需内容；
+- 禁止 path traversal，拒绝重复关键 entry、加密正文、外部实体和超限 package；
+- 以 streaming XML parser 提取 heading、paragraph、列表、tab 与 line-break；
+- 保持文档顺序，忽略样式、图片和脚本；缺失正文或提取为空给出明确结果。
+
+### 7.2 RTF
+
+- reader 必须维护 group state、destination skip、Unicode fallback count、hex escape、paragraph/tab；
+- 忽略图片、对象、font/color/style tables 等非正文 destination；
+- 限制 group depth、control word 数、hex payload 与输出长度；
+- malformed braces、截断 escape 和不支持的 code page 不得产生“看似成功”的乱码。
+
+### 7.3 旧 DOC
+
+- 先确认 CFB/Word streams，再进入 `LegacyDocExtractor`；
+- parser 在 worker/subprocess 或等价资源隔离边界运行，并有 timeout/内存约束；
+- 只返回 body text 与稳定 warning；不提取/执行宏、对象、链接和附件；
+- `word-extractor` 只有在真实 fixture、损坏 corpus、超限、Unicode、许可和错误脱敏全部通过
+  后才可采用。否则保留 adapter，使用受控转换服务或明确不启用。
+
+## 8. 错误与隐私契约
+
+建议稳定 code：
+
+- `unsupported_file_type`
+- `file_type_mismatch`
+- `invalid_file_encoding`
+- `corrupt_document`
+- `encrypted_document`
+- `document_limit_exceeded`
+- `document_extraction_failed`
+- `empty_extracted_text`
+
+公开 message 由 code 和可信格式枚举生成。不得拼接 filename 之外的路径、原始 XML/RTF、
+简历/JD 正文、parser stack、临时目录或底层异常。日志也只记录安全 metadata；真实输入 fixture
+必须授权和匿名化，默认测试使用合成身份。
+
+## 9. 单行为 RED → GREEN 顺序
+
+1. 已有格式识别 characterization；补齐 TXT/HTML/GIF 扩展名回归。
+2. 伪装 binary 不再回退纯文本；扩展名/MIME/内容冲突返回稳定错误。
+3. DOCX/ODT 同为 ZIP 时按内部结构区分，未知 ZIP 拒绝。
+4. ODT 最小 package 提取标题、段落、列表和 Unicode。
+5. ODT path traversal、重复 entry、展开超限、加密和损坏 XML 安全失败。
+6. RTF 最小正文、段落、转义和 Unicode 提取。
+7. RTF hidden destination、嵌入 object、深层 group、截断输入安全失败。
+8. DOC 合成 fixture 经隔离 adapter 提取；非 Word CFB 与损坏 DOC 拒绝。
+9. extractor timeout/超限/底层私密异常只暴露稳定错误。
+10. 同一 fixture 分别作为 candidate file 与 job file 走完整输入归一化路径。
+
+每一步只写一个公开行为测试，再补最小实现；不得先加入三种 parser 后统一补测试。
+
+## 10. 验收与兼容性门禁
+
+- 单元：detector 与每个 extractor 的正常/失败语义；
+- corpus：每种格式至少包含 ASCII、中日韩文、emoji、列表、URL、损坏、伪装、超限样本；
+- 独立验证：ODT 用独立 ZIP/XML reader 核对，RTF 与 DOC 用 LibreOffice 打开/转文本作为
+  开发期对照，但不能让测试静默依赖系统 binary；
+- 回归：现有 PDF、DOCX、图片、文本及总大小限制全部通过；
+- 安全：ZIP/XML/RTF/DOC 对抗样本不泄密、不挂死、不越过上限；
+- 包门禁：focused tests、完整 resume-agent tests、TypeScript、build、Biome、license、
+  `git diff --check`。
+
+完成这些只可标记 `Implemented for development`。跨 OS、生产隔离、恶意样本持续更新、真实
+上传观测和事故 runbook 通过前，不得标记 `Operational`。
+
+## 11. 证据台账
+
+| Feature ID | 生命周期 / 用户结果 | 交付 | 证据覆盖 | 历史缺口 | 剩余缺口 |
+| --- | --- | --- | --- | --- | --- |
+| RA-001B-A | upload → trusted detection；伪装文件不能选错 parser | Planned | Partial：OWASP、现有实现审计 | inherited-unassessed | detector 与 mismatch tests |
+| RA-001B-B | ODT package → visible text | Planned | Partial：OASIS package 规范 | none | parser、limits、fixture corpus |
+| RA-001B-C | RTF stream → Unicode visible text | Planned | Partial：Microsoft RTF 规范 | none | reader 选型与对抗 tests |
+| RA-001B-D | legacy DOC → isolated visible text | Planned | Partial：MS-DOC、候选包元数据 | none | parser spike、隔离、损坏 corpus |
+| RA-001B-E | parser failure → safe user error | Planned | Partial：现有错误审计、OWASP | inherited-unassessed | 跨 parser 脱敏 tests |
+
+## 12. 会推翻方案的证据
+
+- 若授权样本显示 DOC 使用率极低且隔离成本过高，可保持 adapter 与明确转换指引，不能用
+  不受限 parser 勉强“支持”。
+- 若 ODT/RTF 的实际样本依赖复杂版面而非正文，纯文本 extractor 不足，应新增结构化中间
+  表示，而不是不断在字符串上打补丁。
+- 若 Node 主进程内无法可靠中止解析，必须将对应 parser 移到 worker/subprocess；扩大
+  timeout 不是修复。
+- 若格式检测库不能验证 ZIP 内部结构或 Word stream，它只能提供候选信号，不能替代本契约。
+
+## 13. 参考资料
+
+- OWASP File Upload Cheat Sheet：
+  <https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html>
+- OASIS OpenDocument 1.3 Part 2 Packages：
+  <https://docs.oasis-open.org/office/OpenDocument/v1.3/os/part2-packages/>
+- Microsoft Word Binary File Format `[MS-DOC]`：
+  <https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/>
+- Microsoft Rich Text Format specification：
+  <https://learn.microsoft.com/en-us/previous-versions/office/developer/office2000/aa140277(v=office.10)>
+- `word-extractor` repository：
+  <https://github.com/morungos/node-word-extractor>
