@@ -27,7 +27,8 @@
     "web": "pnpm --filter @yamlresume/web",
     "typedoc": "pnpm -r typedoc",
     "agent": "pnpm --filter @yamlresume/resume-agent",
-    "agent-api": "pnpm --filter @yamlresume/resume-agent-api"
+    "agent-api": "pnpm --filter @yamlresume/resume-agent-api",
+    "agent-web": "pnpm --filter @yamlresume/agent-web"
   },
   "lint-staged": {
     "packages/*/src/**/*.ts": "pnpm check"

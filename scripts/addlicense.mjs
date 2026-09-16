@@ -16,6 +16,7 @@ const args = [
   '2023–Present',
   '-f',
   'LICENSE',
+  'packages/agent-web/src',
   'packages/cli/src',
   'packages/core/src',
   'packages/create-yamlresume/src',
