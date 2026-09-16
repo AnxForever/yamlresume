@@ -212,14 +212,14 @@ pnpm license:check
 
 ### 8.1 常见文档格式不是被拒绝，而是后续独立切片
 
-用户在 2026-09-16 补充要求：文件能力不能止于当前七种输出，求职场景中的常见文档
+用户在 2026-09-16 补充要求：文件能力不能止于当时七种输出，求职场景中的常见文档
 都应有明确支持策略。该要求同时影响输入解析和输出交付，不能只在 `OutputFormatSchema`
 追加扩展名：
 
 | 生命周期 | 当前已实现 | 下一优先级 | 需要单独解决的问题 |
 | --- | --- | --- | --- |
 | 输入解析 | TXT/Markdown/HTML/JSON/YAML、数字 PDF、DOCX、PNG/JPEG/WebP/GIF media type | ODT、RTF、旧版 DOC；补齐扩展名/MIME 映射 | 内容签名、编码、加密/损坏文件、宏、ZIP/XML bomb、OCR、解析器沙箱 |
-| 输出交付 | YAML、JSON、Markdown、HTML、LaTeX、PDF、DOCX | TXT、RTF、ODT | 样式保真、可访问性、跨阅读器兼容、binary package 验证、转换资源限制 |
+| 输出交付 | YAML、JSON、Markdown、HTML、LaTeX、PDF、DOCX、TXT、RTF、ODT（RA-007C 已开发级实现） | 浏览器下载与更广 reader matrix | 样式保真、可访问性、跨阅读器兼容、转换资源限制 |
 
 范围决策：
 
@@ -237,7 +237,7 @@ OWASP 明确指出上传方提供的 Content-Type 可伪造，扩展名、MIME �
 filename 或声明的 media type 推断 binary 格式。OASIS ODF、Microsoft DOC/RTF 规范和
 真实匿名 fixture 将是对应切片的主要证据。
 
-RA-007B 仍先完成现有格式的可靠性基线，因为 RA-007C 的每个新 exporter 都应复用同一
+RA-007B 先完成现有格式的可靠性基线，RA-007C 随后让每个新 exporter 复用同一
 套顺序、编码、partial-success 和安全失败契约。当前 DOCX 是内容可编辑导出，并未证明
 五种 preset 在 Word 中具有等价视觉样式；这一点必须作为 RA-007C 的样式保真缺口，
 不能因 artifact 上带有 style ID 就宣称完成。

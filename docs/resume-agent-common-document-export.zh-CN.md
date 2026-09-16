@@ -1,10 +1,10 @@
 # Resume Agent 常见文档输出 Feature Brief
 
 > Feature ID：RA-007C
-> 状态：Partial；RA-007C-A（TXT）与 RA-007C-B（RTF）已在开发环境实现，
-> RA-007C-C（ODT）仍为 Planned
+> 状态：Implemented for development；RA-007C-A（TXT）、RA-007C-B（RTF）与
+> RA-007C-C（ODT）均已实现，跨应用兼容与生产下载证据仍为 Partial
 > 最后审阅：2026-09-16
-> 范围：新增 TXT、RTF、ODT 简历产物，并复用 RA-007B 的顺序、partial-success、编码和安全失败契约；本次只完成 TXT/RTF。
+> 范围：新增 TXT、RTF、ODT 简历产物，并复用 RA-007B 的顺序、partial-success、编码和安全失败契约。
 
 ## 1. 用户问题与结果
 
@@ -16,22 +16,23 @@
 - RTF 仍用于部分 ATS、老旧办公软件和跨系统交换；
 - ODT 是开放文档生态中的原生可编辑格式。
 
-当前调用方已经可以在同一 `formats` 请求中选择 `txt` 和 `rtf`；`odt` 仍不能请求。
+当前调用方已经可以在同一 `formats` 请求中选择 `txt`、`rtf` 和 `odt`。
 成功产物遵守统一 metadata/size/encoding 契约，现有每格式隔离边界继续生效。此状态不承诺
-TXT/RTF 与 PDF/DOCX 像素级一致，也不把“扩展名正确”当成有效文档证据。
+三种格式与 PDF/DOCX 像素级一致，也不把“扩展名正确”当成有效文档证据。
 
 ## 2. 当前实现与可复用边界
 
 本地证据来自 `contracts.ts`、`rendering/artifacts.ts`、相邻测试及 RA-007B：
 
-1. `OutputFormatSchema` 当前固定九种格式，`formats` 上限也是 9；ODT 尚未进入 enum。
+1. `OutputFormatSchema` 当前固定十种格式，`formats` 上限也是 10；API capability 与 OpenAPI 同步。
 2. `OutputArtifact` 已统一 `format/style/filename/mediaType/encoding/content/sizeBytes`。
 3. 文本产物使用 UTF-8 string，PDF/DOCX 使用 base64 包装的 Buffer。
 4. 请求顺序和 first-seen 去重已验证；每格式独立捕获失败并返回安全摘要。
 5. YAML/JSON/Markdown/HTML/LaTeX 还存在 legacy 顶层字段；`artifacts` 才是可扩展的权威集合。
-6. TXT/RTF 共用内部 `ResumeDocument`，覆盖 YAMLResume 的所有业务字段，忽略 `computed` 派生字段；新格式没有增加 legacy 顶层字段。
+6. TXT/RTF/ODT 共用内部 `ResumeDocument`，覆盖 YAMLResume 的所有业务字段，忽略 `computed` 派生字段；新格式没有增加 legacy 顶层字段。
 7. RTF 是 ASCII-only source，用户文本统一转义，Unicode 以 `\uN?` UTF-16 code unit 输出。
 8. LibreOffice Writer 24.2.7.2 已把对抗 fixture 转成 UTF-8 文本和一页 PDF；DOCX/preset 跨阅读器视觉保真仍未证明。
+9. ODT 由固定五 entry 的确定性 STORE-only ZIP32 writer 生成；ODF Toolkit 0.13.0 按 ODF 1.3 schema 验证无错误/警告，Info-ZIP CRC 检查与 LibreOffice TXT/PDF round-trip 通过。
 
 因此新增 exporter 应进入现有深模块，不新建第二套 delivery API，也不继续无限扩展 legacy
 顶层字段。
@@ -56,10 +57,11 @@ TXT/RTF 与 PDF/DOCX 像素级一致，也不把“扩展名正确”当成有�
 
 | 候选 | 决策 | 理由 |
 | --- | --- | --- |
-| 在 `renderResumeVariant` 中逐个增加 exporter | Adapt | 复用排序、去重、partial-success 与错误隔离；TXT/RTF 已完成，ODT 不夹带 |
+| 在 `renderResumeVariant` 中逐个增加 exporter | Adapt | 复用排序、去重、partial-success 与错误隔离；三种格式均在同一公开 seam 交付 |
 | TXT 专用语义 renderer | Adopt | 从 Markdown 删除标记会误伤正文和 URL |
 | RTF 有界 writer，所有用户文本统一 escape | Adopt | 格式有限，避免调用不透明转换进程 |
-| ODT 最小合规 package writer | Adopt | 结构可由 OASIS 规范和独立 reader 验证 |
+| ODT 最小合规 package writer | Adopt | 固定 entry、STORE-only ZIP32 比引入通用压缩接口更有界；结构由 OASIS schema 和独立 reader 验证 |
+| 直接使用 `docx` 的传递 `jszip` | Reject | 传递依赖不是本模块契约；固定 entry writer 无需新增依赖或争用共享 lockfile |
 | 新格式增加 legacy 顶层字段 | Reject | `artifacts` 已是权威扩展点；RED→GREEN 已验证结果不存在 `txt`/`rtf` 顶层字段 |
 | 经 LaTeX/PDF 反向转换到 RTF/ODT | Reject | 引入额外 binary、临时文件与不可控格式损失 |
 | 声称五种 preset 跨格式视觉等价 | Reject | 当前连 DOCX 都缺少该证据；先承诺内容和语义结构 |
@@ -76,9 +78,9 @@ TXT/RTF 与 PDF/DOCX 像素级一致，也不把“扩展名正确”当成有�
 - exporter 失败产生安全 `artifact_render_failed`，其他请求格式继续成功。
 - exporter 不修改源 Resume；相同输入与 style 产生稳定内容。
 
-当前完成其中 TXT、RTF 的 enum、metadata、内容顺序、Unicode、安全转义、输入不可变和
-独立 reader 验证。ODT package 与 ODT 专属 failure/package tests 未完成，因此 RA-007C
-整体仍是 Partial，不能写成已完成。
+当前已经完成三种格式的 enum、metadata、内容顺序、Unicode、安全转义、输入不可变、
+partial-success 和独立 reader 验证。RA-007C 可记为开发级实现；跨应用矩阵、浏览器下载、
+大型简历性能与真实用户反馈仍不完整，因此不能写成 `Operational`。
 
 ### Should have
 
@@ -102,8 +104,8 @@ TXT/RTF 与 PDF/DOCX 像素级一致，也不把“扩展名正确”当成有�
 | `rtf` | `resume-{style}.rtf` | `application/rtf` | `utf8` | RTF source 的 UTF-8/ASCII 字节数 |
 | `odt` | `resume-{style}.odt` | `application/vnd.oasis.opendocument.text` | `base64` | 解码后 ZIP package 字节数 |
 
-TXT/RTF 只出现在 `artifacts` 与每个 variant 的 `artifacts` 中。现有 YAML/JSON/Markdown/
-HTML/LaTeX legacy 顶层字段保持兼容但不扩展；ODT 实现后也必须遵守这一规则。消费者必须
+TXT/RTF/ODT 只出现在 `artifacts` 与每个 variant 的 `artifacts` 中。现有 YAML/JSON/Markdown/
+HTML/LaTeX legacy 顶层字段保持兼容但不扩展。消费者必须
 以 `encoding` 决定是直接写 UTF-8 还是先 base64 decode，不能从扩展名自行猜测。
 
 ## 6. 模块设计
@@ -119,9 +121,10 @@ type ExportedContent =
   | { encoding: 'base64'; content: Uint8Array }
 ```
 
-公开 `renderResumeVariant` 仍是唯一入口。当前 TXT/RTF 是该深模块内的纯函数 writer，
-共享 metadata/encoding 和错误隔离；上面的 `ResumeExporter` 是 ODT 接入后可能采用的内部目标
-接口，并非当前已发布类型。已有 PDF compiler seam 保持独立，不把所有格式抽象成外部 converter。
+公开 `renderResumeVariant` 仍是唯一入口。TXT/RTF 是该深模块内的纯函数 writer；ODT 的
+ZIP/XML 复杂度封装在内部 `renderOdtDocument` 模块，三者共享 metadata/encoding、语义模型和
+错误隔离。上面的 `ResumeExporter` 仍只是设计词汇而非已发布类型；已有 PDF compiler seam
+保持独立，不把所有格式抽象成外部 converter。
 
 为了避免同一份简历在三个 writer 中各自遍历且逐渐分叉，先构建内部的展示模型：
 
@@ -172,6 +175,11 @@ TXT、RTF、ODT 共享它；现有 DOCX 是否迁移必须由 characterization t
 - 用 heading、paragraph、list、link 等 ODF 元素表达 `ResumeDocument`；
 - package writer 必须确定 entry 顺序和时间 metadata，避免相同输入产生不必要的二进制漂移。
 
+实现采用五个固定 entry：`mimetype`、`META-INF/manifest.xml`、`content.xml`、`styles.xml`、
+`meta.xml`。所有 entry 都使用 STORE，DOS 时间固定为 1980-01-01，文件名和顺序不可由用户
+控制；这避免路径穿越、动态附件、压缩 bomb 和时间戳漂移。正文只允许固定的 heading、paragraph、
+list 与 `http(s)` hyperlink 元素，用户文本统一经过 XML 1.0 字符过滤与 text/attribute escape。
+
 ## 8. 样式与可访问性承诺
 
 `style` 仍表示用户选择的 preset，并写入 artifact metadata，但本切片只保证：
@@ -189,8 +197,10 @@ TXT、RTF、ODT 共享它；现有 DOCX 是否迁移必须由 characterization t
 
 - 用户正文不得进入 exporter error、warning 或日志；
 - RTF/XML 必须对控制字符和语法字符做 allow/escape，不能允许字段注入结构；
-- ODT package 不包含本地路径、临时目录、外部 relationship、脚本或未请求附件；
-- 所有成功产物必须非空并低于配置的最大输出字节数；
+- ODT package 不包含本地路径、临时目录、外部嵌入资源、脚本或未请求附件；用户可见的
+  `http(s)` 链接只作为文本超链接保留，不在打开文档时自动加载；
+- 所有成功产物必须非空；当前尚无独立的 exporter 输出字节上限，大型 Resume 性能与上限仍是
+  已登记缺口，不能把输入 Schema 的大小限制当成等价保护；
 - ZIP writer、RTF writer 或兼容性工具的原始错误统一转为固定摘要；
 - LibreOffice 只用于显式兼容性测试，不在单元测试或 runtime 中隐式 spawn。
 
@@ -217,7 +227,7 @@ TXT、RTF、ODT 共享它；现有 DOCX 是否迁移必须由 characterization t
 2. **RTF 安全边界：** 先断言合法 header、ASCII-only source、中文、emoji、brace、backslash
    和伪 `\object`，再加入统一 escape 与 UTF-16 signed `\uN?` writer。
 3. **共享语义模型：** 先用多 section fixture 断言顺序、URL、地址与去重，再抽取内部
-   `ResumeDocument`，由 TXT/RTF 两个 writer 复用。
+   `ResumeDocument`，由 TXT/RTF/ODT 三个 writer 复用。
 4. **前端能力契约：** 先让 `/v1/capabilities` 的 `txt`/`rtf` 断言失败，再同步 API 与 OpenAPI enum。
 5. **拒绝浅接口膨胀：** 先断言结果没有 `txt`/`rtf` legacy 顶层字段，再把新格式只保留在
    `artifacts`；既有五个 legacy 文本字段保持兼容。
@@ -225,8 +235,22 @@ TXT、RTF、ODT 共享它；现有 DOCX 是否迁移必须由 characterization t
    丢失，再扩展共享 section definition；测试覆盖其余 URL、日期、课程、联系方式和摘要。
 7. **复用核心展示语义：** locale/alias/order 测试先暴露英文硬编码和固定顺序，再复用
    YAMLResume 的 section translation、alias 与 `mergeArrayWithOrder` 契约。
+8. **ODT artifact 契约：** 先让 `OutputFormatSchema.parse('odt')` 失败，再加入 enum、十格式上限、
+   `application/vnd.oasis.opendocument.text`、base64 和原始 package 字节数 metadata。
+9. **ODT package：** 初始 tracer 只返回占位二进制；独立 test reader 因缺少 local header、central
+   directory 与 EOCD 失败，再实现 CRC32、固定 entry 顺序、STORE method、首个无 extra 的 mimetype
+   和 manifest/content/styles/meta 文件。
+10. **语义与 XML 安全：** package 首版只有标题；对抗 fixture 缺 headline、contact、section、list、
+    link 和 locale/order，并暴露 XML 注入要求，再实现统一 XML 1.0 字符过滤、text/attribute escape
+    与固定 ODF 元素 writer。
+11. **确定性与失败隔离：** 相同输入两次 byte-for-byte 一致且不修改 Resume；注入含私密 marker 的
+    ODT writer failure，只返回固定 `artifact_render_failed`，同请求 TXT/JSON 继续成功。
+12. **API 契约：** capability test 先因不含 `odt` 失败，再同步 API 与 OpenAPI enum/maxItems；
+    HTTP 端到端测试进一步请求 ODT 并校验 base64、decoded size、ZIP signature 和关键 entry。
+13. **独立兼容：** Info-ZIP CRC、ODF Toolkit 0.13.0 ODF 1.3 schema、LibreOffice Writer
+    TXT/PDF/FODT round-trip 均通过；这些工具不进入 runtime 或单元测试依赖。
 
-这些测试通过公开 `renderResumeVariant` seam 验证行为，没有 mock TXT/RTF writer，也没有把
+这些测试通过公开 `renderResumeVariant` seam 验证行为，没有 mock 成功 writer，也没有把
 LibreOffice 变成 runtime 或单元测试依赖。
 
 ## 11. 测试与验收门禁
@@ -240,9 +264,9 @@ LibreOffice 变成 runtime 或单元测试依赖。
 - 门禁：focused tests、完整 resume-agent tests、TypeScript、build、Biome、license、
   `git diff --check`。
 
-TXT/RTF 的自动测试和一次 LibreOffice 开发期实验通过后只标记各自
-`Implemented for development`。ODT、跨应用兼容矩阵、真实下载、大型简历性能和用户反馈
-仍缺失时，RA-007C 整体不得标记完成或 `Operational`。
+三种格式的自动测试和开发期独立验证通过后只标记
+`Implemented for development`。跨应用兼容矩阵、真实下载、大型简历性能和用户反馈
+仍缺失时，RA-007C 不得标记为 `Operational`。
 
 ### 11.1 兼容性实验（2026-09-16）
 
@@ -256,19 +280,33 @@ TXT/RTF 的自动测试和一次 LibreOffice 开发期实验通过后只标记�
   显示为 `?`；因此只作为结构辅助证据，不作为 Unicode 兼容证据。
 - 仍未验证 Microsoft Word、WPS、Google Docs 导入，也未做视觉 baseline 和大文件性能测试。
 
-### 11.2 自动门禁记录（2026-09-16）
+### 11.2 ODT 兼容性与 schema 实验（2026-09-16）
 
-- `pnpm agent test src/rendering/artifacts.test.ts`：12/12 通过；
-- `pnpm agent-api test`：15/15 通过；API 测试需要绑定 localhost，受限沙箱内会返回
+- 真实 artifact 被 `file` 识别为 `OpenDocument Text`；`zipinfo` 显示固定五个 entry 全部
+  `Stored`、时间均为 1980-01-01，`mimetype` 首位且 39 bytes；`unzip -t` 的五个 CRC 全部通过。
+- Maven Central 的 `odfvalidator-0.13.0-jar-with-dependencies.jar` 经发布 SHA-256 校验后，
+  按 ODF 1.3 manifest/schema 验证 `manifest.xml`、mimetype、meta、styles、content：
+  `no errors, no warnings`，退出码 0。
+- LibreOffice Writer 24.2.7.2 成功转为 UTF-8 BOM TXT、PDF 1.7 和 FODT；中文、emoji、URL、
+  XML 特殊字符、heading、列表与顺序可读取。MuPDF `mutool info` 确认 PDF 为一页。
+- 未验证 Microsoft Word、WPS、Google Docs 导入，也未做视觉 baseline 和大文件性能测试。
+
+### 11.3 自动门禁记录（2026-09-16）
+
+- `pnpm agent test src/rendering/artifacts.test.ts`：17/17 通过；
+- `pnpm agent-api test`：16/16 通过；API 测试需要绑定 localhost，受限沙箱内会返回
   `listen EPERM`，在获准的本地执行环境中通过；
 - `pnpm agent build`、`pnpm agent-api build`：通过；
 - 两个 package 的 `tsc --noEmit`：通过；
 - 六个目标 TypeScript 文件的 Biome：通过；`git diff --check`：通过；
 - `pnpm license:check` 退出码 0，但环境缺少 `addlicense` binary，实际扫描被脚本跳过；修改的
-  既有 TypeScript 文件保留完整 MIT header；
-- `timeout 15s pnpm agent test` 中 14 个文件、150 个测试均显示通过，但共享工作树中的
-  RA-015E heartbeat 改动使全套 Vitest 进程未退出，最终为 timeout 124；其两个相关文件单独
-  运行分别为 39/39 与 18/18。此项不能记为完整套件绿色，也不把退出问题归因于 TXT/RTF。
+  TypeScript 文件（含新增 ODT module）均保留完整 MIT header；
+- `pnpm test`：9 个 workspace package、132 files、1361 tests 全部通过，exit 0；
+- 历史运行曾出现完整 Vitest 在断言结束后不退出，以及更早受限环境中本地 LLM HTTP 测试超时；
+  当前 unrestricted 环境使用相同 Node 22.21.1/Vitest 4.0.16 复核：原始完整命令连续 5 次、
+  LLM 单文件 5 次、LLM + 两个 workflow 文件组合 3 次均自然退出。ODT 完成后
+  `timeout 15s pnpm agent test` 为 15 files / 184 tests、exit 0、约 4.9s。没有旧句柄快照，
+  因此只记录历史环境故障已不复现，不虚构产品代码根因或回归修复。
 
 ## 12. 证据台账
 
@@ -276,22 +314,21 @@ TXT/RTF 的自动测试和一次 LibreOffice 开发期实验通过后只标记�
 | --- | --- | --- | --- | --- | --- |
 | RA-007C-A | Resume → copyable TXT | Implemented for development | Covered：公开 seam、全 section fixture、UTF-8/metadata/末尾换行测试 | none | 浏览器真实下载、ATS 粘贴和大文件性能 |
 | RA-007C-B | Resume → interoperable RTF | Implemented for development | Partial：规范、escape/Unicode tests、LibreOffice 24.2.7.2 TXT/PDF round-trip | none | Word/WPS/Google Docs 矩阵、视觉与大文件性能 |
-| RA-007C-C | Resume → valid editable ODT | Planned | Partial：OASIS package 规范 | none | deterministic package 与 reader matrix |
-| RA-007C-D | one exporter fails → other artifacts survive | Implemented at shared seam; new pure writers partially covered | Partial：RA-007B generic text/binary failure isolation 与本次组合顺序测试 | none | ODT failure injection；TXT/RTF 无外部依赖但尚无专属 forced-failure seam |
-| RA-007C-E | selected style → accessible semantic document | Implemented for TXT/RTF logical order | Partial：全 section fixture 与 LibreOffice 一栏读取结果 | none | preset 视觉差异不承诺；跨阅读器可访问性矩阵 |
+| RA-007C-C | Resume → valid editable ODT | Implemented for development | Partial：OASIS/PKWARE、确定性 package tests、ODF Toolkit 1.3 零错误/警告、Info-ZIP 与 LibreOffice round-trip | none | Word/WPS/Google Docs、浏览器下载、视觉和大文件性能 |
+| RA-007C-D | one exporter fails → other artifacts survive | Implemented at shared seam | Covered for application seam：既有 generic text/binary failure isolation + ODT 私密错误注入，其他格式继续成功 | none | 生产日志/下载层仍未接入 |
+| RA-007C-E | selected style → accessible semantic document | Implemented for TXT/RTF/ODT logical order | Partial：全 section fixture、ODT heading/list/link、LibreOffice 一栏读取结果 | none | preset 视觉差异不承诺；跨阅读器可访问性矩阵 |
 
 ## 13. 实施顺序与依赖门禁
 
 1. RA-015C 已完成；TXT 与 RTF 在同一小切片实现，是因为二者共用语义模型且不增加依赖。
 2. TXT 已验证共享 `ResumeDocument`、全 section 字段、顺序、URL 与 UTF-8 metadata。
 3. RTF 已验证 escape/Unicode、ASCII source、LibreOffice 读取与 PDF 转换。
-4. ODT 仍单独实施：先完成 ZIP/XML 技术 spike、许可检查与 package fixtures；在隔离切片中
-   显式更新 `package.json`/lockfile，不借用 `docx` 的传递 ZIP 依赖。
-5. ODT 完成后再跑三格式组合和更完整的兼容矩阵，不把 TXT/RTF 的通过写成 RA-007C 总完成。
+4. ODT 已以固定五 entry、STORE-only ZIP32 完成；不借用 `docx` 的传递 ZIP 依赖，也没有新增
+   package 或 lockfile 变更。自有 writer 只覆盖本功能需要的生成路径，不是通用 ZIP 接口。
+5. 三格式组合、ODF 1.3 schema 与 LibreOffice 已验证；更广兼容矩阵仍作为独立后续证据。
 
-若引入 ZIP/XML/RTF 依赖，必须直接写入 `packages/resume-agent/package.json`，固定版本，核对
-license/维护状态/传递依赖，并在没有共享前端变更时单独更新 lockfile。不得依赖 `docx` 偶然
-带入的 transitive package。
+未来若用通用库替换有界 writer，必须直接写入 `packages/resume-agent/package.json`，固定版本，
+核对 license/维护状态/传递依赖，并单独更新 lockfile。不得依赖 `docx` 偶然带入的 transitive package。
 
 ## 14. 会推翻方案的证据
 
@@ -314,4 +351,7 @@ license/维护状态/传递依赖，并在没有共享前端变更时单独更�
   <https://docs.oasis-open.org/office/OpenDocument/v1.3/os/part2-packages/>
 - OASIS OpenDocument 1.3 Part 3 Schema：
   <https://docs.oasis-open.org/office/OpenDocument/v1.3/os/part3-schema/>
+- PKWARE ZIP APPNOTE：<https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT>
+- ODF Toolkit Validator 0.13.0：
+  <https://repo1.maven.org/maven2/org/odftoolkit/odfvalidator/0.13.0/>
 - Node.js v22 Buffer：<https://nodejs.org/docs/latest-v22.x/api/buffer.html>

@@ -249,6 +249,7 @@ function capabilities() {
         'docx',
         'txt',
         'rtf',
+        'odt',
       ],
       styles: Object.values(STYLE_PRESETS).map((style) => ({
         id: style.id,

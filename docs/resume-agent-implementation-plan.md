@@ -38,9 +38,9 @@ durable user confirmation across process restarts.
 - structured `JobSpec`.
 - requirement-to-evidence `MatchReport`.
 - generated and validated YAMLResume.
-- YAML, JSON, Markdown, HTML, LaTeX, PDF, and DOCX artifacts; TXT, RTF, and ODT
-  are planned as separately researched exporters rather than aliases of an
-  existing payload.
+- YAML, JSON, Markdown, HTML, LaTeX, PDF, DOCX, TXT, RTF, and ODT artifacts;
+  the latter three are separately researched exporters rather than aliases of
+  an existing payload and remain development-grade rather than operational.
 - deterministic source-to-draft diff.
 - deterministic quality report.
 - follow-up questions and warnings.

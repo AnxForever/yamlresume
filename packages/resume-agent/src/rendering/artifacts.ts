@@ -45,6 +45,7 @@ import type {
   RenderedResume,
   StylePresetID,
 } from '@/contracts'
+import { renderOdtDocument } from '@/rendering/odt'
 import { applyStylePreset } from '@/rendering/styles'
 
 const execFileAsync = promisify(execFile)
@@ -59,6 +60,7 @@ const MEDIA_TYPES: Record<OutputFormat, string> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   txt: 'text/plain; charset=utf-8',
   rtf: 'application/rtf',
+  odt: 'application/vnd.oasis.opendocument.text',
 }
 
 export interface RenderOptions {
@@ -577,7 +579,7 @@ function rendererIndex(
   return resume.layouts?.findIndex((layout) => layout.engine === engine) ?? -1
 }
 
-type TextOutputFormat = Exclude<OutputFormat, 'pdf' | 'docx'>
+type TextOutputFormat = Exclude<OutputFormat, 'pdf' | 'docx' | 'odt'>
 type LegacyTextOutputFormat = Extract<
   TextOutputFormat,
   'yaml' | 'json' | 'markdown' | 'html' | 'latex'
@@ -661,6 +663,15 @@ export async function renderResumeVariant(
             style,
             `resume-${style}.docx`,
             await resumeToDocx(resume)
+          )
+        )
+      } else if (format === 'odt') {
+        artifacts.push(
+          binaryArtifact(
+            format,
+            style,
+            `resume-${style}.odt`,
+            renderOdtDocument(buildResumeDocument(resume))
           )
         )
       } else {

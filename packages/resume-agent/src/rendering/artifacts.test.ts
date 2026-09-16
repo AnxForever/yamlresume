@@ -26,8 +26,13 @@ import type { Resume } from '@yamlresume/core'
 import * as yamlResumeCore from '@yamlresume/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { type OutputFormat, OutputFormatSchema } from '@/contracts'
+import {
+  type OutputFormat,
+  OutputFormatSchema,
+  TailorPreferencesSchema,
+} from '@/contracts'
 import { type PdfCompiler, renderResumeVariant } from '@/rendering/artifacts'
+import * as odtRenderer from '@/rendering/odt'
 
 const source: Resume = {
   content: {
@@ -60,6 +65,57 @@ const TEXT_MEDIA_TYPES: Record<
   markdown: 'text/markdown',
   html: 'text/html',
   latex: 'application/x-latex',
+}
+
+interface StoredZipEntry {
+  name: string
+  compressionMethod: number
+  extraLength: number
+  content: Buffer
+}
+
+function readStoredZipEntries(archive: Buffer): StoredZipEntry[] {
+  const entries: StoredZipEntry[] = []
+  let offset = 0
+  while (
+    offset + 4 <= archive.byteLength &&
+    archive.readUInt32LE(offset) === 0x04034b50
+  ) {
+    if (offset + 30 > archive.byteLength)
+      throw new Error('truncated ZIP header')
+    const compressionMethod = archive.readUInt16LE(offset + 8)
+    const compressedSize = archive.readUInt32LE(offset + 18)
+    const uncompressedSize = archive.readUInt32LE(offset + 22)
+    const filenameLength = archive.readUInt16LE(offset + 26)
+    const extraLength = archive.readUInt16LE(offset + 28)
+    const filenameStart = offset + 30
+    const contentStart = filenameStart + filenameLength + extraLength
+    const contentEnd = contentStart + compressedSize
+    if (contentEnd > archive.byteLength) throw new Error('truncated ZIP entry')
+    if (compressionMethod !== 0 || compressedSize !== uncompressedSize) {
+      throw new Error('test reader only accepts stored ZIP entries')
+    }
+    entries.push({
+      name: archive
+        .subarray(filenameStart, filenameStart + filenameLength)
+        .toString('utf8'),
+      compressionMethod,
+      extraLength,
+      content: archive.subarray(contentStart, contentEnd),
+    })
+    offset = contentEnd
+  }
+  if (archive.readUInt32LE(offset) !== 0x02014b50) {
+    throw new Error('ZIP central directory is missing')
+  }
+  const endOfDirectory = archive.lastIndexOf(
+    Buffer.from([0x50, 0x4b, 0x05, 0x06])
+  )
+  if (endOfDirectory < 0) throw new Error('ZIP end record is missing')
+  if (archive.readUInt16LE(endOfDirectory + 10) !== entries.length) {
+    throw new Error('ZIP entry count does not match its central directory')
+  }
+  return entries
 }
 
 describe('renderResumeVariant', () => {
@@ -159,7 +215,180 @@ describe('renderResumeVariant', () => {
     expect(result).not.toHaveProperty('rtf')
   })
 
-  it('shares complete semantic content and order across TXT and RTF', async () => {
+  it('renders ODT through the binary artifact contract', async () => {
+    const format = OutputFormatSchema.parse('odt')
+    const allFormats = [...OutputFormatSchema.options]
+    expect(allFormats).toHaveLength(10)
+    expect(
+      TailorPreferencesSchema.parse({ formats: allFormats }).formats
+    ).toEqual(allFormats)
+    const result = await renderResumeVariant(source, 'ats-compact', {
+      formats: [format],
+    })
+
+    expect(result.failures).toEqual([])
+    expect(result.artifacts).toHaveLength(1)
+    const artifact = result.artifacts[0]
+    expect(artifact).toMatchObject({
+      format: 'odt',
+      style: 'ats-compact',
+      filename: 'resume-ats-compact.odt',
+      mediaType: 'application/vnd.oasis.opendocument.text',
+      encoding: 'base64',
+    })
+    const decoded = Buffer.from(artifact?.content ?? '', 'base64')
+    expect(decoded.byteLength).toBeGreaterThan(0)
+    expect(artifact?.sizeBytes).toBe(decoded.byteLength)
+    expect(result).not.toHaveProperty('odt')
+  })
+
+  it('packages the required ODT entries with a first stored mimetype', async () => {
+    const result = await renderResumeVariant(source, 'ats-compact', {
+      formats: ['odt'],
+    })
+    const archive = Buffer.from(result.artifacts[0]?.content ?? '', 'base64')
+    const entries = readStoredZipEntries(archive)
+
+    expect(entries.map((entry) => entry.name)).toEqual([
+      'mimetype',
+      'META-INF/manifest.xml',
+      'content.xml',
+      'styles.xml',
+      'meta.xml',
+    ])
+    expect(entries[0]).toMatchObject({
+      name: 'mimetype',
+      compressionMethod: 0,
+      extraLength: 0,
+    })
+    expect(entries[0]?.content.toString('ascii')).toBe(
+      'application/vnd.oasis.opendocument.text'
+    )
+    expect(archive.subarray(30, 38).toString('ascii')).toBe('mimetype')
+    expect(archive.subarray(38, 77).toString('ascii')).toBe(
+      'application/vnd.oasis.opendocument.text'
+    )
+
+    const manifest = entries[1]?.content.toString('utf8') ?? ''
+    expect(manifest).toContain('<manifest:manifest')
+    expect(manifest).toContain('manifest:version="1.3"')
+    expect(manifest).toContain('manifest:full-path="/"')
+    expect(manifest).toContain(
+      'manifest:media-type="application/vnd.oasis.opendocument.text"'
+    )
+    for (const filename of ['content.xml', 'styles.xml', 'meta.xml']) {
+      expect(manifest).toContain(`manifest:full-path="${filename}"`)
+    }
+    expect(manifest).not.toContain('META-INF/manifest.xml')
+    expect(manifest).not.toContain('manifest:full-path="mimetype"')
+  })
+
+  it('renders semantic ODT content while escaping XML and unsafe controls', async () => {
+    const odtSource = structuredClone(source)
+    odtSource.locale = { language: 'zh-hans' }
+    odtSource.content.basics.name = 'Ada & <Engineer> "Lead" 😀'
+    odtSource.content.basics.headline = 'Platform > Systems'
+    odtSource.content.basics.url = 'https://example.invalid/profile?a=1&b="two"'
+    odtSource.content.basics.summary =
+      'Safe & useful\n- </text:p><office:script>evil</office:script>\u0001'
+    odtSource.content.work = [
+      {
+        name: 'Example <Systems>',
+        position: 'Engineer & Maintainer',
+        startDate: '2024',
+        summary: '- Built reliable services',
+        url: 'https://example.invalid/work?area=platform&level=senior',
+      },
+    ]
+    const latex = odtSource.layouts?.find((layout) => layout.engine === 'latex')
+    if (!latex) throw new Error('Expected a LaTeX layout')
+    latex.sections = {
+      order: ['projects', 'work'],
+      aliases: { projects: '项目经历', work: '职业 & 经历' },
+    }
+
+    const result = await renderResumeVariant(odtSource, 'ats-compact', {
+      formats: ['odt'],
+    })
+    const entries = readStoredZipEntries(
+      Buffer.from(result.artifacts[0]?.content ?? '', 'base64')
+    )
+    const content =
+      entries
+        .find((entry) => entry.name === 'content.xml')
+        ?.content.toString('utf8') ?? ''
+    const styles =
+      entries
+        .find((entry) => entry.name === 'styles.xml')
+        ?.content.toString('utf8') ?? ''
+
+    expect(content).toContain('<office:document-content')
+    expect(content).toContain('<office:body>')
+    expect(content).toContain('<office:text>')
+    expect(content).toContain('<text:h text:style-name="ResumeTitle"')
+    expect(content).toContain('Ada &amp; &lt;Engineer&gt; "Lead" 😀')
+    expect(content).toContain('Platform &gt; Systems')
+    expect(content).toContain('<text:list text:style-name="ResumeBulletList">')
+    expect(content).toContain(
+      'xlink:href="https://example.invalid/work?area=platform&amp;level=senior"'
+    )
+    expect(content).toContain(
+      '&lt;/text:p&gt;&lt;office:script&gt;evil&lt;/office:script&gt;�'
+    )
+    expect(content).not.toContain('<office:script>')
+    expect(content).not.toContain('<!DOCTYPE')
+    expect(content).not.toContain('\u0001')
+    expect(content).not.toContain('xlink:href="javascript:')
+    expect(content.indexOf('项目经历')).toBeLessThan(
+      content.indexOf('职业 &amp; 经历')
+    )
+    expect(styles).toContain('style:name="ResumeTitle"')
+    expect(styles).toContain('style:name="ResumeBulletList"')
+  })
+
+  it('renders deterministic ODT bytes without modifying the source', async () => {
+    const before = structuredClone(source)
+
+    const first = await renderResumeVariant(source, 'modern-professional', {
+      formats: ['odt'],
+    })
+    const second = await renderResumeVariant(source, 'modern-professional', {
+      formats: ['odt'],
+    })
+
+    expect(first.artifacts[0]?.content).toBe(second.artifacts[0]?.content)
+    expect(first.artifacts[0]?.sizeBytes).toBe(second.artifacts[0]?.sizeBytes)
+    expect(source).toEqual(before)
+  })
+
+  it('isolates an ODT writer failure and hides its private details', async () => {
+    const privateFailure =
+      'PRIVATE_ODT_WRITER_39271 at /tmp/private-candidate/content.xml'
+    vi.spyOn(odtRenderer, 'renderOdtDocument').mockImplementationOnce(() => {
+      throw new Error(privateFailure)
+    })
+
+    const result = await renderResumeVariant(source, 'ats-compact', {
+      formats: ['txt', 'odt', 'json'],
+    })
+
+    expect(result.artifacts.map((artifact) => artifact.format)).toEqual([
+      'txt',
+      'json',
+    ])
+    expect(result.failures).toEqual([
+      {
+        format: 'odt',
+        style: 'ats-compact',
+        code: 'artifact_render_failed',
+        message: 'Failed to render ODT artifact.',
+      },
+    ])
+    expect(JSON.stringify(result)).not.toContain(privateFailure)
+    expect(JSON.stringify(result)).not.toContain('/tmp/private-candidate')
+  })
+
+  it('shares complete semantic content and order across TXT, RTF, and ODT', async () => {
     const richSource = structuredClone(source)
     richSource.content.basics.headline = 'Platform Engineer'
     richSource.content.basics.phone = '+1 555 0100'
@@ -275,12 +504,13 @@ describe('renderResumeVariant', () => {
     ]
 
     const result = await renderResumeVariant(richSource, 'ats-compact', {
-      formats: ['rtf', 'txt', 'rtf'],
+      formats: ['rtf', 'txt', 'odt', 'rtf'],
     })
 
     expect(result.artifacts.map((artifact) => artifact.format)).toEqual([
       'rtf',
       'txt',
+      'odt',
     ])
     const text =
       result.artifacts.find((artifact) => artifact.format === 'txt')?.content ??
@@ -327,6 +557,41 @@ describe('renderResumeVariant', () => {
     ]) {
       expect(rtf).toContain(value)
     }
+
+    const odtArtifact = result.artifacts.find(
+      (artifact) => artifact.format === 'odt'
+    )
+    const odtEntries = readStoredZipEntries(
+      Buffer.from(odtArtifact?.content ?? '', 'base64')
+    )
+    const odtContent =
+      odtEntries
+        .find((entry) => entry.name === 'content.xml')
+        ?.content.toString('utf8') ?? ''
+    for (const value of [
+      '123 Example Road',
+      'Example Systems',
+      'Example University',
+      'Infrastructure',
+      'https://example.invalid/work',
+      'Score: 3.95',
+      'IELTS 8.0',
+      'https://github.com/example-user',
+    ]) {
+      expect(odtContent).toContain(value)
+    }
+    expect(odtContent.indexOf('Education')).toBeLessThan(
+      odtContent.indexOf('Work')
+    )
+    expect(odtContent.indexOf('Work')).toBeLessThan(
+      odtContent.indexOf('Skills')
+    )
+    expect(odtContent.indexOf('Skills')).toBeLessThan(
+      odtContent.indexOf('Projects')
+    )
+    expect(odtContent.indexOf('Projects')).toBeLessThan(
+      odtContent.indexOf('Profiles')
+    )
   })
 
   it('uses localized section headings, aliases, and layout order', async () => {

@@ -135,8 +135,8 @@ private. See the
 | RA-004 | Requirement matching | Implemented | Deterministic lexical matcher | Gap | Inherited-unassessed | Compare lexical, embedding, and LLM reranking on eval set |
 | RA-005 | Evidence-constrained drafting | Implemented | Prompt policy, evidence-ID validation and Repair workflow test | Partial | Backfilled | Hallucination and omission evaluation suite |
 | RA-006 | Immutable-fact guard | Implemented | Rejects unsupported entries in tests | Partial | None | Add date/contact mutation cases and translated-name policy |
-| RA-007 | Multi-style YAML/JSON/Markdown/HTML/LaTeX/PDF/DOCX/TXT/RTF rendering | Implemented for development | Preset metadata, real renderer/DOCX, fake PDF compiler tests and TXT/RTF semantic/reader tests | Partial | Backfilled | ODT, real PDF sandbox, page-count/visual checks and broader cross-reader compatibility |
-| RA-007C | Common document export expansion | Partial: TXT/RTF implemented for development; ODT planned | Shared full-section document model, artifact tests, safe RTF escaping and LibreOffice 24.2.7.2 TXT/PDF conversion | Partial | None | ODT package/tests; Word/WPS/Google Docs, download, performance and visual matrix |
+| RA-007 | Multi-style YAML/JSON/Markdown/HTML/LaTeX/PDF/DOCX/TXT/RTF/ODT rendering | Implemented for development | Preset metadata, real renderer/DOCX, fake PDF compiler tests and TXT/RTF/ODT semantic/package/reader tests | Partial | Backfilled | Real PDF sandbox, page-count/visual checks and broader cross-reader compatibility |
+| RA-007C | Common document export expansion | Implemented for development | Shared full-section document model, safe RTF escaping, deterministic ODT package, ODF 1.3 validation and LibreOffice 24.2.7.2 round-trips | Partial | None | Word/WPS/Google Docs, browser download, performance and visual matrix |
 | RA-008 | HTTP API | Implemented | End-to-end HTTP tests | Partial | None | Authentication, rate limits, request IDs, cancellation |
 | RA-009 | Asynchronous runs, persistence and resume versions | Implemented for development; durable adapter opt-in | In-memory default, SQLite Run/task persistence and explicit restart drain, stage state machine, `POST/GET /v1/runs` and package/API tests | Partial | None | Wire a production worker, cancellation, retention and operational recovery |
 | RA-010 | Agent evaluation and operational observability | Implemented for development | Deterministic runner, public-JD-derived synthetic corpus, required-keyword gold assertions, safe repeated campaign aggregation and structured-output telemetry | Partial | Backfilled | Valid Provider credentials/configuration, authorized anonymized candidate set, token/cost statistics and human calibration |
@@ -188,7 +188,7 @@ private. See the
 | --- | --- |
 | Parent / lifecycle | Style selection → deterministic render → encode/package → partial delivery |
 | User outcome | Every variant identifies its actual preset; successful artifacts are non-empty and verifiable; one format cannot leak or destroy the others |
-| Current state | Seven existing formats use stable first-seen order; text formats render inside their own failure scope; DOCX is a real OOXML package; PDF uses an injected compiler adapter |
+| Current state | RA-007B’s seven baseline formats use stable first-seen order; text formats render inside their own failure scope; DOCX is a real OOXML package; PDF uses an injected compiler adapter; RA-007C adds TXT/RTF/ODT at the same seam |
 | Primary evidence | RFC 9512, IANA media registry, Node.js 22 Buffer, PKWARE APPNOTE, Microsoft WordprocessingML, reviewed 2026-09-16 |
 | Independent evidence | Current `@yamlresume/core` source/tests, `docx@9.7.1`, real local render/package tests and controlled failure experiments |
 | Decision | Adapt the existing deep render module; use preset as metadata source; retain only the real PDF compiler seam; reject framework/dependency expansion |
@@ -196,25 +196,25 @@ private. See the
 | Acceptance | 18 focused tests across rendering/styles/workflow; complete Resume Agent package suite; TypeScript, Biome and diff checks |
 | Coverage | Covered for application-side contracts in RA-007B; RA-007 aggregate remains partial |
 | Historical gap | Backfilled; inherited rendering lacked adjacent tests and previously returned incorrect public metadata/raw error messages |
-| Remaining gap | ODT output and legacy RTF/ODT/DOC ingestion remain RA-007C/RA-001B; real PDF sandbox/page count and cross-reader DOCX/style fidelity are unverified |
+| Remaining gap | Legacy RTF/ODT/DOC ingestion remains RA-001B; real PDF sandbox/page count and cross-reader DOCX/style fidelity are unverified |
 | Last reviewed | 2026-09-16, Node 22, `@yamlresume/core@0.12.2`, `docx@9.7.1` |
 
 ### RA-007C evidence detail
 
 | Field | Evidence |
 | --- | --- |
-| Parent / lifecycle | Resume semantic content → TXT/RTF writer → artifact metadata → reader compatibility |
-| User outcome | Users can copy a markup-free resume or download a traditional editable exchange document without losing YAMLResume fields or allowing RTF control injection |
-| Current state | `txt`/`rtf` are accepted by schema, API capabilities and OpenAPI; both use the shared internal document model and only appear in authoritative `artifacts`; ODT remains planned |
-| Primary evidence | RFC 8118/IANA `application/rtf`, Microsoft RTF Unicode/control-word guidance and Node.js 22 Buffer semantics, reviewed 2026-09-16 |
-| Independent evidence | Full YAMLResume field inventory plus LibreOffice Writer 24.2.7.2 RTF→UTF-8 TXT/PDF conversion and UnRTF 0.21.10 structural parse |
-| Decision | Adapt the existing deep render module; combine TXT/RTF around one semantic model; reject Markdown stripping, external runtime conversion and new legacy result fields |
-| Edge cases | CJK, emoji surrogate pairs, braces, backslashes, fake object controls, detailed address, all section fields, URL, duplicate format, section order, byte size and source immutability |
-| Acceptance | Focused render/API/OpenAPI tests, package type/build/Biome gates and explicit LibreOffice conversion; exact commands/results are in `resume-agent-common-document-export.zh-CN.md` |
-| Coverage | Covered for TXT development contract; partial for RTF because only LibreOffice plus one limited independent parser were exercised; aggregate RA-007C remains partial while ODT is absent |
+| Parent / lifecycle | Resume semantic content → TXT/RTF/ODT writer → artifact metadata/package → reader compatibility |
+| User outcome | Users can copy a markup-free resume or download traditional/open editable documents without losing YAMLResume fields or allowing RTF/XML structure injection |
+| Current state | `txt`/`rtf`/`odt` are accepted by schema, API capabilities and OpenAPI; all use the shared internal document model and only appear in authoritative `artifacts`; ODT uses a fixed five-entry deterministic ZIP32 package |
+| Primary evidence | RFC 8118/IANA `application/rtf`, Microsoft RTF guidance, OASIS OpenDocument 1.3, PKWARE APPNOTE and Node.js 22 Buffer semantics, reviewed 2026-09-16 |
+| Independent evidence | Full YAMLResume field inventory; LibreOffice Writer 24.2.7.2 RTF/ODT round-trips; UnRTF 0.21.10; ODF Toolkit Validator 0.13.0 and Info-ZIP checks |
+| Decision | Adapt the existing deep render module; combine all three formats around one semantic model; use a bounded fixed-entry STORE-only ODT writer; reject Markdown stripping, transitive JSZip, external runtime conversion and new legacy result fields |
+| Edge cases | CJK, emoji/surrogates, braces, backslashes, fake RTF controls, XML markup/control injection, attribute escaping, fixed ZIP paths/order/time, detailed address, all section fields, URL, duplicate format, locale/order, byte size, deterministic bytes and source immutability |
+| Acceptance | 17 focused render tests, API/OpenAPI tests, ODF 1.3 schema validation, Info-ZIP CRC, LibreOffice TXT/PDF/FODT round-trip, package type/build/Biome gates; exact commands/results are in `resume-agent-common-document-export.zh-CN.md` |
+| Coverage | Covered for TXT development contract; partial for RTF/ODT external compatibility because only LibreOffice plus limited independent readers/validators were exercised; aggregate RA-007C is implemented but not operational |
 | Historical gap | None; feature was planned with a ledger before implementation |
-| Remaining gap | ODT; Word/WPS/Google Docs matrix; real browser download, ATS paste, visual/accessibility and large-resume performance evidence |
-| Last reviewed | 2026-09-16, LibreOffice Writer 24.2.7.2, UnRTF 0.21.10, Node 22 |
+| Remaining gap | Word/WPS/Google Docs matrix; real browser download, ATS paste, visual/accessibility and large-resume performance evidence |
+| Last reviewed | 2026-09-16, LibreOffice Writer 24.2.7.2, UnRTF 0.21.10, ODF Toolkit Validator 0.13.0, Node 22 |
 
 ### RA-015A evidence detail
 

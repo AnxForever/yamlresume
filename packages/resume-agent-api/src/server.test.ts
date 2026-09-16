@@ -112,6 +112,7 @@ describe('agent API', () => {
       expect(payload.data?.output?.formats).toContain('docx')
       expect(payload.data?.output?.formats).toContain('txt')
       expect(payload.data?.output?.formats).toContain('rtf')
+      expect(payload.data?.output?.formats).toContain('odt')
       expect(payload.data?.output?.styles).toHaveLength(5)
     })
   })
@@ -135,6 +136,49 @@ describe('agent API', () => {
       expect(payload.data?.status).toBe('completed')
       expect(payload.data?.rendered?.artifacts).toHaveLength(5)
       expect(payload.meta?.requestId).toBe(response.headers.get('x-request-id'))
+    })
+  })
+
+  it('delivers a requested ODT package through the HTTP contract', async () => {
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/tailor-resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobDescription:
+            'We need a TypeScript Engineer to build reliable systems.',
+          candidate: { resume: candidate },
+          preferences: { formats: ['odt'] },
+        }),
+      })
+      const payload = (await response.json()) as {
+        data?: {
+          rendered?: {
+            artifacts?: Array<{
+              format?: string
+              filename?: string
+              mediaType?: string
+              encoding?: string
+              content?: string
+              sizeBytes?: number
+            }>
+          }
+        }
+      }
+
+      expect(response.status).toBe(200)
+      const artifact = payload.data?.rendered?.artifacts?.[0]
+      expect(artifact).toMatchObject({
+        format: 'odt',
+        filename: 'resume-ats-compact.odt',
+        mediaType: 'application/vnd.oasis.opendocument.text',
+        encoding: 'base64',
+      })
+      const decoded = Buffer.from(artifact?.content ?? '', 'base64')
+      expect(decoded.subarray(0, 4)).toEqual(Buffer.from('PK\u0003\u0004'))
+      expect(decoded.includes(Buffer.from('META-INF/manifest.xml'))).toBe(true)
+      expect(decoded.includes(Buffer.from('content.xml'))).toBe(true)
+      expect(artifact?.sizeBytes).toBe(decoded.byteLength)
     })
   })
 

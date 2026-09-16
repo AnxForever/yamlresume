@@ -113,15 +113,17 @@
 - PDF：正式投递；
 - DOCX：便于在 Word、WPS 和企业系统中继续编辑；
 - TXT：无 Markdown/HTML 标记的复制、粘贴与 ATS 文本输入；
-- RTF：传统办公软件与 ATS 使用的可编辑交换格式。
+- RTF：传统办公软件与 ATS 使用的可编辑交换格式；
+- ODT：LibreOffice/OpenOffice 等开放文档生态中的可编辑格式。
 
 YAML、JSON、Markdown、HTML、LaTeX、TXT 与 RTF 在 API 中都使用 `utf8` encoding；RTF source
-本身限制为 ASCII，并用 RTF Unicode control word 表达非 ASCII 文本。PDF 和 DOCX 使用 Base64。
-所有 artifact 都记录准确媒体类型和实际字节数；TXT/RTF 只通过权威 `artifacts` 集合交付，
+本身限制为 ASCII，并用 RTF Unicode control word 表达非 ASCII 文本。PDF、DOCX 和 ODT 使用 Base64；
+ODT 是确定性的 ODF 1.3 ZIP package。所有 artifact 都记录准确媒体类型和实际字节数；TXT/RTF/ODT 只通过权威 `artifacts` 集合交付，
 不增加 legacy 顶层字段。后续生产环境应改成对象存储短期下载地址，避免把大文件长期放在
 JSON 和数据库里。
 
-ODT 输出以及 RTF、ODT、旧 `.doc` 输入仍是 Planned，不应从当前 TXT/RTF 输出能力推断为已支持。
+RTF、ODT、旧 `.doc` 输入仍是 Planned；ODT 输出已是开发级实现，但不应据此推断二进制输入
+解析、Word/WPS/Google Docs 全矩阵或生产下载已经完成。
 具体证据和剩余兼容矩阵见
 [`resume-agent-common-document-export.zh-CN.md`](./resume-agent-common-document-export.zh-CN.md)。
 
