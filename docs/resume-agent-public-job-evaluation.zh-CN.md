@@ -2,7 +2,7 @@
 
 > Feature ID：RA-010C
 >
-> 状态：Implemented for development；真实模型质量基线尚未取得
+> 状态：Implemented for development；已取得一次真实 DeepSeek campaign，但质量与稳定性未达标
 >
 > 证据覆盖：Partial
 >
@@ -32,7 +32,8 @@ completion 或异常正文的 campaign 报告。
 | 真实模型质量达标 | 没有 | 3 个案例都未进入评分，不能据此判断模型好坏 |
 
 因此本功能不能被描述成“真实 Eval 已通过”。更准确的说法是：**公开 JD 派生数据集、真实
-Agent campaign 通道与安全报告已实现；当前执行环境尚未取得可评分的真实模型结果。**
+Agent campaign 通道与安全报告已实现；DeepSeek 已产生可评分结果，但当前 campaign 未达标，
+且仍有结构化输出执行失败。**
 
 ## 3. 调研证据与设计改变
 
@@ -251,6 +252,23 @@ completion、warning message、Zod issue 或异常正文。真实执行诊断也
 最终阻塞已经从笼统的网络错误收敛到环境配置：默认 Node 需要显式代理开关，同时现有 OpenAI
 凭证和 Gemini 兼容配置都不可用。由于没有任何合法执行结果进入评分，不能计算模型 coverage，
 也不能调整阈值来“让测试通过”。
+
+### DeepSeek 真实 campaign（2026-09-16）
+
+在清除继承的旧 `OPENAI_*` 环境变量、使用专用 `.env.local` 后，3 个公开岗位派生合成案例通过
+真实 DeepSeek adapter 执行一次 `runEvaluationCampaign`。报告只保留安全聚合：
+
+- `totalCaseExecutions = 3`，`passed = 0`，`failed = 3`，`scored = 2`；
+- `failureCodeCounts` 为 `assertion_failed = 2`、`execution_failed = 1`、
+  `invalid_execution_result = 0`；
+- 有效结果的平均 requirement coverage 为 `0.365`，must-have coverage 为 `0.41`，
+  平均耗时约 `10.553s`，p95 约 `11.130s`；
+- 脱敏复跑诊断观察到一次 `structured_output_validation_failed`，另一个案例通过全部断言，
+  说明当前单次样本同时存在输出质量不足和 Provider/structured-output 稳定性问题。
+
+这是真实可评分基线，不是通过证据：模型调用已打通，但必须先定位结构化输出失败、提升覆盖率并
+进行多次重复 campaign，再讨论阈值或 Operational 状态。原始 JD、候选简历、Prompt、completion、
+Provider message 和异常正文均未写入报告或文档。
 
 ## 10. 验收门禁
 
