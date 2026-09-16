@@ -26,7 +26,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { LogoMark } from '@/components/brand/logo'
-import { HeroComposer } from '@/components/launcher/hero-composer'
 import type { SubmitRunResult } from '@/components/shell/app-shell'
 import type { AgentApiClient, ChatMessage } from '@/lib/api/client'
 import {
@@ -227,7 +226,12 @@ export function LauncherView({
     setChatInput('')
     setChatError(null)
     setChatBusy(true)
-    const result = await client.chat(message, chatMessages)
+    const fileContext = files.map((file) => file.name).join(', ')
+    const result = await client.chat(
+      message,
+      chatMessages,
+      fileContext || undefined
+    )
     setChatBusy(false)
     if (result.kind === 'error') {
       setChatError(result.error.message)
@@ -261,6 +265,7 @@ export function LauncherView({
         preferences: preset.preferences,
         jobFiles: [],
         candidateFiles: [
+          ...files.filter((entry) => entry.role === 'candidate'),
           {
             id: 'conversation',
             name: file.name,
@@ -352,36 +357,153 @@ export function LauncherView({
         </p>
       ) : null}
 
-      <HeroComposer
-        jobDescription={jobDescription}
-        onJobDescriptionChange={setJobDescription}
-        candidateYaml={candidateYaml}
-        onCandidateYamlChange={setCandidateYaml}
+      <UnifiedAgentInput
+        input={chatInput}
+        onInputChange={setChatInput}
+        messages={chatMessages}
         files={files}
         onAddFiles={handleAddFiles}
         onRemoveFile={handleRemoveFile}
-        presets={presets}
-        presetId={effectivePresetId}
-        onPresetChange={setPresetId}
-        blockers={
-          capabilities.kind === 'loading'
-            ? ['正在读取后端能力，请稍候…']
-            : capabilities.kind === 'error'
-              ? ['连不上后端：重试或到设置里检查后端地址']
-              : blockers
-        }
-        submitting={submitting}
-        onSubmit={handleSubmit}
-        chatInput={chatInput}
-        onChatInputChange={setChatInput}
-        chatMessages={chatMessages}
-        chatBusy={chatBusy}
-        chatError={chatError}
-        onChat={() => void handleChat()}
-        chatReady={chatReady}
-        onGenerateFromChat={() => void handleGenerateFromChat()}
+        busy={chatBusy || submitting}
+        error={chatError ?? submitError}
+        ready={chatReady}
+        onSend={() => void handleChat()}
+        onGenerate={() => void handleGenerateFromChat()}
       />
     </div>
+  )
+}
+
+function UnifiedAgentInput({
+  input,
+  onInputChange,
+  messages,
+  files,
+  onAddFiles,
+  onRemoveFile,
+  busy,
+  error,
+  ready,
+  onSend,
+  onGenerate,
+}: {
+  input: string
+  onInputChange: (value: string) => void
+  messages: ChatMessage[]
+  files: AttachedFile[]
+  onAddFiles: (files: FileList, role: 'job' | 'candidate') => void
+  onRemoveFile: (id: string) => void
+  busy: boolean
+  error: string | null
+  ready: boolean
+  onSend: () => void
+  onGenerate: () => void
+}) {
+  const fileInput = useRef<HTMLInputElement>(null)
+  return (
+    <section
+      className="bg-background shadow-md rounded-md p-5"
+      aria-label="Agent 输入"
+    >
+      <h2 className="text-foreground-strong text-sm font-medium">
+        告诉 Agent 你要做什么
+      </h2>
+      <p className="text-foreground-muted mt-1 text-xs">
+        直接输入文字，或把任意简历、职位描述、作品集文件拖进这里。缺少信息时
+        Agent 会继续询问。
+      </p>
+      <div className="my-3 flex max-h-56 flex-col gap-2 overflow-y-auto">
+        {messages.map((entry, index) => (
+          <p
+            key={`${entry.role}-${index}`}
+            className={
+              entry.role === 'user'
+                ? 'text-foreground-strong self-end rounded-md bg-secondary-subtle px-3 py-2 text-sm'
+                : 'text-foreground rounded-md bg-background-muted px-3 py-2 text-sm'
+            }
+          >
+            {entry.content}
+          </p>
+        ))}
+      </div>
+      {files.length > 0 ? (
+        <ul className="mb-3 flex flex-wrap gap-2">
+          {files.map((file) => (
+            <li
+              key={file.id}
+              className="bg-background-muted text-foreground rounded-full px-3 py-1 text-xs"
+            >
+              {file.name}
+              <button
+                type="button"
+                className="ml-2"
+                onClick={() => onRemoveFile(file.id)}
+                aria-label={`移除 ${file.name}`}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {error ? (
+        <p role="alert" className="text-error-emphasis mb-2 text-xs">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex items-end gap-2 rounded-md bg-background-muted p-2">
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          hidden
+          onChange={(event) => {
+            if (event.target.files?.length)
+              onAddFiles(event.target.files, 'candidate')
+            event.target.value = ''
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => fileInput.current?.click()}
+          className="text-foreground-muted px-2 py-2 text-xl"
+          aria-label="添加文件"
+        >
+          ＋
+        </button>
+        <textarea
+          value={input}
+          onChange={(event) => onInputChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault()
+              onSend()
+            }
+          }}
+          rows={2}
+          placeholder="例如：帮我做一份后端工程师简历"
+          className="text-foreground-strong placeholder:text-foreground-muted min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none"
+        />
+        <button
+          type="button"
+          onClick={onSend}
+          disabled={busy || input.trim().length === 0}
+          className="bg-primary text-primary-foreground rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
+        >
+          {busy ? '处理中…' : '发送'}
+        </button>
+      </div>
+      {ready ? (
+        <button
+          type="button"
+          onClick={onGenerate}
+          disabled={busy}
+          className="bg-secondary-emphasis text-secondary-foreground mt-3 rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
+        >
+          根据对话生成简历
+        </button>
+      ) : null}
+    </section>
   )
 }
 
