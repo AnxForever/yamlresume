@@ -280,6 +280,24 @@ Provider message 和异常正文均未写入报告或文档。
 不包含 JD、候选人材料、模型 completion 或底层异常；它用于区分线上 422 的来源，不改变评分规则，
 也不能把失败运行计入 `scored`。
 
+### 2026-09-16 P0-B 最新真实 DeepSeek campaign
+
+在 `20260916T121500` 部署、候选源文本回退和草稿可选条目修复后，使用同一三份公开岗位派生
+合成案例再次执行一次真实 campaign。安全聚合为：
+
+- `totalCaseExecutions = 3`，`passed = 1`，`failed = 2`，`scored = 3`；
+- `failureCodeCounts`：`assertion_failed = 2`、`execution_failed = 0`、
+  `invalid_execution_result = 0`；
+- `passRate = 0.3333`，Wilson 95% 区间 `[0.0615, 0.7923]`；
+- 平均耗时约 `18.942s`，p95 约 `30.838s`；
+- 平均 requirement coverage `0.4067`，平均 must-have coverage `0.4533`；
+- 三个 case 中 Anthropic data engineer 通过，Grafana platform-metal 与 Cloudflare data analyst
+  仍因断言失败未通过。
+
+这次结果证明真实 Provider、Eval runner、断言和安全聚合已经形成可重复的运行闭环，但质量仍未
+达标，且只有一次重复样本。RA-010C 继续保持 `Implemented for development`，不能提升为
+`Enabled` 或 `Operational`；下一步应增加重复 campaign、分析失败断言并改善 JD 覆盖率。
+
 ## 10. 验收门禁
 
 ```text
@@ -332,7 +350,7 @@ MIT header 已保留。
 | RA-010C-A | 公开 JD → 可追溯 development case | Implemented for development | 3 个一手来源、版本化 provenance、Schema 与生产 Resume parser tests | Partial | none | 岗位族、语言、地区和非技术岗位覆盖很窄 |
 | RA-010C-B | 模型解析 JD → 关键术语断言 | Implemented | required keyword RED/GREEN 与安全报告 | Partial | backfilled | 同义词、责任语义和人工 gold labels 未覆盖 |
 | RA-010C-C | 配置 → 重复采样 → 统计可信的安全聚合 | Implemented for development | 重复运行、逐 case 稳定性、Wilson 95% 区间、R7 latency、空 observation、混合失败和隐私回归；campaign 10 tests | Partial | backfilled | 尚无可评分真实 Provider observations；独立同分布假设未获运行证据；token、费用和持久化未实现 |
-| RA-010C-D | corpus → 真实 Agent/Provider → 可评分结果 | Implemented but not operational | 默认网络、env-proxy、OpenAI 401 与 Gemini 400 均产生安全分类证据 | Gap | none | 需有效 Provider 凭证/配置并取得重复、可评分结果 |
+| RA-010C-D | corpus → 真实 Agent/Provider → 可评分结果 | Implemented but not operational | DeepSeek 真实 campaign：3 executions、1 passed、3 scored、Wilson 区间与逐 case 聚合；另有 OpenAI 401/Gemini 400 历史安全分类证据 | Backfilled | previously-overclaimed | 需更多重复样本、失败断言诊断、真实候选分布与质量门槛；仍无 Operational 证据 |
 | RA-010C-E | 模型结果 → 盲化人工质量记录与安全聚合 | Implemented for development | `resume-human-review-v1` 四维 anchored rubric、strict/bounded Schema、重复提交拒绝、分类分布、描述性 pairwise exact agreement 与 14 tests | Partial | backfilled | assignment UI、随机化、评审者招募/资格、授权真实数据、pilot、chance-corrected IAA/CI、裁决、持久化与 judge calibration |
 
 ## 12. 参考资料
