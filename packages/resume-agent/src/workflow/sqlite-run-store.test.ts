@@ -216,16 +216,24 @@ class LostAcknowledgementStore implements DurableRunStore {
     return this.delegate.claimNextTask(options)
   }
 
-  async acknowledgeTask(taskId: string, leaseOwner: string): Promise<boolean> {
+  async acknowledgeTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean> {
     if (this.loseNextAcknowledgement) {
       this.loseNextAcknowledgement = false
       return false
     }
-    return this.delegate.acknowledgeTask(taskId, leaseOwner)
+    return this.delegate.acknowledgeTask(taskId, leaseOwner, attempt)
   }
 
-  releaseTask(taskId: string, leaseOwner: string): Promise<boolean> {
-    return this.delegate.releaseTask(taskId, leaseOwner)
+  releaseTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean> {
+    return this.delegate.releaseTask(taskId, leaseOwner, attempt)
   }
 }
 
@@ -423,6 +431,91 @@ describe('SqliteRunStore', () => {
     ])
   })
 
+  it('leases at most one task for the same run at a time', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const firstStore = await openStore(databasePath)
+    const secondStore = await openStore(databasePath)
+    const run = storedRun('run-claim-serial')
+    await firstStore.createWithTask(run, runTask(run.snapshot.id))
+    await firstStore.compareAndSetWithTask(
+      { ...run, snapshot: { ...run.snapshot, status: 'analyzing_jd' } },
+      runTask(run.snapshot.id, `${run.snapshot.id}:complete:1`, 'complete')
+    )
+    const now = new Date('2026-09-16T12:00:00.000Z')
+
+    const claims = await Promise.all([
+      firstStore.claimNextTask({
+        workerId: 'worker-a',
+        now,
+        leaseDurationMs: 30_000,
+      }),
+      secondStore.claimNextTask({
+        workerId: 'worker-b',
+        now,
+        leaseDurationMs: 30_000,
+      }),
+    ])
+    const claimed = claims.filter(
+      (task): task is ClaimedRunTask => task !== undefined
+    )
+
+    expect(claimed).toHaveLength(1)
+    expect(
+      await firstStore.acknowledgeTask(
+        claimed[0]?.id ?? '',
+        claimed[0]?.leaseOwner ?? '',
+        claimed[0]?.attempt ?? 0
+      )
+    ).toBe(true)
+    expect(
+      await secondStore.claimNextTask({
+        workerId: 'worker-c',
+        now,
+        leaseDurationMs: 30_000,
+      })
+    ).toMatchObject({ runId: run.snapshot.id, leaseOwner: 'worker-c' })
+  })
+
+  it('rejects an old claim generation after the same worker reclaims a task', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const run = storedRun('run-same-worker-generation')
+    await store.createWithTask(run, runTask(run.snapshot.id))
+    const firstClaim = await store.claimNextTask({
+      workerId: 'stable-worker-id',
+      now: new Date('2026-09-16T12:00:00.000Z'),
+      leaseDurationMs: 30_000,
+    })
+    const secondClaim = await store.claimNextTask({
+      workerId: 'stable-worker-id',
+      now: new Date('2026-09-16T12:00:30.000Z'),
+      leaseDurationMs: 30_000,
+    })
+    if (!firstClaim || !secondClaim) throw new Error('Expected both claims')
+
+    expect(secondClaim.attempt).toBe(firstClaim.attempt + 1)
+    expect(
+      await store.acknowledgeTask(
+        firstClaim.id,
+        firstClaim.leaseOwner,
+        firstClaim.attempt
+      )
+    ).toBe(false)
+    expect(
+      await store.releaseTask(
+        firstClaim.id,
+        firstClaim.leaseOwner,
+        firstClaim.attempt
+      )
+    ).toBe(false)
+    expect(
+      await store.acknowledgeTask(
+        secondClaim.id,
+        secondClaim.leaseOwner,
+        secondClaim.attempt
+      )
+    ).toBe(true)
+  })
+
   it('requires the lease owner to ack or release and supports expiry takeover', async () => {
     const store = await openStore(await temporaryDatabasePath())
     const run = storedRun('run-lease-lifecycle')
@@ -434,8 +527,12 @@ describe('SqliteRunStore', () => {
     })
     if (!firstClaim) throw new Error('Expected claimed task')
 
-    expect(await store.acknowledgeTask(firstClaim.id, 'worker-b')).toBe(false)
-    expect(await store.releaseTask(firstClaim.id, 'worker-b')).toBe(false)
+    expect(
+      await store.acknowledgeTask(firstClaim.id, 'worker-b', firstClaim.attempt)
+    ).toBe(false)
+    expect(
+      await store.releaseTask(firstClaim.id, 'worker-b', firstClaim.attempt)
+    ).toBe(false)
     expect(
       await store.claimNextTask({
         workerId: 'worker-b',
@@ -454,9 +551,15 @@ describe('SqliteRunStore', () => {
       attempt: 2,
       leaseOwner: 'worker-b',
     })
-    expect(await store.acknowledgeTask(firstClaim.id, 'worker-a')).toBe(false)
-    expect(await store.releaseTask(firstClaim.id, 'worker-a')).toBe(false)
-    expect(await store.releaseTask(firstClaim.id, 'worker-b')).toBe(true)
+    expect(
+      await store.acknowledgeTask(firstClaim.id, 'worker-a', firstClaim.attempt)
+    ).toBe(false)
+    expect(
+      await store.releaseTask(firstClaim.id, 'worker-a', firstClaim.attempt)
+    ).toBe(false)
+    expect(
+      await store.releaseTask(firstClaim.id, 'worker-b', takeover?.attempt ?? 0)
+    ).toBe(true)
 
     const released = await store.claimNextTask({
       workerId: 'worker-c',
@@ -464,7 +567,13 @@ describe('SqliteRunStore', () => {
       leaseDurationMs: 30_000,
     })
     expect(released).toMatchObject({ attempt: 3, leaseOwner: 'worker-c' })
-    expect(await store.acknowledgeTask(firstClaim.id, 'worker-c')).toBe(true)
+    expect(
+      await store.acknowledgeTask(
+        firstClaim.id,
+        'worker-c',
+        released?.attempt ?? 0
+      )
+    ).toBe(true)
     expect(
       await store.claimNextTask({
         workerId: 'worker-d',
@@ -868,6 +977,170 @@ describe('SqliteRunStore', () => {
     expect(await secondService.recoverPendingTasks()).toBe(0)
   })
 
+  it('lets a second service take over when the first crashes before execution', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const firstStore = await openStore(databasePath)
+    const firstTasks: Array<() => Promise<void>> = []
+    const firstService = new ResumeAgentRunService(completingAgent(), {
+      store: firstStore,
+      idFactory: () => 'run-crash-before-execution',
+      workerId: 'worker-before-crash',
+      taskLeaseMs: 1_000,
+      now: () => new Date('2026-09-16T12:00:00.000Z'),
+      schedule: (task) => firstTasks.push(task),
+    })
+    await firstService.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    firstTasks.splice(0)
+    expect(await firstService.recoverPendingTasks()).toBe(1)
+    expect(firstTasks).toHaveLength(1)
+    firstStore.close()
+
+    const takeoverTasks: Array<() => Promise<void>> = []
+    const takeoverStore = await openStore(databasePath)
+    const beforeExpiry = new ResumeAgentRunService(completingAgent(), {
+      store: takeoverStore,
+      workerId: 'worker-after-crash',
+      taskLeaseMs: 1_000,
+      now: () => new Date('2026-09-16T12:00:00.999Z'),
+      schedule: (task) => takeoverTasks.push(task),
+    })
+    expect(await beforeExpiry.recoverPendingTasks()).toBe(0)
+
+    const atExpiry = new ResumeAgentRunService(completingAgent(), {
+      store: takeoverStore,
+      workerId: 'worker-after-crash',
+      taskLeaseMs: 1_000,
+      now: () => new Date('2026-09-16T12:00:01.000Z'),
+      schedule: (task) => takeoverTasks.push(task),
+    })
+    expect(await atExpiry.recoverPendingTasks()).toBe(1)
+    await takeoverTasks[0]?.()
+
+    expect((await atExpiry.get('run-crash-before-execution'))?.status).toBe(
+      'completed'
+    )
+    expect(await atExpiry.recoverPendingTasks()).toBe(0)
+  })
+
+  it('claims no more than the requested recovery batch limit', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const store = await openStore(databasePath)
+    for (const runId of ['run-batch-a', 'run-batch-b', 'run-batch-c']) {
+      await store.createWithTask(storedRun(runId), runTask(runId))
+    }
+    const scheduled: Array<() => Promise<void>> = []
+    const service = new ResumeAgentRunService(unusedAgent(), {
+      store,
+      workerId: 'batch-worker',
+      now: () => new Date('2026-09-16T12:00:00.000Z'),
+      schedule: (task) => scheduled.push(task),
+    })
+
+    expect(await service.recoverPendingTasks(2)).toBe(2)
+    expect(scheduled).toHaveLength(2)
+
+    const secondStore = await openStore(databasePath)
+    expect(
+      await secondStore.claimNextTask({
+        workerId: 'next-batch-worker',
+        now: new Date('2026-09-16T12:00:00.000Z'),
+        leaseDurationMs: 30_000,
+      })
+    ).toMatchObject({ attempt: 1, leaseOwner: 'next-batch-worker' })
+  })
+
+  it('rejects invalid worker and recovery configurations before claiming', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    expect(
+      () =>
+        new ResumeAgentRunService(unusedAgent(), {
+          store,
+          workerId: ' ',
+        })
+    ).toThrow('Run task worker configuration is invalid')
+    expect(
+      () =>
+        new ResumeAgentRunService(unusedAgent(), {
+          store,
+          taskLeaseMs: 0,
+        })
+    ).toThrow('Run task worker configuration is invalid')
+    expect(
+      () =>
+        new ResumeAgentRunService(unusedAgent(), {
+          store,
+          taskLeaseMs: 1.5,
+        })
+    ).toThrow('Run task worker configuration is invalid')
+    expect(
+      () =>
+        new ResumeAgentRunService(unusedAgent(), {
+          store,
+          maxTaskAttempts: 0,
+        })
+    ).toThrow('Run task worker configuration is invalid')
+    expect(
+      () =>
+        new ResumeAgentRunService(unusedAgent(), {
+          store,
+          maxTaskAttempts: 1_001,
+        })
+    ).toThrow('Run task worker configuration is invalid')
+
+    const service = new ResumeAgentRunService(unusedAgent(), { store })
+    await expect(service.recoverPendingTasks(0)).rejects.toThrow(
+      'Run task recovery limit is invalid'
+    )
+    await expect(service.recoverPendingTasks(1.5)).rejects.toThrow(
+      'Run task recovery limit is invalid'
+    )
+    await expect(service.recoverPendingTasks(1_001)).rejects.toThrow(
+      'Run task recovery limit is invalid'
+    )
+  })
+
+  it('keeps private request data out of task rows, public runs, and errors', async () => {
+    const privateMarker = 'PRIVATE_WORKER_CONCURRENCY_MARKER'
+    const databasePath = await temporaryDatabasePath()
+    const store = await openStore(databasePath)
+    const service = new ResumeAgentRunService(unusedAgent(), {
+      store,
+      idFactory: () => 'run-worker-privacy',
+      schedule: () => undefined,
+    })
+    await service.start({
+      jobDescription: `Private JD ${privateMarker}`,
+      candidate: {
+        resume: { content: { basics: { name: privateMarker } } },
+      },
+    })
+
+    const { DatabaseSync } = await import('node:sqlite')
+    const database = new DatabaseSync(databasePath)
+    try {
+      const taskRows = database
+        .prepare('SELECT * FROM resume_agent_tasks')
+        .all()
+      expect(JSON.stringify(taskRows)).not.toContain(privateMarker)
+    } finally {
+      database.close()
+    }
+
+    expect(
+      JSON.stringify(await service.get('run-worker-privacy'))
+    ).not.toContain(privateMarker)
+    const safeError = await store
+      .acknowledgeTask('', privateMarker, 1)
+      .catch((error: unknown) => error)
+    expect(safeError).toEqual(new RunStoreError('invalid_task'))
+    expect(`${String(safeError)}${JSON.stringify(safeError)}`).not.toContain(
+      privateMarker
+    )
+  })
+
   it('acks an expired replay without rerunning a terminal workflow', async () => {
     const databasePath = await temporaryDatabasePath()
     const originalTasks: Array<() => Promise<void>> = []
@@ -909,5 +1182,126 @@ describe('SqliteRunStore', () => {
       'completed'
     )
     expect(await replayService.recoverPendingTasks()).toBe(0)
+  })
+
+  it('acks an exhausted stale prepare task without failing a paused run', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const scheduled: Array<() => Promise<void>> = []
+    const pausedService = new ResumeAgentRunService(questionAgent(), {
+      store: new LostAcknowledgementStore(store),
+      idFactory: () => 'run-paused-stale-task',
+      workerId: 'worker-that-loses-ack',
+      taskLeaseMs: 1_000,
+      now: () => new Date('2026-09-16T12:00:00.000Z'),
+      schedule: (task) => scheduled.push(task),
+    })
+    await pausedService.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: {
+        resume: completeCandidate,
+        files: [
+          {
+            id: 'candidate-source',
+            filename: 'candidate.txt',
+            text: 'Candidate profile whose name must be confirmed.',
+          },
+        ],
+      },
+    })
+    await scheduled[0]?.()
+    expect((await pausedService.get('run-paused-stale-task'))?.status).toBe(
+      'needs_input'
+    )
+
+    const reclaimTime = new Date('2026-09-16T12:00:01.000Z')
+    for (const workerId of ['reclaimer-2', 'reclaimer-3']) {
+      const task = await store.claimNextTask({
+        workerId,
+        now: reclaimTime,
+        leaseDurationMs: 1_000,
+      })
+      if (!task) throw new Error('Expected stale task claim')
+      expect(
+        await store.releaseTask(task.id, task.leaseOwner, task.attempt)
+      ).toBe(true)
+    }
+
+    const modelCalls = { count: 0 }
+    const recoveryTasks: Array<() => Promise<void>> = []
+    const recoveryService = new ResumeAgentRunService(
+      countingFailAgent(modelCalls),
+      {
+        store,
+        workerId: 'reclaimer-4',
+        maxTaskAttempts: 3,
+        now: () => reclaimTime,
+        schedule: (task) => recoveryTasks.push(task),
+      }
+    )
+    expect(await recoveryService.recoverPendingTasks()).toBe(1)
+    await recoveryTasks[0]?.()
+
+    expect(modelCalls.count).toBe(0)
+    expect(await recoveryService.get('run-paused-stale-task')).toMatchObject({
+      status: 'needs_input',
+      interactions: [{ id: 'candidate-normalization:1' }],
+    })
+    expect(await recoveryService.recoverPendingTasks()).toBe(0)
+  })
+
+  it('fails a poison task after bounded attempts without rerunning the model', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const originalService = new ResumeAgentRunService(unusedAgent(), {
+      store,
+      idFactory: () => 'run-poison-task',
+      now: () => new Date('2026-09-16T12:00:00.000Z'),
+      schedule: () => undefined,
+    })
+    await originalService.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    const now = new Date('2026-09-16T12:00:00.000Z')
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const task = await store.claimNextTask({
+        workerId: `failed-worker-${attempt}`,
+        now,
+        leaseDurationMs: 1_000,
+      })
+      expect(task?.attempt).toBe(attempt)
+      expect(
+        await store.releaseTask(
+          task?.id ?? '',
+          task?.leaseOwner ?? '',
+          task?.attempt ?? 0
+        )
+      ).toBe(true)
+    }
+
+    const modelCalls = { count: 0 }
+    const recoveredTasks: Array<() => Promise<void>> = []
+    const recoveryService = new ResumeAgentRunService(
+      countingFailAgent(modelCalls),
+      {
+        store,
+        workerId: 'final-worker',
+        maxTaskAttempts: 3,
+        now: () => now,
+        schedule: (task) => recoveredTasks.push(task),
+      }
+    )
+
+    expect(await recoveryService.recoverPendingTasks()).toBe(1)
+    await recoveredTasks[0]?.()
+
+    expect(modelCalls.count).toBe(0)
+    expect(await recoveryService.get('run-poison-task')).toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'agent_task_attempts_exhausted',
+        message: 'The resume tailoring task exceeded its retry limit.',
+      },
+    })
+    expect(await recoveryService.recoverPendingTasks()).toBe(0)
   })
 })

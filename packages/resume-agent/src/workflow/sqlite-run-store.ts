@@ -443,10 +443,21 @@ export class SqliteRunStore implements DurableRunStore {
           `UPDATE resume_agent_tasks
            SET lease_owner = ?, lease_expires_at = ?, attempts = attempts + 1
            WHERE id = (
-             SELECT id FROM resume_agent_tasks
-             WHERE available_at <= ?
-               AND (lease_owner IS NULL OR lease_expires_at <= ?)
-             ORDER BY created_at, id
+             SELECT candidate.id
+             FROM resume_agent_tasks AS candidate
+             WHERE candidate.available_at <= ?
+               AND (
+                 candidate.lease_owner IS NULL OR
+                 candidate.lease_expires_at <= ?
+               )
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM resume_agent_tasks AS active
+                 WHERE active.run_id = candidate.run_id
+                   AND active.lease_owner IS NOT NULL
+                   AND active.lease_expires_at > ?
+               )
+             ORDER BY candidate.available_at, candidate.created_at, candidate.id
              LIMIT 1
            )
            RETURNING
@@ -458,7 +469,7 @@ export class SqliteRunStore implements DurableRunStore {
              lease_owner,
              lease_expires_at`
         )
-        .get(options.workerId, leaseExpiresAt, now, now) as unknown as
+        .get(options.workerId, leaseExpiresAt, now, now, now) as unknown as
         | TaskRow
         | undefined
       return row ? parseClaimedTask(row) : undefined
@@ -468,27 +479,45 @@ export class SqliteRunStore implements DurableRunStore {
     }
   }
 
-  async acknowledgeTask(taskId: string, leaseOwner: string): Promise<boolean> {
+  async acknowledgeTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean> {
     this.ensureOpen()
-    if (!taskId.trim() || !leaseOwner.trim()) {
+    if (
+      !taskId.trim() ||
+      !leaseOwner.trim() ||
+      !Number.isSafeInteger(attempt) ||
+      attempt < 1
+    ) {
       throw new RunStoreError('invalid_task')
     }
     try {
       const result = this.database
         .prepare(
           `DELETE FROM resume_agent_tasks
-           WHERE id = ? AND lease_owner = ?`
+           WHERE id = ? AND lease_owner = ? AND attempts = ?`
         )
-        .run(taskId, leaseOwner)
+        .run(taskId, leaseOwner, attempt)
       return Number(result.changes) === 1
     } catch {
       throw new RunStoreError('storage_failed')
     }
   }
 
-  async releaseTask(taskId: string, leaseOwner: string): Promise<boolean> {
+  async releaseTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean> {
     this.ensureOpen()
-    if (!taskId.trim() || !leaseOwner.trim()) {
+    if (
+      !taskId.trim() ||
+      !leaseOwner.trim() ||
+      !Number.isSafeInteger(attempt) ||
+      attempt < 1
+    ) {
       throw new RunStoreError('invalid_task')
     }
     try {
@@ -496,9 +525,9 @@ export class SqliteRunStore implements DurableRunStore {
         .prepare(
           `UPDATE resume_agent_tasks
            SET lease_owner = NULL, lease_expires_at = NULL
-           WHERE id = ? AND lease_owner = ?`
+           WHERE id = ? AND lease_owner = ? AND attempts = ?`
         )
-        .run(taskId, leaseOwner)
+        .run(taskId, leaseOwner, attempt)
       return Number(result.changes) === 1
     } catch {
       throw new RunStoreError('storage_failed')

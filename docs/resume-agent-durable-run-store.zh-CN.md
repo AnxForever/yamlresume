@@ -165,7 +165,7 @@ ready + compareAndSet(expected r)
 ## 10. 明确延期
 
 - RA-015C 已实现：transactional outbox、lease、owner-only ack/release、answer CAS 与 completion enqueue 同事务、显式进程重启 drain。
-- RA-015D：补强多 worker 故障注入、claim fencing/长任务 lease 风险与 operational 指标设计；仍不宣称生产多主机调度。
+- RA-015D 已实现开发级多 worker 故障注入、claim-generation fencing、same-Run serialization 与有界 delivery attempts；heartbeat、DLQ、自动 worker 和生产多主机调度仍延期。
 - 生产 adapter：PostgreSQL/托管数据库、连接池、加密、备份、retention 和 runbook。
 
 ## 11. 验证记录

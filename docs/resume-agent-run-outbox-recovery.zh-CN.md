@@ -72,16 +72,16 @@ interface DurableRunStore extends RunStore {
     task: RunTask
   ): Promise<boolean>
   claimNextTask(options: ClaimRunTaskOptions): Promise<ClaimedRunTask | undefined>
-  acknowledgeTask(taskId: string, leaseOwner: string): Promise<boolean>
-  releaseTask(taskId: string, leaseOwner: string): Promise<boolean>
+  acknowledgeTask(taskId: string, leaseOwner: string, attempt: number): Promise<boolean>
+  releaseTask(taskId: string, leaseOwner: string, attempt: number): Promise<boolean>
 }
 ```
 
 - `createWithTask`：ID 不存在且 revision 0 时，在一个事务中 insert Run 与 task。
 - `compareAndSetWithTask`：revision 匹配时，在一个事务中 update Run、revision + 1 并 insert task；CAS 失败时 task 也不存在。
 - `claimNextTask`：选择 ready 或 lease 已过期的最旧 task，原子写 owner、expiry、attempt + 1 并返回。
-- `acknowledgeTask`：仅当前 lease owner 可删除 task。
-- `releaseTask`：仅当前 owner 可清空 lease；record 和 task 不包含原始错误。
+- `acknowledgeTask`：当前 lease owner 与 claim attempt 都匹配时才可删除 task。
+- `releaseTask`：当前 owner 与 attempt 都匹配时才可清空 lease；record 和 task 不包含原始错误。
 
 ## 5. SQLite schema v2
 
@@ -128,7 +128,7 @@ drain
 
 - task ID collision、invalid task、数据库错误会回滚整个 Run + task transaction，并转换为安全 `RunStoreError`。
 - CAS false 是正常竞争，不创建 orphan task。
-- stale worker 不能 ack/release 新 owner 的 lease。
+- stale worker 或旧 claim generation 不能 ack/release 当前 lease。
 - lease 时间由服务注入的 `now()` 计算；测试直接推进 fake clock，不 real sleep。
 - `recoverPendingTasks(limit)` 有界，防止一次启动无限占用 event loop。
 - workerId、taskId、attempt 可用于安全诊断，但不得包含用户正文。
@@ -156,7 +156,7 @@ drain
 | --- | --- | --- | --- |
 | dual-write 风险 | AWS transactional outbox；schedule-hint-loss restart tests | Covered for local SQLite | OS/power-loss fault injection 未执行 |
 | atomic Run + task | SQLite transaction 语义；success/stale/collision rollback tests | Covered for current statements | 磁盘满与 COMMIT I/O fault 未注入 |
-| lease | SQS visibility timeout 类比；SQLite RETURNING；双连接/过期接管 tests | Covered for one host | 无 heartbeat/fencing token；长任务可越过 lease |
+| lease | SQS visibility timeout/receipt handle 类比；SQLite RETURNING；双连接、generation、过期接管 tests | Covered for one host | 无 heartbeat/执行 side-effect fencing；长任务可越过 lease |
 | idempotent replay | RA-015A revision/idempotency；terminal replay test | Partial | 非 terminal LLM 阶段仍可能重复调用 |
 | exactly-once | 无法证明 | Rejected claim | 保持 at-least-once 文档 |
 | automatic polling | 无 | Deferred | 需要外部生命周期显式调用 drain；尚无 production worker/runbook |
@@ -170,7 +170,7 @@ drain
 
 ## 11. 明确延期
 
-- 自动常驻 poller、heartbeat、dead-letter policy、backoff/jitter 和运维指标；
+- 自动常驻 poller、heartbeat、dead-letter storage/redrive、backoff/jitter 和运维指标；
 - 完整 stage checkpoint，避免 crash 时重复未完成的 LLM 调用；
 - PostgreSQL task claim（例如 `FOR UPDATE SKIP LOCKED`）与多主机部署；
 - exactly-once 外部 side effect 声明。

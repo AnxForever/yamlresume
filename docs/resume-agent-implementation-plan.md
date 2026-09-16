@@ -350,7 +350,7 @@ Delivered:
 - `createWithTask` and `compareAndSetWithTask` transactions, so Run mutation
   and prepare/completion enqueue commit or roll back together;
 - atomic oldest-ready claim with a bounded lease and attempt counter;
-- owner-only ack/release plus lease-expiry takeover;
+- owner + claim-attempt ack/release plus lease-expiry takeover;
 - schedule hints for the normal path and bounded `recoverPendingTasks()` for an
   explicit startup/recovery lifecycle;
 - at-least-once replay rules for terminal Runs and Runs that already have a
@@ -359,8 +359,8 @@ Delivered:
 Verified tests:
 
 - task-insert collision rolls back the corresponding Run mutation;
-- two connections have one claim winner, and stale owners cannot ack/release a
-  task after takeover;
+- two connections have one claim winner, and stale owners/generations cannot
+  ack/release a task after takeover;
 - lost start and final-answer schedule hints recover after close/reopen;
 - two services racing to drain execute the current lease once;
 - a lost acknowledgement causes terminal replay without a second model call;
@@ -368,8 +368,8 @@ Verified tests:
 
 Known limits:
 
-- there is no automatic poller, heartbeat, lease extension, DLQ, retry backoff
-  or jitter;
+- there is no automatic poller, heartbeat, lease extension, DLQ/redrive, retry
+  backoff or jitter;
 - a long LLM call can outlive its lease and be executed concurrently after
   takeover; unfinished non-terminal stages may therefore call the model more
   than once;
@@ -380,6 +380,49 @@ Known limits:
 
 The research, state machine, RED → GREEN record and evidence ledger are in
 [`resume-agent-run-outbox-recovery.zh-CN.md`](./resume-agent-run-outbox-recovery.zh-CN.md).
+
+### Unit 7F — Multi-worker lease fencing and fault verification
+
+**Status:** implemented for development on one host; not enabled or
+operational.
+
+Delivered:
+
+- claim `attempt` as a receipt generation; ack/release require task ID, owner
+  and current generation;
+- at most one unexpired leased task per Run, while different Runs remain
+  independently claimable;
+- configurable bounded delivery attempts (default 3 executions), with a safe
+  terminal Run failure on the next active claim;
+- stale exhausted tasks for `needs_input`, completed or failed Runs are acked
+  without public-state regression;
+- bounded explicit recovery and stable worker/lease/attempt configuration
+  validation.
+
+Verified tests:
+
+- same owner and different owner stale claims cannot alter a newer lease;
+- two tasks for one Run serialize across two SQLite connections;
+- a holder that closes after claim but before callback is taken over at exact
+  fake-clock expiry by a second service;
+- a recovery limit of two leaves the next different-Run task ready;
+- invalid configuration fails before claim;
+- task rows, public snapshots and errors exclude private markers;
+- poison tasks stop without a model call, while stale paused tasks remain
+  `needs_input`.
+
+Known limits:
+
+- fencing protects task acknowledgement, not an already-running Provider call
+  or other external side effect;
+- no heartbeat means a long call can exceed lease and overlap a takeover;
+- exhausted tasks are acknowledged after a safe Run failure; there is no
+  inspectable DLQ, redrive workflow, backoff or operator alert;
+- SQLite and injected fake-clock evidence remain same-host development proof,
+  not multi-host or production operation.
+
+Research, failure semantics, RED → GREEN evidence and reversal criteria are in
+[`resume-agent-run-worker-concurrency.zh-CN.md`](./resume-agent-run-worker-concurrency.zh-CN.md).
 
 ### Unit 8 — Backend documentation and completion audit
 

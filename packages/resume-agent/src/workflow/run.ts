@@ -25,6 +25,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 
 import type {
+  AgentRunFailure,
   AgentRunStatus,
   InteractionAnswer,
   InteractionRequest,
@@ -117,8 +118,16 @@ export interface DurableRunStore extends RunStore {
   claimNextTask(
     options: ClaimRunTaskOptions
   ): Promise<ClaimedRunTask | undefined>
-  acknowledgeTask(taskId: string, leaseOwner: string): Promise<boolean>
-  releaseTask(taskId: string, leaseOwner: string): Promise<boolean>
+  acknowledgeTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean>
+  releaseTask(
+    taskId: string,
+    leaseOwner: string,
+    attempt: number
+  ): Promise<boolean>
 }
 
 export class InMemoryRunStore implements RunStore {
@@ -150,7 +159,12 @@ type ScheduledTask = () => Promise<void>
 
 const MAX_RUN_UPDATE_ATTEMPTS = 3
 const DEFAULT_TASK_LEASE_MS = 60_000
+const DEFAULT_MAX_TASK_ATTEMPTS = 3
 const DEFAULT_RECOVERY_LIMIT = 100
+const TASK_ATTEMPTS_EXHAUSTED: AgentRunFailure = {
+  code: 'agent_task_attempts_exhausted',
+  message: 'The resume tailoring task exceeded its retry limit.',
+}
 
 const NEXT_STATUS: Record<AgentRunStatus, AgentRunStatus[]> = {
   queued: ['ingesting_inputs', 'failed'],
@@ -184,6 +198,7 @@ export interface ResumeAgentRunServiceOptions {
   schedule?: (task: ScheduledTask) => void
   workerId?: string
   taskLeaseMs?: number
+  maxTaskAttempts?: number
 }
 
 function isDurableRunStore(store: RunStore): store is DurableRunStore {
@@ -251,6 +266,7 @@ export class ResumeAgentRunService {
   private readonly schedule: (task: ScheduledTask) => void
   private readonly workerId: string
   private readonly taskLeaseMs: number
+  private readonly maxTaskAttempts: number
 
   constructor(
     private readonly agent: ResumeTailoringAgent,
@@ -263,10 +279,14 @@ export class ResumeAgentRunService {
     this.schedule = options.schedule ?? defaultSchedule
     this.workerId = options.workerId ?? randomUUID()
     this.taskLeaseMs = options.taskLeaseMs ?? DEFAULT_TASK_LEASE_MS
+    this.maxTaskAttempts = options.maxTaskAttempts ?? DEFAULT_MAX_TASK_ATTEMPTS
     if (
       !this.workerId.trim() ||
       !Number.isSafeInteger(this.taskLeaseMs) ||
-      this.taskLeaseMs <= 0
+      this.taskLeaseMs <= 0 ||
+      !Number.isSafeInteger(this.maxTaskAttempts) ||
+      this.maxTaskAttempts <= 0 ||
+      this.maxTaskAttempts > 1_000
     ) {
       throw new Error('Run task worker configuration is invalid')
     }
@@ -342,15 +362,33 @@ export class ResumeAgentRunService {
   private async executeClaimedTask(task: ClaimedRunTask): Promise<void> {
     if (!this.durableStore) return
     try {
-      if (task.kind === 'prepare') {
+      if (task.attempt > this.maxTaskAttempts) {
+        const stored = await this.store.get(task.runId)
+        if (
+          stored &&
+          stored.snapshot.status !== 'needs_input' &&
+          stored.snapshot.status !== 'completed' &&
+          stored.snapshot.status !== 'failed'
+        ) {
+          await this.fail(task.runId, TASK_ATTEMPTS_EXHAUSTED)
+        }
+      } else if (task.kind === 'prepare') {
         await this.execute(task.runId)
       } else {
         await this.executeCompletion(task.runId)
       }
-      await this.durableStore.acknowledgeTask(task.id, task.leaseOwner)
+      await this.durableStore.acknowledgeTask(
+        task.id,
+        task.leaseOwner,
+        task.attempt
+      )
     } catch {
       try {
-        await this.durableStore.releaseTask(task.id, task.leaseOwner)
+        await this.durableStore.releaseTask(
+          task.id,
+          task.leaseOwner,
+          task.attempt
+        )
       } catch {
         // A later lease expiry can make the task recoverable again.
       }
@@ -637,7 +675,13 @@ export class ResumeAgentRunService {
     })
   }
 
-  private async fail(id: string): Promise<void> {
+  private async fail(
+    id: string,
+    error: AgentRunFailure = {
+      code: 'agent_run_failed',
+      message: 'The resume tailoring run failed.',
+    }
+  ): Promise<void> {
     await this.updateStoredRun(id, (current) => {
       if (!NEXT_STATUS[current.snapshot.status].includes('failed')) {
         return undefined
@@ -649,10 +693,7 @@ export class ResumeAgentRunService {
           status: 'failed',
           updatedAt: this.now().toISOString(),
           interactions: undefined,
-          error: {
-            code: 'agent_run_failed',
-            message: 'The resume tailoring run failed.',
-          },
+          error,
         },
       }
     })

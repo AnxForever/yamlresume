@@ -142,6 +142,7 @@ private. See the
 | RA-015A | Revision-safe RunStore and atomic answer acceptance | Implemented for development | Atomic in-memory create/CAS, deterministic concurrent answer tests, clone and privacy tests; durable realization tracked by RA-015B/C | Covered for one process | Backfilled | Operational multi-instance evidence remains RA-015D |
 | RA-015B | Durable versioned RunStore | Implemented for development; not operational | SQLite schema introduced at v1, disk reopen, SQL CAS across connections, safe failure and privacy tests; current adapter migrated to v2 | Covered for one host | None | Async production driver, encryption and retention |
 | RA-015C | Transactional Run outbox and restart recovery | Implemented for development; explicit drain only | Run + task atomic transactions, v1→v2 migration, lease/ack/release, lost-hint restart and terminal replay tests | Partial | None | No heartbeat, automatic poller, DLQ/backoff, long-task fencing or operational evidence |
+| RA-015D | Multi-worker lease takeover and fault verification | Implemented for development; same-host only | Claim-generation fencing, same-Run serialization, crash takeover, bounded batch/attempts and privacy tests | Partial | Reopened-by-change | No heartbeat, execution fencing, DLQ/redrive, automatic worker or multi-host evidence |
 
 ### RA-012 evidence detail
 
@@ -208,7 +209,24 @@ private. See the
 | Acceptance | 20 focused SQLite tests, 18 Run tests, 149-test package suite, TypeScript, build, Biome and diff checks |
 | Coverage | Partial: covered for explicit same-host development recovery; not for long-running leases or production operation |
 | Historical gap | None; RA-015B explicitly recorded the dual-write gap before RA-015C |
-| Remaining gap | No heartbeat/fencing, automatic poller, DLQ/backoff, multi-host adapter, power-loss injection, metrics or runbook |
+| Remaining gap | Claim-generation fencing is supplied by RA-015D; no heartbeat/external-effect fencing, automatic poller, DLQ/backoff, multi-host adapter, power-loss injection, metrics or runbook |
+| Last reviewed | 2026-09-16, Node 22.21.1 `node:sqlite`, schema v2 |
+
+### RA-015D evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | task claim → execution → ack/release → expiry takeover → attempt exhaustion |
+| User outcome | A stale worker cannot confirm a newer claim, one Run is not advanced by two leased tasks, and a pre-execution crash is recoverable |
+| Current state | ack/release match task, owner and attempt; claim excludes another active task for the same Run; delivery attempts are bounded |
+| Primary evidence | AWS SQS visibility timeout, latest receipt-handle deletion and DLQ/maxReceiveCount guidance; SQLite `RETURNING`, reviewed 2026-09-16 |
+| Independent evidence | Real local SQLite two-connection races, same-owner reclaim, closed-holder takeover and fake-clock experiments |
+| Decision | Adapt receipt handles to the existing attempt column; serialize per Run; bound delivery attempts; reject exactly-once and DLQ claims |
+| Edge cases | same/different owner stale generation, two tasks for one Run, crash before callback, exact expiry, batch limit, invalid worker config, paused stale task, poison task, privacy marker |
+| Acceptance | Focused SQLite/Run tests plus package TypeScript, build, Biome and diff gates; exact final counts in the Feature Brief |
+| Coverage | Partial: covered for same-host development contention and injected lifecycle failures, not long-running execution or operations |
+| Historical gap | Reopened-by-change; RA-015C owner-only ack did not distinguish repeated claims by the same worker ID |
+| Remaining gap | No heartbeat/extendLease, external side-effect fencing, automatic polling, DLQ/redrive, metrics, multi-host adapter or OS/power-loss test |
 | Last reviewed | 2026-09-16, Node 22.21.1 `node:sqlite`, schema v2 |
 
 ## Learning roadmap
@@ -230,8 +248,9 @@ model-provider abstraction.
   updates, and resume from JD analysis.
 - Development proof delivered: versioned durable conditional writes,
   transactional task dispatch, and explicit restart recovery on one host.
-- Next, harden lease fencing and failure injection, then design the production
-  worker lifecycle without overclaiming operational readiness.
+- Claim-generation fencing, same-Run serialization and local failure injection
+  are delivered by RA-015D; next, design heartbeat/DLQ and the production worker
+  lifecycle without overclaiming operational readiness.
 - Extend interrupts only when a separately researched later-stage use case
   requires them.
 - Keep showing source-to-draft diff and evidence links in completed results.
