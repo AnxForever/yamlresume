@@ -1,0 +1,33 @@
+[Unit]
+Description=YAMLResume Agent API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yamlresume-agent
+Group=yamlresume-agent
+WorkingDirectory=/opt/yamlresume-agent/current/api
+Environment=NODE_ENV=production
+Environment=RESUME_AGENT_HOST=127.0.0.1
+Environment=PORT=8787
+Environment=RESUME_AGENT_RUN_STORE=sqlite
+Environment=RESUME_AGENT_RUN_DB_PATH=/var/lib/yamlresume-agent/runs.sqlite
+Environment=RESUME_AGENT_RECOVERY_LIMIT=100
+EnvironmentFile=/etc/yamlresume-agent/api.env
+UMask=0077
+ExecStart=/usr/bin/node /opt/yamlresume-agent/current/api/dist/server.js
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=75s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/yamlresume-agent
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

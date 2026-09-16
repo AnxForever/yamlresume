@@ -1,0 +1,30 @@
+[Unit]
+Description=YAMLResume Agent Web
+After=network-online.target yamlresume-agent-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yamlresume-agent
+Group=yamlresume-agent
+WorkingDirectory=/opt/yamlresume-agent/current/web
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3100
+UMask=0027
+ExecStart=/usr/bin/node /opt/yamlresume-agent/current/web/packages/agent-web/server.js
+Restart=on-failure
+RestartSec=5s
+SuccessExitStatus=143
+TimeoutStopSec=30s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target
