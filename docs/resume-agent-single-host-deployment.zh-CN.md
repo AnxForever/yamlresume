@@ -80,6 +80,19 @@ Auth 保护，不把该配置描述成多用户应用认证。
 `tailor-resume` 均以脱敏的 `422 agent_validation_failed` 结束；这证明 RTF 输入边界已接通，
 不证明真实模型归一化质量或最终产物 E2E 已通过。原始 RTF、模型输出和错误正文未保存。
 
+### 2026-09-16 真实 RTF 闭环复验（API-only release）
+
+在候选归一化增加“文件名引用映射”、缺失可选集合安全剔除、草稿缺失 `education` 默认空数组，
+并强化草稿提示后，API-only release `20260916T115000` 通过本机真实 DeepSeek + RTF candidate/JD
+请求返回 `200 completed`。工作流完整经过 `ingest_inputs`、`normalize_candidate`、
+`analyze_job`、`match_evidence`、`draft_resume`、`validate_resume`、`assess_resume` 和
+`render_resume`；返回 YAML artifact（549 bytes）。
+
+这次闭环仍不能宣称内容质量达标：真实样例的 `mustHaveCoverage=0`、`keywordCoverage=0`，
+质量报告指出候选材料过于稀疏，说明“能生成”与“能有效针对 JD”仍是两个独立验收目标。模型偶发
+返回缺失 `basics` 或网络失败，当前会安全失败并脱敏；后续应优先完善材料不足时的主动追问、
+证据覆盖率和真实案例 Eval，而不是掩盖质量告警。
+
 ### 2026-09-16 API-only upgrade rehearsal
 
 一次只替换 API/Agent dist 的升级演练未进入可用状态：新二进制在监听前以稳定错误
