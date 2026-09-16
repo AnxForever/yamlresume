@@ -27,6 +27,7 @@
 import { ArrowUp, FileText, LoaderCircle, Paperclip, X } from 'lucide-react'
 import { useId, useRef, useState } from 'react'
 import { PresetSelect } from '@/components/launcher/preset-select'
+import type { ChatMessage } from '@/lib/api/client'
 import { cx } from '@/lib/cx'
 import type { AttachedFile } from '@/lib/draft'
 import type { ScenarioPreset } from '@/lib/presets'
@@ -60,7 +61,7 @@ function FileChips({ files, onRemove }: FileChipsProps) {
       {files.map((file) => (
         <li
           key={file.id}
-          className="bg-[rgba(26,26,25,0.04)] text-foreground flex items-center gap-2 rounded-full py-1 pl-2.5 pr-1.5 text-xs"
+          className="bg-[var(--overlay-subtle)] text-foreground flex items-center gap-2 rounded-full py-1 pl-2.5 pr-1.5 text-xs"
         >
           <FileText size={14} className="text-foreground-muted" />
           <span className="max-w-[160px] truncate">{file.name}</span>
@@ -71,7 +72,7 @@ function FileChips({ files, onRemove }: FileChipsProps) {
             type="button"
             onClick={() => onRemove(file.id)}
             aria-label={`移除 ${file.name}`}
-            className="text-foreground-muted hover:text-foreground-strong hover:bg-[rgba(26,26,25,0.06)] flex size-4 items-center justify-center rounded-full transition-colors"
+            className="text-foreground-muted hover:text-foreground-strong hover:bg-[var(--overlay-hover)] flex size-4 items-center justify-center rounded-full transition-colors"
           >
             <X size={12} />
           </button>
@@ -95,6 +96,12 @@ export interface HeroComposerProps {
   blockers: string[]
   submitting: boolean
   onSubmit: () => void
+  chatInput: string
+  onChatInputChange: (value: string) => void
+  chatMessages: ChatMessage[]
+  chatBusy: boolean
+  chatError: string | null
+  onChat: () => void
 }
 
 export function HeroComposer({
@@ -111,6 +118,12 @@ export function HeroComposer({
   blockers,
   submitting,
   onSubmit,
+  chatInput,
+  onChatInputChange,
+  chatMessages,
+  chatBusy,
+  chatError,
+  onChat,
 }: HeroComposerProps) {
   const jobFileInput = useRef<HTMLInputElement>(null)
   const candidateFileInput = useRef<HTMLInputElement>(null)
@@ -179,6 +192,57 @@ export function HeroComposer({
 
   return (
     <div className="w-full">
+      <section
+        className="bg-background shadow-md mb-4 rounded-md p-5"
+        aria-label="Agent 输入"
+      >
+        <div className="mb-3">
+          <h2 className="text-foreground-strong text-sm font-medium">
+            告诉我你要做什么
+          </h2>
+          <p className="text-foreground-muted mt-1 text-xs">
+            可以直接聊天，也可以在同一个输入框里附加简历或 JD 文件。
+          </p>
+        </div>
+        <div className="mb-3 flex max-h-48 flex-col gap-2 overflow-y-auto">
+          {chatMessages.map((entry, index) => (
+            <p
+              key={`${entry.role}-${index}`}
+              className={
+                entry.role === 'user'
+                  ? 'text-foreground-strong self-end rounded-md bg-secondary-subtle px-3 py-2 text-sm'
+                  : 'text-foreground rounded-md bg-background-muted px-3 py-2 text-sm'
+              }
+            >
+              {entry.content}
+            </p>
+          ))}
+        </div>
+        {chatError ? (
+          <p role="alert" className="text-error-emphasis mb-2 text-xs">
+            {chatError}
+          </p>
+        ) : null}
+        <div className="flex gap-2">
+          <input
+            value={chatInput}
+            onChange={(event) => onChatInputChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void onChat()
+            }}
+            placeholder="例如：我想做一份后端工程师简历"
+            className="text-foreground-strong placeholder:text-foreground-muted min-w-0 flex-1 rounded-md bg-background-muted px-3 py-2 text-sm outline-none"
+          />
+          <button
+            type="button"
+            onClick={onChat}
+            disabled={chatBusy || chatInput.trim().length === 0}
+            className="bg-primary text-primary-foreground rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            {chatBusy ? '发送中…' : '发送'}
+          </button>
+        </div>
+      </section>
       {/* Hero card: the job description is the primary "task". */}
       <div
         {...makeDropHandlers('job')}
@@ -243,7 +307,7 @@ export function HeroComposer({
             <button
               type="button"
               onClick={() => jobFileInput.current?.click()}
-              className="text-foreground hover:bg-[rgba(26,26,25,0.04)] flex items-center gap-2 rounded-full px-3 py-2 text-sm transition-colors"
+              className="text-foreground hover:bg-[var(--overlay-hover)] flex items-center gap-2 rounded-full px-3 py-2 text-sm transition-colors"
             >
               <Paperclip size={16} />
               岗位文件
@@ -274,7 +338,7 @@ export function HeroComposer({
                   ? 'bg-primary text-primary-foreground cursor-wait'
                   : canSubmit
                     ? 'bg-primary text-primary-foreground hover:scale-105 hover:bg-primary-strong active:scale-95'
-                    : 'bg-[rgba(26,26,25,0.12)] text-foreground-subtle cursor-not-allowed'
+                    : 'bg-[var(--overlay-active)] text-foreground-subtle cursor-not-allowed'
               )}
             >
               {submitting ? (
@@ -296,7 +360,7 @@ export function HeroComposer({
             ? 'ring-secondary-emphasis bg-secondary-subtle ring-2'
             : candidateMissing
               ? 'bg-warning-subtle ring-warning-emphasis ring-1'
-              : 'bg-[rgba(26,26,25,0.02)]'
+              : 'bg-background-subtle'
         )}
       >
         <div className="mb-3 flex items-center justify-between">

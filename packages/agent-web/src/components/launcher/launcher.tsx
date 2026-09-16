@@ -295,7 +295,7 @@ export function LauncherView({
               <button
                 type="button"
                 onClick={onOpenSettings}
-                className="text-foreground hover:bg-[rgba(26,26,25,0.04)] rounded-xs px-3 py-2 text-sm transition-colors"
+                className="text-foreground hover:bg-[var(--overlay-hover)] rounded-xs px-3 py-2 text-sm transition-colors"
               >
                 打开设置
               </button>
@@ -312,58 +312,6 @@ export function LauncherView({
           {submitError}
         </p>
       ) : null}
-
-      <section
-        className="bg-background shadow-md mb-4 rounded-md p-5"
-        aria-label="直接对话"
-      >
-        <div className="mb-3">
-          <h2 className="text-foreground-strong text-sm font-medium">
-            先聊聊，不用上传文件
-          </h2>
-          <p className="text-foreground-muted mt-1 text-xs">
-            可以先告诉我你的目标职位、经历和想做的方向，材料之后再补。
-          </p>
-        </div>
-        <div className="mb-3 flex max-h-56 flex-col gap-2 overflow-y-auto">
-          {chatMessages.map((entry, index) => (
-            <p
-              key={`${entry.role}-${index}`}
-              className={
-                entry.role === 'user'
-                  ? 'text-foreground-strong self-end rounded-md bg-secondary-subtle px-3 py-2 text-sm'
-                  : 'text-foreground rounded-md bg-background-muted px-3 py-2 text-sm'
-              }
-            >
-              {entry.content}
-            </p>
-          ))}
-        </div>
-        {chatError ? (
-          <p role="alert" className="text-error-emphasis mb-2 text-xs">
-            {chatError}
-          </p>
-        ) : null}
-        <div className="flex gap-2">
-          <input
-            value={chatInput}
-            onChange={(event) => setChatInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') void handleChat()
-            }}
-            placeholder="例如：我想转做后端工程师"
-            className="text-foreground-strong placeholder:text-foreground-muted min-w-0 flex-1 rounded-md border-0 bg-background-muted px-3 py-2 text-sm outline-none"
-          />
-          <button
-            type="button"
-            onClick={() => void handleChat()}
-            disabled={chatBusy || chatInput.trim().length === 0}
-            className="bg-primary text-primary-foreground rounded-md px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {chatBusy ? '发送中…' : '发送'}
-          </button>
-        </div>
-      </section>
 
       <HeroComposer
         jobDescription={jobDescription}
@@ -385,6 +333,12 @@ export function LauncherView({
         }
         submitting={submitting}
         onSubmit={handleSubmit}
+        chatInput={chatInput}
+        onChatInputChange={setChatInput}
+        chatMessages={chatMessages}
+        chatBusy={chatBusy}
+        chatError={chatError}
+        onChat={() => void handleChat()}
       />
     </div>
   )
