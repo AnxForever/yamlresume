@@ -98,6 +98,12 @@ Auth 保护，不把该配置描述成多用户应用认证。
 常见缺字段不会再因可修复的可选条目直接中断；该样例质量仍为 `mustHaveCoverage=0`，原因是
 输入材料本身只有姓名、摘要和少量技能/项目线索，系统按设计保留了质量告警而没有编造经历。
 
+随后发布 `20260916T121500`，加入“从已提取源文本保留缺失摘要”的安全回退，并复跑同一真实
+RTF candidate/JD。结果为 `200 completed`、`requirementCoverage=1`、`mustHaveCoverage=1`、
+`keywordCoverage=0.6`，匹配到 Python、SQL、TypeScript；剩余的 `platform engineering`、
+`reliability` 和稀疏材料告警仍被保留。该结果证明主链路质量有所改善，但不代表真实岗位质量
+已达生产门槛。
+
 ### 2026-09-16 API-only upgrade rehearsal
 
 一次只替换 API/Agent dist 的升级演练未进入可用状态：新二进制在监听前以稳定错误
