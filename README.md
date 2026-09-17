@@ -1,138 +1,88 @@
 # YAMLResume · Career Agent
 
+**简体中文** · [English](README.en.md)
+
 > [!IMPORTANT]
-> **This is a fork.** The resume typesetting engine — `packages/core`, the CLI,
-> the templates and the LaTeX pipeline — is
-> [yamlresume/yamlresume](https://github.com/yamlresume/yamlresume) by
-> [PPResume](https://ppresume.com), used here under the MIT License (see
-> [LICENSE](./LICENSE)). Credit for that work belongs upstream.
+> **这是一个 fork。** 简历排版引擎——`packages/core`、CLI、模板与 LaTeX 流水线——来自
+> [yamlresume/yamlresume](https://github.com/yamlresume/yamlresume)（[PPResume](https://ppresume.com)），
+> 在此按 MIT 协议使用（见 [LICENSE](./LICENSE)）。那部分工作的功劳属于上游。
 >
-> Everything described under **What this fork adds** was built in this fork. The
-> [original upstream README](#upstream-yamlresume) is kept intact below.
+> 「这个 fork 加了什么」一节描述的全部内容，都是在本仓库中构建的。
 
-## What this fork adds
+## 这个 fork 加了什么
 
-**Career Agent** — a multi-stage LLM agent that turns a job description plus a
-candidate's raw material into a tailored, evidence-backed resume.
+**Career Agent** —— 一个多阶段 LLM Agent，把「岗位描述 + 候选人原始材料」变成一份定制且有证据支撑的简历。
 
-The problem it exists to solve: a model writes fluent resume bullets, and
-fluently wrong ones look exactly like right ones until an interviewer asks a
-follow-up question. So the design treats every generated claim as a hypothesis
-that has to point back at a source document, and treats the model as an
-untrusted component rather than an oracle.
+它要解决的问题是：模型写出的简历条目很流畅，而**流畅但错误的条目，在面试官追问之前和正确的看起来一模一样**。所以这套设计把模型生成的每一条结论都当作**待验证的假设**——必须能指回源文档；同时把模型当作**不可信的组件**，而不是权威。
 
-| Package | What it is |
+| 包 | 是什么 |
 | --- | --- |
-| `packages/resume-agent` | The agent itself: stage workflow, evidence binding, evaluation harness |
-| `packages/resume-agent-api` | HTTP API — runs, artifacts, auth, human-in-the-loop questions |
-| `packages/agent-web` | Codex-style workbench — run stages, evidence and artifacts side by side |
-| `packages/web` | Browser editor — YAML in, live HTML preview, real PDF on demand |
+| `packages/resume-agent` | Agent 本体：阶段工作流、证据绑定、评估框架 |
+| `packages/resume-agent-api` | HTTP API —— Run、产物、认证、human-in-the-loop 提问 |
+| `packages/agent-web` | Codex 风格工作台 —— Run 阶段、证据与产物并置可见 |
+| `packages/web` | 浏览器编辑器 —— YAML 输入、实时 HTML 预览、按需生成真实 PDF |
 
-### Design decisions
+### 设计取舍
 
-- **Evidence, not vibes.** Every bullet the agent produces carries the source it
-  came from. A claim that cannot be traced back to the candidate's material gets
-  dropped instead of shipped.
-- **Don't trust model output.** Structured output is validated and retried; a
-  run interrupted mid-flight resumes from a durable store instead of
-  re-executing side effects; a run-level budget caps model calls and tokens.
-- **Don't use an LLM as the judge.** Correctness is measured by a deterministic
-  harness — coverage assertions plus blinded human review — so that a change to
-  a prompt, a model or a runtime can be compared on reliability rather than on
-  impressions.
+- **要证据，不要感觉。** Agent 产出的每一条都带着它的来源。指不回候选人材料的结论会被丢弃，而不是发出去。
+- **不信任模型输出。** 结构化输出做运行时校验与重试；任务中途中断可从持久化存储恢复，而不是重复执行副作用；Run 级别有模型调用与 token 的预算上限。
+- **不拿 LLM 当裁判。** 正确性由确定性框架度量——覆盖率断言加盲化人评——这样改动一个 Prompt、一个模型或一个 Runtime，比较的是**可靠性**，不是印象。
 
 ---
 
-## Upstream: YAMLResume
+## 上游：YAMLResume
 
-[English](./README.md) | [Français](./readmes/README-fr.md) | [Deutsch](./readmes/README-de.md) | [Español](./readmes/README-es.md) | [Português](./readmes/README-pt.md) | [Bahasa Indonesia](./readmes/README-id.md) | [日本語](./readmes/README-ja.md) | [简体中文](./readmes/README-zh-cn.md) | [繁體中文](./readmes/README-zh-tw.md)
+排版引擎本身的用法——写 YAML、校验、编译 PDF、生态工具——见下。这部分来自上游
+[yamlresume/yamlresume](https://github.com/yamlresume/yamlresume)，中文版由上游维护。
 
-<!-- Build, Quality & Docs -->
-[![GitHub CI](https://github.com/yamlresume/yamlresume/workflows/test/badge.svg)](https://github.com/yamlresume/yamlresume/actions/workflows/test.yml)
-[![Codecov](https://img.shields.io/codecov/c/github/yamlresume/yamlresume?style=flat-square&logo=codecov)](https://codecov.io/gh/yamlresume/yamlresume)
-[![Security Rating](https://img.shields.io/badge/Security-A+-brightgreen?style=flat-square&logo=shield)](https://github.com/yamlresume/yamlresume/security)
-[![Documentation](https://img.shields.io/badge/docs-yamlresume.dev-blue?style=flat-square&logo=gitbook)](https://yamlresume.dev)
-[![Discord](https://img.shields.io/discord/1371488902023479336?style=flat-square&logo=discord&color=5865F2)](https://discord.gg/9SyT7mVV4K)
+> 📢 **新闻：** [YAMLResume GitHub
+> Action](https://github.com/marketplace/actions/yamlresume) 现已发布！
+> 您现在可以直接在 CI/CD 流水线中自动生成简历 PDF。前往查看
+> [使用文档](https://yamlresume.dev/docs/ecosystem/action) 以及
+> [发布文章](https://yamlresume.dev/blog/yamlresume-action)。
 
-<!-- Package & Distribution -->
-[![Node.js Version](https://img.shields.io/node/v/yamlresume.svg?style=flat-square&logo=node.js&color=339933)](https://nodejs.org/)
-[![npm version](https://img.shields.io/npm/v/yamlresume.svg?style=flat-square&logo=npm)](https://www.npmjs.com/package/yamlresume)
-[![npm downloads](https://img.shields.io/npm/dm/yamlresume.svg?style=flat-square&logo=npm&color=CB3837)](https://www.npmjs.com/package/yamlresume)
-[![Docker Pulls](https://img.shields.io/docker/pulls/yamlresume/yamlresume.svg?style=flat-square&logo=docker)](https://hub.docker.com/r/yamlresume/yamlresume)
-[![Docker Image Size](https://img.shields.io/docker/image-size/yamlresume/yamlresume/latest.svg?style=flat-square&logo=docker&color=2496ED)](https://hub.docker.com/r/yamlresume/yamlresume)
+撰写简历或许不难，但往往枯燥乏味且容易出错。
 
-<!-- Technology Stack -->
-[![LaTeX](https://img.shields.io/badge/LaTeX-Typesetting-008080?style=flat-square&logo=latex)](https://www.latex-project.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
-[![PNPM](https://img.shields.io/badge/PNPM-Workspace-orange?style=flat-square&logo=pnpm)](https://pnpm.io/)
-[![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-FE5196?style=flat-square&logo=conventionalcommits)](https://conventionalcommits.org)
-[![Biome](https://img.shields.io/badge/Biome-Linted-60a5fa?style=flat-square&logo=biome)](https://biomejs.dev/)
-[![Vitest](https://img.shields.io/badge/Vitest-Tested-6E9F18?style=flat-square&logo=vitest)](https://vitest.dev/)
+[YAMLResume](https://yamlresume.dev/zh-cn) 让你以 [YAML](https://yaml.org/) 管理并版本化你的简历，并一键生成专业的 PDF，拥有优雅的排版。
 
-> 📢 **News:** [YAMLResume GitHub
-> Action](https://github.com/marketplace/actions/yamlresume) has been released!
-> Automate your resume PDF generation directly in your CI/CD pipeline. Check out
-> the [documentation](https://yamlresume.dev/docs/ecosystem/action) and the
-> [announcement blog post](https://yamlresume.dev/blog/yamlresume-action).
+![YAMLResume YAML and PDF](docs/static/images/yamlresume-yaml-and-pdf.webp)
 
-Writing resumes may not be hard, but it is definitely not fun and it's tedious.
+## 设计理念
 
-[YAMLResume](https://yamlresume.dev) allows you to manage and version control
-your resumes using [YAML](https://yaml.org/) and makes generating professional looking PDFs with beautiful typesetting a breeze.
+本项目最初是 [PPResume](https://ppresume.com/?ref=yamlresume) 的核心排版引擎。经过慎重考虑，我们决定将其开源，让每个人都能对厂商锁定说不。
 
-![YAMLResume YAML and PDF](./docs/static/images/yamlresume-yaml-and-pdf.webp)
+YAMLResume 的核心设计理念是[关注点分离](https://zh.wikipedia.org/wiki/%E5%85%B3%E6%B3%A8%E7%82%B9%E5%88%86%E7%A6%BB)。就像 HTML 与 CSS —— HTML 负责结构化内容，CSS 定义内容的呈现样式。
 
-## The Design Principle
+遵循该原则，YAMLResume 满足以下要求：
 
-This project started as the core typesetting engine for
-[PPResume](https://ppresume.com/?ref=yamlresume), a LaTeX based, pixel perfect
-resume builder. After careful consideration, we decided to open source it so
-people can always have the right to say [no to vendor
-lock-in](https://blog.ppresume.com/posts/no-vendor-lock-in).
+- 内容以纯文本撰写
+- 使用 YAML 组织结构（相较 JSON 更易读易写）
+- 将 YAML 渲染为 PDF，排版引擎可插拔
+- 布局可通过字体大小、页边距等选项自由调整
 
-The core design principle behind YAMLResume is [Separation of
-Concerns](https://en.wikipedia.org/wiki/Separation_of_concerns). One of the
-best-known examples of this principle is HTML and CSS, which form the foundation
-of the modern web. HTML defines webpage content, and CSS styles that content.
+## 快速开始
 
-Following this principle, we designed YAMLResume with the following requirements
-in mind:
-
-- the resume content is drafted in plain text
-- the plain text is structured using YAML—YAML is better than JSON because it is
-  more human-readable and human-writable
-- the YAML plain text is then rendered into a PDF with a pluggable typesetting
-  engine
-- the layout can be adjusted with options like font sizes, page margins, etc.
-
-## Quick Start
-
-If you have Docker installed, you can get started with `yamlresume` in one
-second, this package includes `yamlresume` and all of its dependencies:
+若已安装 Docker，可直接体验已打包好依赖的镜像：
 
 [![YAMLResume Docker Demo](https://asciinema.org/a/722057.svg)](https://asciinema.org/a/722057)
 
-Alternatively, you can install `yamlresume` using your favorite package
-manager:
+或使用你偏好的包管理器安装 `yamlresume`：
 
 ```
-# NPM
+# using npm
 $ npm install -g yamlresume
 
-# Yarn
+# using yarn
 $ yarn global add yamlresume
 
-# pnpm
+# using pnpm
 $ pnpm add -g yamlresume
 
-# Bun
+# using bun
 $ bun add -g yamlresume
-
-# Homebrew
-$ brew install yamlresume
 ```
 
-Verify that `yamlresume` installed successfully:
+验证安装：
 
 ```
 $ yamlresume help
@@ -162,23 +112,15 @@ Commands:
   help [command]                 display help for command
 ```
 
-You then need to install a typesetting engine, either
-[XeTeX](http://yamlresume.dev/docs#install-typesetting-engine) or
-[Tectonic](http://yamlresume.dev/docs#install-typesetting-engine) in order to
-generate PDFs.
+你需要安装排版引擎以生成 PDF：推荐 [XeTeX](https://yamlresume.dev/zh-cn/docs#install-typesetting-engine) 或 [Tectonic](https://yamlresume.dev/zh-cn/docs#install-typesetting-engine)。
 
-Last but not least, we recommend you install the [Linux
-Libertine](http://yamlresume.dev/docs#linux-libertine-font) font in
-order to get the best looking PDFs.
+建议安装 [Linux Libertine](https://yamlresume.dev/zh-cn/docs#linux-libertine-font) 字体以获得最佳视觉效果。
 
-Check out our [installation guide](http://yamlresume.dev/docs/installation) for
-more details.
+更多细节见[安装指南](https://yamlresume.dev/zh-cn/docs/installation)。
 
-## Create a new resume
+## 创建一份新简历
 
-You can create your own resume by cloning one of our sample resumes
-[here](./packages/cli/src/commands/fixtures/software-engineer.yml). Once you
-have the sample resume on your computer, you can generate a PDF with:
+你可以从我们的[示例简历](packages/cli/src/commands/fixtures/software-engineer.yml)开始：
 
 ```
 $ yamlresume new my-resume.yml
@@ -192,9 +134,7 @@ $ yamlresume build my-resume.yml
 ✔ Generated resume html file successfully: my-resume.html
 ```
 
-You can also use the [`dev` command](https://yamlresume.dev/docs/cli#dev) to
-rebuild the resume on each file change, which provides **a modern web
-development-like experience**:
+或使用 [`dev` 命令](https://yamlresume.dev/zh-cn/docs/cli#dev)监听变更并自动构建：
 
 ```
 $ yamlresume dev my-resume.yml
@@ -205,76 +145,48 @@ $ yamlresume dev my-resume.yml
 ✔ Generated resume markdown file successfully: my-resume.md
 ```
 
-Check out the generated PDF [here](./docs/static/images/resume.pdf).
+生成的 PDF 示例：[点此查看](docs/static/images/resume.pdf)。
 
-![Software Engineer Page 1](./docs/static/images/resume-1.webp)
-![Software Engineer Page 2](./docs/static/images/resume-2.webp)
+## 校验简历
 
-[PPResume Gallery](https://ppresume.com/gallery/?ref=yamlresume) provides a
-showcase of all the possible types of resumes, categorized by languages and
-templates.
+YAMLResume 提供了[内置 Schema](https://yamlresume.dev/zh-cn/docs/compiler/schema)，用于在构建前校验简历，避免低级错误。
 
-## Validating resumes
+## 排版
 
-YAMLResume provides a builtin
-[schema](https://yamlresume.dev/docs/compiler/schema) which you can use to
-validate resumes and avoid low level mistakes. Check out the following demo to
-see it in action:
+YAMLResume 采用 [LaTeX](https://www.latex-project.org/) 作为默认排版引擎，并遵循[简历排版最佳实践](https://docs.ppresume.com/guide?ref=yamlresume)，确保像素级精致的呈现。
 
-[![YAMLResume Compiler Demo](https://asciinema.org/a/728098.svg)](https://asciinema.org/a/728098)
+它还支持 [HTML/CSS 布局引擎](https://yamlresume.dev/docs/layouts/html)，让你可以生成对 Web 友好的简历。
 
-## Typesetting
+## 生态
 
-YAMLResume uses [LaTeX](https://www.latex-project.org/) as its default
-typesetting engine, which is the state of the art typesetting system in the
-academic and technical publishing industry.
+- [@yamlresume/playground](https://www.npmjs.com/package/@yamlresume/playground) 是一个用于构建你自己的简历编辑器的 React 组件。它驱动了官方的 [Playground](https://yamlresume.dev/playground)。
 
-It also supports [HTML/CSS based layout
-engines](https://yamlresume.dev/docs/layouts/html), which allows you to generate
-web-friendly resumes.
+- [create-yamlresume](https://yamlresume.dev/zh-cn/docs/ecosystem/create-yamlresume)：一条命令初始化项目并生成示例
+- [json2yamlresume](https://yamlresume.dev/zh-cn/docs/ecosystem/json2yamlresume)：将 JSON Resume 转换为 YAMLResume
 
-By following a series of [best
-practices](https://docs.ppresume.com/guide?ref=yamlresume), YAMLResume always
-guarantees you **Pixel Perfect** resumes.
+## 参与贡献
 
-## Ecosystem
+项目仍在积极开发中，公共 API 尚未完全稳定，欢迎耐心等候并参与改进。
 
-YAMLResume provides a set of tools to help you create, convert, and manage your
-resumes more efficiently. These tools include:
+任何形式的贡献都非常欢迎！在提交 PR 之前，请阅读[贡献指南](CONTRIBUTING.md)。
 
-- [@yamlresume/playground](https://www.npmjs.com/package/@yamlresume/playground)
-  is a React component for building your own resume editor. It powers the
-  official [Playground](https://yamlresume.dev/playground).
-- [create-yamlresume](https://yamlresume.dev/docs/ecosystem/create-yamlresume)
-  makes it easy to start a new YAMLResume project with one command. It
-  will scaffold your project directory, install necessary dependencies, and
-  generates a sample resume file so you can get started right away. Try it with
-  `npx create-yamlresume my-resume` or similar commands for `npm`, `yarn`,
-  `pnpm` or `bun`.
-- [json2yamlresume](https://yamlresume.dev/docs/ecosystem/json2yamlresume) is a
-  CLI tool for converting [JSON Resume](https://jsonresume.org/) files to the
-  native format for YAMLResume.
-
-## Contributing
-
-This project is still under active development and we are constantly working on
-new features and bug fixes. The public API is not stable yet, so please be
-patient.
-
-Contributions are deeply appreciated! Please read the
-[guidelines](./CONTRIBUTING.md) before submitting a pull request.
-
-### Star History
+### Star 历史
 
 [![YAMLResume Star History Chart](https://api.star-history.com/svg?repos=yamlresume/yamlresume&type=Date)](https://www.star-history.com/#yamlresume/yamlresume&Date)
 
-## Roadmap
+## 路线图
 
-- [ ] more resume templates
-- [ ] more layout engines (typst, docx)
+- [ ] 增加更多简历模板
+- [ ] 更多布局引擎 (typst, docx)
 
-## Support the Project
+## 支持本项目
 
-If you find YAMLResume helpful, please consider supporting the project:
+如果 YAMLResume 对你有帮助，欢迎支持我们：
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/xiaohanyu)
+
+---
+
+## 本项目许可
+
+MIT —— 见 [LICENSE](./LICENSE)。上游代码同样以 MIT 协议提供。
