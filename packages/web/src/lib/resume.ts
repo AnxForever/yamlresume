@@ -210,11 +210,11 @@ export const DEFAULT_FORM_RESUME: FormResume = {
   htmlTemplate: DEFAULT_HTML_TEMPLATE,
   fontSize: DEFAULT_FONT_SIZE,
   basics: {
-    name: '包安心',
+    name: '张三',
     headline: 'AI 应用开发工程师',
-    email: '3475872056@qq.com',
-    phone: '15189096519',
-    url: 'https://anxforever.cn',
+    email: 'zhangsan@example.com',
+    phone: '13800000000',
+    url: 'https://example.com',
     summary: [
       '- 熟练使用 Claude Code、Cursor、OpenAI Codex 等 AI 编程工具进行 Vibe Coding，擅长把模糊想法拆解成可执行任务并快速完成原型',
       '- 能够独立完成从需求分析、技术方案、界面与交互实现，到调试、测试和部署上线的完整开发闭环',
@@ -231,8 +231,8 @@ export const DEFAULT_FORM_RESUME: FormResume = {
     {
       id: 'profile-github',
       network: 'GitHub',
-      url: 'https://github.com/AnxForever',
-      username: 'AnxForever',
+      url: 'https://github.com/example',
+      username: 'example',
     },
   ],
   education: [
@@ -272,7 +272,7 @@ export const DEFAULT_FORM_RESUME: FormResume = {
       id: 'project-ai-detector',
       name: '中文 AI 生成文本检测系统（本科毕业设计）',
       description: '基于 BERT 微调的中文 AI 文本检测与边界定位',
-      url: 'https://huggingface.co/AnxForever/chinese-ai-detector-bert',
+      url: 'https://huggingface.co/example/chinese-ai-detector-bert',
       startDate: '2026-01',
       endDate: '2026-03',
       keywords: 'PyTorch, BERT, Hugging Face, FastAPI',

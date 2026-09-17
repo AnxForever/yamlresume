@@ -29,5 +29,9 @@ packages/*/node_modules
 **/*.log
 **/*.tsbuildinfo
 
-baoanxin-resume.pdf
-包安心22408080303.pdf
+# Personal resume artifacts, never part of the image. Kept as globs so the
+# build context stays correct without naming files in the repository.
+*-resume*.pdf
+*-resume*.yml
+*简历*.pdf
+*[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].pdf

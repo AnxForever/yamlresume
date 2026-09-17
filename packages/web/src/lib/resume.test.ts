@@ -86,7 +86,7 @@ describe('resume form mapping', () => {
     const html = renderResumeToHtml(buildHtmlResume(DEFAULT_FORM_RESUME))
 
     expect(latex).toContain('\\documentclass')
-    expect(latex).toContain('包安心')
+    expect(latex).toContain(DEFAULT_FORM_RESUME.basics.name)
     expect(html).toContain('<!DOCTYPE html>')
     expect(html).toContain(DEFAULT_FORM_RESUME.basics.name)
   })

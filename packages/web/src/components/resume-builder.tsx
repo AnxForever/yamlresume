@@ -1766,7 +1766,7 @@ function BasicsForm({
         <Field
           label="姓名"
           value={basics.name}
-          placeholder="包安心"
+          placeholder="张三"
           onChange={(value) => updateBasics('name', value)}
         />
         <Field
@@ -1797,7 +1797,7 @@ function BasicsForm({
           label="作品 / 主页链接"
           type="url"
           value={basics.url}
-          placeholder="https://anxforever.cn"
+          placeholder="https://example.com"
           wide
           error={validateUrl(basics.url)}
           onChange={(value) => updateBasics('url', value)}
@@ -1891,7 +1891,7 @@ function ProfilesForm({
             <Field
               label="用户名"
               value={item.username}
-              placeholder="AnxForever"
+              placeholder="example"
               onChange={(value) =>
                 updateItem(item.id, (current) => ({
                   ...current,
@@ -1903,7 +1903,7 @@ function ProfilesForm({
               label="链接"
               type="url"
               value={item.url}
-              placeholder="https://github.com/AnxForever"
+              placeholder="https://github.com/example"
               wide
               error={validateUrl(item.url)}
               onChange={(value) =>
@@ -2274,7 +2274,7 @@ function ProjectForm({
               label="项目链接"
               type="url"
               value={item.url}
-              placeholder="https://github.com/AnxForever/yamlresume"
+              placeholder="https://github.com/example/project"
               wide
               error={validateUrl(item.url)}
               onChange={(value) =>
