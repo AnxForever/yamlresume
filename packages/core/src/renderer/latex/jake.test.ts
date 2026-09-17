@@ -284,10 +284,12 @@ describe('JakeRenderer', () => {
       const result = renderer.renderBasics()
 
       expect(result).not.toContain('\\begin{center}')
+      // Name and headline share one line. The stacked header ran to five
+      // centred lines and cost the project section a chunk of the page.
       expect(result).toContain(
-        `\\textbf{\\Huge \\scshape ${name}}\\vspace{2pt}`
+        `{\\Huge\\bfseries ${name}}\\hspace{0.5em}{\\Large ${headline}}`
       )
-      expect(result).toContain(`{\\Large ${headline}}`)
+      expect(result).not.toContain('\\scshape')
       expect(result).toContain('\\faPhoneVolume')
       expect(result).toContain(phone)
       expect(result).toContain('\\faEnvelope[regular]')
@@ -302,7 +304,7 @@ describe('JakeRenderer', () => {
       renderer = new JakeRenderer(resume, layoutIndex)
       const result = renderer.renderBasics()
 
-      expect(result).not.toContain('\\textbf{\\Huge \\scshape }')
+      expect(result).toBe('')
     })
 
     it('should skip empty fields', () => {
@@ -313,9 +315,8 @@ describe('JakeRenderer', () => {
       renderer = new JakeRenderer(resume, layoutIndex)
       const result = renderer.renderBasics()
 
-      expect(result).toContain(
-        `\\textbf{\\Huge \\scshape ${name}}\\vspace{2pt}`
-      )
+      expect(result).toContain(`{\\Huge\\bfseries ${name}}`)
+      expect(result).not.toContain('\\hspace{0.5em}')
     })
 
     it('should handle undefined values', () => {
@@ -326,9 +327,8 @@ describe('JakeRenderer', () => {
       renderer = new JakeRenderer(resume, layoutIndex)
       const result = renderer.renderBasics()
 
-      expect(result).toContain(
-        `\\textbf{\\Huge \\scshape ${name}}\\vspace{2pt}`
-      )
+      expect(result).toContain(`{\\Huge\\bfseries ${name}}`)
+      expect(result).not.toContain('\\hspace{0.5em}')
     })
   })
 

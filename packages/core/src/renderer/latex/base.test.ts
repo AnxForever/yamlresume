@@ -382,8 +382,10 @@ describe('LatexRenderer', () => {
       expect(result).toContain(
         '\\usepackage[UTF8, heading=false, punct=kaiming, scheme=plain, space=auto]{ctex}'
       )
-      expect(result).toContain('\\setCJKmainfont{Noto Serif CJK SC}')
-      expect(result).toContain('\\setCJKsansfont{Noto Sans CJK SC}')
+      // Body CJK text is sans: a resume is read on screen, where a serif CJK
+      // face at 10pt is noticeably harder to read.
+      expect(result).toContain('\\setCJKmainfont{Noto Sans CJK SC}')
+      expect(result).toContain('\\setCJKmonofont{Noto Serif CJK SC}')
     })
   })
 

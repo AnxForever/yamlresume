@@ -145,11 +145,15 @@ ${fontList
 % - http://ctan.mirrorcatalogs.com/language/chinese/ctex/ctex.pdf
 \\usepackage[UTF8, heading=false, punct=kaiming, scheme=plain, space=auto]{ctex}
 
-\\IfFontExistsTF{Noto Serif CJK SC}{
-  \\setCJKmainfont{Noto Serif CJK SC}
-}{}
+% The CJK body font is sans. A resume is read on screen far more often than it
+% is printed, and a serif CJK face is markedly harder to read at 10pt on a
+% display. The serif face stays available as the monospace CJK font so a layout
+% can still ask for it explicitly.
 \\IfFontExistsTF{Noto Sans CJK SC}{
-  \\setCJKsansfont{Noto Sans CJK SC}
+  \\setCJKmainfont{Noto Sans CJK SC}
+}{}
+\\IfFontExistsTF{Noto Serif CJK SC}{
+  \\setCJKmonofont{Noto Serif CJK SC}
 }{}`
   }
 

@@ -57,6 +57,10 @@ describe('LatexAdvancedSchema', () => {
       // Check if showIcons defaults to true if not provided in advanced object
       if (latex.advanced) {
         expect(parsed.advanced.showIcons).toBe(true)
+        // Same for showSkillLevels: it is declared on the layout type and read
+        // by the renderers, but it was missing from this schema, so passing it
+        // used to be stripped and skill levels always rendered.
+        expect(parsed.advanced.showSkillLevels).toBe(true)
       }
     }
   })
@@ -66,11 +70,13 @@ describe('LatexAdvancedSchema', () => {
       {
         advanced: {
           showIcons: true,
+          showSkillLevels: true,
         },
       },
       {
         advanced: {
           showIcons: false,
+          showSkillLevels: false,
         },
       },
     ]

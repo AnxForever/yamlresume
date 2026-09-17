@@ -43,6 +43,10 @@ export const LatexAdvancedSchema = z.object({
         })
         .nullish(),
       showIcons: z.boolean().default(true),
+      // Declared in the layout type and read by both the LaTeX and HTML
+      // renderers, but it was never added to the validator, so passing it was
+      // silently stripped and levels always rendered.
+      showSkillLevels: z.boolean().default(true),
     })
     .nullish()
     .meta({

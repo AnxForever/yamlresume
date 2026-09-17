@@ -262,24 +262,38 @@ class JakeRenderer extends LatexRenderer {
       return ''
     }
 
-    return joinNonEmptyString([
-      `\\textbf{\\Huge \\scshape ${name}}\\vspace{2pt}`,
-      `{\\Large ${headline}}`,
-      joinNonEmptyString(
-        [
-          showIfNotEmpty(phone, this.iconedString('\\faPhoneVolume', phone)),
-          showIfNotEmpty(
-            email,
-            this.iconedString(
-              '\\faEnvelope[regular]',
-              `\\href{mailto:${email}}{${email}}`
-            )
-          ),
-          showIfNotEmpty(url, this.iconedString('\\faGlobe', `\\url{${url}}`)),
-        ],
-        this.separator
-      ),
-    ])
+    // Name and headline share one line, and the contact details sit under them.
+    // A stacked header ran to five centred lines, which pushed 简介 down far
+    // enough to cost the project section a chunk of the page.
+    //
+    // \\scshape is gone with it: small caps do not apply to Han characters, and
+    // requesting the shape made XeLaTeX fall back to the serif CJK face for the
+    // name while the body stayed sans.
+    return joinNonEmptyString(
+      [
+        `{\\Huge\\bfseries ${name}}${showIfNotEmpty(headline, `\\hspace{0.5em}{\\Large ${headline}}`)}`,
+        joinNonEmptyString(
+          [
+            showIfNotEmpty(phone, this.iconedString('\\faPhoneVolume', phone)),
+            showIfNotEmpty(
+              email,
+              this.iconedString(
+                '\\faEnvelope[regular]',
+                `\\href{mailto:${email}}{${email}}`
+              )
+            ),
+            showIfNotEmpty(
+              url,
+              this.iconedString('\\faGlobe', `\\url{${url}}`)
+            ),
+          ],
+          this.separator
+        ),
+        // A line break, not the default paragraph break: `\n\n` produced a blank
+        // line between the name and the contact row.
+      ],
+      '\\\\[3pt]\n'
+    )
   }
 
   /**
@@ -525,7 +539,6 @@ ${languages
 
     const {
       punctuations: { colon },
-      terms,
     } = getTemplateTranslations(locale?.language)
 
     return `\\section{${sectionNames.skills}}
@@ -533,13 +546,13 @@ ${languages
 ${skills
   .map(
     ({ name, computed: { level, keywords } }) =>
+      // Category on the left, technologies on the right, aligned by \hfill.
+      // The "keywords" label is dropped: it restates what the column already
+      // is, and it reads like a form field rather than a resume line.
       `\\textbf{${name}}${showIfNotEmpty(
         showSkillLevels ? level : '',
         `${colon}${level}`
-      )}${showIfNotEmpty(
-        keywords,
-        ` \\hfill \\textbf{${terms.keywords}}${colon}${keywords}`
-      )}`
+      )}${showIfNotEmpty(keywords, ` \\hfill ${keywords}`)}`
   )
   .join('\n\n')}
 \\end{adjustwidth}`
@@ -739,7 +752,7 @@ ${joinNonEmptyString(
         '\n'
       )
   )
-  .join('\n\n')}`
+  .join('\n\n\\vspace{16pt}\n\n')}`
   }
 
   /**
@@ -838,11 +851,11 @@ ${summary}
 \\begin{document}
 
 \\begin{center}
-${this.renderBasics()}
-
-${this.renderLocation()}
-
-${this.renderProfiles()}
+${this.renderBasics()}\\\\[3pt]
+${joinNonEmptyString(
+  [this.renderProfiles(), this.renderLocation()],
+  this.separator
+)}
 \\end{center}
 
 ${this.renderOrderedSections()}
