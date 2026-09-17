@@ -160,7 +160,11 @@ packages/cli/my-resume.*
 # local debug screenshots & personal resume files (kept locally, never committed)
 /*.png
 /*.pdf
-/baoanxin-resume.yml
+# Every personal resume YAML, not just the one that happened to exist when this
+# rule was written. The repository is public, and these carry real contact
+# details, so a name-by-name list leaves the next file one `git add .` away
+# from being published.
+/baoanxin-resume*.yml
 
 # tooling scratch directories
 /.spec-workflow/
