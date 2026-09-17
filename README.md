@@ -1,4 +1,49 @@
-# YAMLResume
+# YAMLResume · Career Agent
+
+> [!IMPORTANT]
+> **This is a fork.** The resume typesetting engine — `packages/core`, the CLI,
+> the templates and the LaTeX pipeline — is
+> [yamlresume/yamlresume](https://github.com/yamlresume/yamlresume) by
+> [PPResume](https://ppresume.com), used here under the MIT License (see
+> [LICENSE](./LICENSE)). Credit for that work belongs upstream.
+>
+> Everything described under **What this fork adds** was built in this fork. The
+> [original upstream README](#upstream-yamlresume) is kept intact below.
+
+## What this fork adds
+
+**Career Agent** — a multi-stage LLM agent that turns a job description plus a
+candidate's raw material into a tailored, evidence-backed resume.
+
+The problem it exists to solve: a model writes fluent resume bullets, and
+fluently wrong ones look exactly like right ones until an interviewer asks a
+follow-up question. So the design treats every generated claim as a hypothesis
+that has to point back at a source document, and treats the model as an
+untrusted component rather than an oracle.
+
+| Package | What it is |
+| --- | --- |
+| `packages/resume-agent` | The agent itself: stage workflow, evidence binding, evaluation harness |
+| `packages/resume-agent-api` | HTTP API — runs, artifacts, auth, human-in-the-loop questions |
+| `packages/agent-web` | Codex-style workbench — run stages, evidence and artifacts side by side |
+| `packages/web` | Browser editor — YAML in, live HTML preview, real PDF on demand |
+
+### Design decisions
+
+- **Evidence, not vibes.** Every bullet the agent produces carries the source it
+  came from. A claim that cannot be traced back to the candidate's material gets
+  dropped instead of shipped.
+- **Don't trust model output.** Structured output is validated and retried; a
+  run interrupted mid-flight resumes from a durable store instead of
+  re-executing side effects; a run-level budget caps model calls and tokens.
+- **Don't use an LLM as the judge.** Correctness is measured by a deterministic
+  harness — coverage assertions plus blinded human review — so that a change to
+  a prompt, a model or a runtime can be compared on reliability rather than on
+  impressions.
+
+---
+
+## Upstream: YAMLResume
 
 [English](./README.md) | [Français](./readmes/README-fr.md) | [Deutsch](./readmes/README-de.md) | [Español](./readmes/README-es.md) | [Português](./readmes/README-pt.md) | [Bahasa Indonesia](./readmes/README-id.md) | [日本語](./readmes/README-ja.md) | [简体中文](./readmes/README-zh-cn.md) | [繁體中文](./readmes/README-zh-tw.md)
 
