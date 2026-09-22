@@ -53,7 +53,10 @@ anonymous -> authenticated chat -> readyToGenerate hint
 
 ### Security follow-up
 
-个人主页简历当前仅保存在浏览器 `localStorage`，只适合作为本地开发 Beta：它不是机密存储，且退出登录不会自动清除。下一计划 RA-017-S 将迁移到按用户隔离的服务端 profile 存储，增加加密、删除和会话失效策略；在该切片完成前不得宣称生产级隐私保护。
+个人主页简历已按 RA-017-S 迁移到按用户隔离的服务端档案存储（AES-256-GCM 加密落库、AAD 绑定 userId 与 key id、独立删除入口），浏览器 `localStorage` 中不再保留副本——旧键在迁移后由页面主动清除。详见
+[`resume-agent-career-profile.zh-CN.md`](./resume-agent-career-profile.zh-CN.md)。
+
+仍未完成的部分：会话失效策略是「退出登录不删除档案」，这是刻意选择而非遗漏；档案的加密密钥轮换只在下次保存时生效，没有后台重加密任务；材料文件（PDF/DOCX）不落库。
 
 | Field | Evidence |
 | --- | --- |

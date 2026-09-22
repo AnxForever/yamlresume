@@ -39,6 +39,10 @@ async function openAuthService(
     activeCredentialEncryptionKeyId?: string
     now?: () => Date
     sessionTtlMs?: number
+    transientSessionTtlMs?: number
+    emailPort?: AuthEmailPort
+    resetUrlBase?: string
+    passwordResetTtlMs?: number
   } = {}
 ): Promise<AuthService> {
   const service = await AuthService.open({
@@ -56,6 +60,12 @@ async function openAuthService(
     },
     now: options.now,
     sessionTtlMs: options.sessionTtlMs,
+    transientSessionTtlMs: options.transientSessionTtlMs,
+    ...(options.emailPort ? { emailPort: options.emailPort } : {}),
+    ...(options.resetUrlBase ? { resetUrlBase: options.resetUrlBase } : {}),
+    ...(options.passwordResetTtlMs === undefined
+      ? {}
+      : { passwordResetTtlMs: options.passwordResetTtlMs }),
   })
   services.push(service)
   return service
@@ -219,16 +229,17 @@ describe('AuthService', () => {
     expect(stored.includes(Buffer.from(registration.token))).toBe(false)
   })
 
-  it('rejects a session at its absolute expiry', async () => {
+  it('rejects a transient session at its absolute expiry', async () => {
     let now = new Date('2026-09-16T12:00:00.000Z')
     const service = await openAuthService({
       now: () => now,
-      sessionTtlMs: 60_000,
+      transientSessionTtlMs: 60_000,
     })
     const registration = await service.register({
       email: 'user@example.com',
       password: 'correct horse battery staple',
     })
+    expect(registration.persistent).toBe(false)
 
     now = new Date('2026-09-16T12:00:59.999Z')
     await expect(service.authenticate(registration.token)).resolves.toEqual(
@@ -239,6 +250,56 @@ describe('AuthService', () => {
     await expect(
       service.authenticate(registration.token)
     ).rejects.toMatchObject({ code: 'not_authenticated' })
+  })
+
+  it('keeps a remembered session past the transient window', async () => {
+    let now = new Date('2026-09-16T12:00:00.000Z')
+    const service = await openAuthService({
+      now: () => now,
+      sessionTtlMs: 7 * 24 * 60 * 60 * 1_000,
+      transientSessionTtlMs: 60_000,
+    })
+    const remembered = await service.register({
+      email: 'user@example.com',
+      password: 'correct horse battery staple',
+      remember: true,
+    })
+    expect(remembered.persistent).toBe(true)
+
+    // Well past the transient window, still valid because it was remembered.
+    now = new Date('2026-09-16T12:30:00.000Z')
+    await expect(service.authenticate(remembered.token)).resolves.toEqual(
+      remembered.user
+    )
+  })
+
+  it('applies the remember choice to login too', async () => {
+    const now = new Date('2026-09-16T12:00:00.000Z')
+    const service = await openAuthService({
+      now: () => now,
+      sessionTtlMs: 7 * 24 * 60 * 60 * 1_000,
+      transientSessionTtlMs: 60_000,
+    })
+    await service.register({
+      email: 'user@example.com',
+      password: 'correct horse battery staple',
+    })
+
+    const plain = await service.login({
+      email: 'user@example.com',
+      password: 'correct horse battery staple',
+    })
+    const remembered = await service.login({
+      email: 'user@example.com',
+      password: 'correct horse battery staple',
+      remember: true,
+    })
+
+    expect(plain.persistent).toBe(false)
+    expect(remembered.persistent).toBe(true)
+    expect(Date.parse(remembered.expiresAt)).toBeGreaterThan(
+      Date.parse(plain.expiresAt)
+    )
   })
 
   it('stores provider credentials without exposing secrets in listings', async () => {
@@ -428,6 +489,180 @@ describe('AuthService', () => {
     ).rejects.toMatchObject({ code: 'credential_unavailable' })
   })
 
+  it('round-trips a profile and keeps the first save as createdAt', async () => {
+    let now = new Date('2026-09-16T12:00:00.000Z')
+    const service = await openAuthService({ now: () => now })
+    const { user } = await service.register({
+      email: 'user@example.com',
+      password: 'correct horse battery staple',
+    })
+
+    await expect(service.readProfile(user.id)).resolves.toBeNull()
+    const created = await service.putProfile(user.id, '{"resumeYaml":"a"}')
+
+    expect(created).toEqual({
+      createdAt: '2026-09-16T12:00:00.000Z',
+      updatedAt: '2026-09-16T12:00:00.000Z',
+    })
+
+    now = new Date('2026-09-17T09:30:00.000Z')
+    const updated = await service.putProfile(user.id, '{"resumeYaml":"b"}')
+
+    // The second save moves updatedAt but must not rewrite createdAt: the page
+    // shows "档案建立于" and it has to keep meaning the first save.
+    expect(updated).toEqual({
+      createdAt: '2026-09-16T12:00:00.000Z',
+      updatedAt: '2026-09-17T09:30:00.000Z',
+    })
+    await expect(service.readProfile(user.id)).resolves.toEqual({
+      ...updated,
+      payload: '{"resumeYaml":"b"}',
+    })
+  })
+
+  it('isolates profiles per user and deletes only the caller’s', async () => {
+    const service = await openAuthService()
+    const first = await service.register({
+      email: 'first@example.com',
+      password: 'correct horse battery staple',
+    })
+    const second = await service.register({
+      email: 'second@example.com',
+      password: 'another correct horse battery staple',
+    })
+
+    await service.putProfile(first.user.id, '{"resumeYaml":"first"}')
+    await service.putProfile(second.user.id, '{"resumeYaml":"second"}')
+
+    await expect(service.readProfile(first.user.id)).resolves.toMatchObject({
+      payload: '{"resumeYaml":"first"}',
+    })
+    await expect(service.deleteProfile(first.user.id)).resolves.toBe(true)
+    await expect(service.readProfile(first.user.id)).resolves.toBeNull()
+    await expect(service.deleteProfile(first.user.id)).resolves.toBe(false)
+    await expect(service.readProfile(second.user.id)).resolves.toMatchObject({
+      payload: '{"resumeYaml":"second"}',
+    })
+  })
+
+  it('keeps the profile encrypted at rest and rejects tampering', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const service = await openAuthService({ databasePath })
+    const { user } = await service.register({
+      email: 'user@example.com',
+      password: 'correct horse battery staple',
+    })
+    const secret = 'Ada-Lovelace-must-not-appear-in-plaintext'
+    await service.putProfile(user.id, `{"resumeYaml":"${secret}"}`)
+    service.close()
+
+    expect((await readFile(databasePath)).includes(Buffer.from(secret))).toBe(
+      false
+    )
+    const { DatabaseSync } = await import('node:sqlite')
+    const database = new DatabaseSync(databasePath)
+    const row = database
+      .prepare('SELECT ciphertext FROM resume_agent_profiles WHERE user_id = ?')
+      .get(user.id) as { ciphertext: Uint8Array }
+    const tampered = Buffer.from(row.ciphertext)
+    tampered[0] ^= 0xff
+    database
+      .prepare(
+        'UPDATE resume_agent_profiles SET ciphertext = ? WHERE user_id = ?'
+      )
+      .run(tampered, user.id)
+    database.close()
+
+    const reopened = await openAuthService({ databasePath })
+    await expect(reopened.readProfile(user.id)).rejects.toMatchObject({
+      code: 'profile_unavailable',
+    })
+  })
+
+  it('decrypts old profiles during key rotation and writes with the active key', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const keyV1 = { id: 'test-v1', key: Buffer.alloc(32, 0x11) }
+    const keyV2 = { id: 'test-v2', key: Buffer.alloc(32, 0x22) }
+    const first = await openAuthService({
+      databasePath,
+      credentialEncryptionKeys: [keyV1],
+      activeCredentialEncryptionKeyId: keyV1.id,
+    })
+    const { user } = await first.register({
+      email: 'user@example.com',
+      password: 'correct horse battery staple',
+    })
+    await first.putProfile(user.id, '{"resumeYaml":"old-key"}')
+    first.close()
+
+    const rotating = await openAuthService({
+      databasePath,
+      credentialEncryptionKeys: [keyV1, keyV2],
+      activeCredentialEncryptionKeyId: keyV2.id,
+    })
+    await expect(rotating.readProfile(user.id)).resolves.toMatchObject({
+      payload: '{"resumeYaml":"old-key"}',
+    })
+    await rotating.putProfile(user.id, '{"resumeYaml":"new-key"}')
+    rotating.close()
+
+    // Only the new key is present now: the save must have re-sealed the row.
+    const rotated = await openAuthService({
+      databasePath,
+      credentialEncryptionKeys: [keyV2],
+      activeCredentialEncryptionKeyId: keyV2.id,
+    })
+    await expect(rotated.readProfile(user.id)).resolves.toMatchObject({
+      payload: '{"resumeYaml":"new-key"}',
+    })
+  })
+
+  it('fails safely when a profile references a missing key', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const keyV1 = { id: 'test-v1', key: Buffer.alloc(32, 0x11) }
+    const keyV2 = { id: 'test-v2', key: Buffer.alloc(32, 0x22) }
+    const first = await openAuthService({
+      databasePath,
+      credentialEncryptionKeys: [keyV1],
+      activeCredentialEncryptionKeyId: keyV1.id,
+    })
+    const { user } = await first.register({
+      email: 'user@example.com',
+      password: 'correct horse battery staple',
+    })
+    await first.putProfile(user.id, '{"resumeYaml":"old-key"}')
+    first.close()
+
+    const missingOldKey = await openAuthService({
+      databasePath,
+      credentialEncryptionKeys: [keyV2],
+      activeCredentialEncryptionKeyId: keyV2.id,
+    })
+    await expect(missingOldKey.readProfile(user.id)).rejects.toMatchObject({
+      code: 'profile_unavailable',
+    })
+  })
+
+  it('rejects a profile payload that is empty, oversized, or NUL-bearing', async () => {
+    const service = await openAuthService()
+    const { user } = await service.register({
+      email: 'user@example.com',
+      password: 'correct horse battery staple',
+    })
+
+    for (const payload of ['', 'has\0a-nul', 'x'.repeat(1_048_577)]) {
+      await expect(service.putProfile(user.id, payload)).rejects.toMatchObject({
+        code: 'invalid_profile',
+      })
+    }
+    // A rejected write must not leave a partial row behind.
+    await expect(service.readProfile(user.id)).resolves.toBeNull()
+
+    await expect(
+      service.putProfile(user.id, 'x'.repeat(1_048_576))
+    ).resolves.toMatchObject({ createdAt: expect.any(String) })
+  })
+
   it('persists run ownership and rejects cross-user claims', async () => {
     const databasePath = await temporaryDatabasePath()
     const firstService = await openAuthService({ databasePath })
@@ -457,5 +692,166 @@ describe('AuthService', () => {
 
     const reopened = await openAuthService({ databasePath })
     await expect(reopened.isRunOwner(first.user.id, runId)).resolves.toBe(true)
+  })
+})
+
+describe('password reset', () => {
+  const PASSWORD = 'correct horse battery staple'
+  const NEW_PASSWORD = 'a completely different secret'
+
+  /** Captures the reset links the service would have emailed. */
+  function captureEmails(): {
+    port: AuthEmailPort
+    sent: Array<{ to: string; resetUrl: string }>
+  } {
+    const sent: Array<{ to: string; resetUrl: string }> = []
+    return {
+      sent,
+      port: {
+        async sendPasswordReset(message) {
+          sent.push({ to: message.to, resetUrl: message.resetUrl })
+        },
+      },
+    }
+  }
+
+  function tokenFrom(resetUrl: string): string {
+    const marker = '#reset='
+    const index = resetUrl.indexOf(marker)
+    if (index < 0) throw new Error(`no token in ${resetUrl}`)
+    return resetUrl.slice(index + marker.length)
+  }
+
+  it('does not reveal whether an address has an account', async () => {
+    const { port, sent } = captureEmails()
+    const service = await openAuthService({ emailPort: port })
+    await service.register({ email: 'known@example.com', password: PASSWORD })
+
+    await service.requestPasswordReset({ email: 'known@example.com' })
+    await service.requestPasswordReset({ email: 'nobody@example.com' })
+
+    // One link sent, no error either way — indistinguishable to a caller.
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.to).toBe('known@example.com')
+  })
+
+  it('replaces the password and revokes existing sessions', async () => {
+    const { port, sent } = captureEmails()
+    const service = await openAuthService({ emailPort: port })
+    const registration = await service.register({
+      email: 'user@example.com',
+      password: PASSWORD,
+    })
+    await expect(service.authenticate(registration.token)).resolves.toBeTruthy()
+
+    await service.requestPasswordReset({ email: 'user@example.com' })
+    const token = tokenFrom(sent[0]?.resetUrl)
+    await service.resetPassword({ token, password: NEW_PASSWORD })
+
+    // The session that existed before the reset must be gone.
+    await expect(
+      service.authenticate(registration.token)
+    ).rejects.toMatchObject({ code: 'not_authenticated' })
+
+    await expect(
+      service.login({ email: 'user@example.com', password: PASSWORD })
+    ).rejects.toMatchObject({ code: 'invalid_credentials' })
+    await expect(
+      service.login({ email: 'user@example.com', password: NEW_PASSWORD })
+    ).resolves.toBeTruthy()
+  })
+
+  it('accepts a reset token only once', async () => {
+    const { port, sent } = captureEmails()
+    const service = await openAuthService({ emailPort: port })
+    await service.register({ email: 'user@example.com', password: PASSWORD })
+    await service.requestPasswordReset({ email: 'user@example.com' })
+    const token = tokenFrom(sent[0]?.resetUrl)
+
+    await service.resetPassword({ token, password: NEW_PASSWORD })
+    await expect(
+      service.resetPassword({ token, password: 'yet another secret value' })
+    ).rejects.toMatchObject({ code: 'invalid_reset_token' })
+  })
+
+  it('rejects a token at its expiry', async () => {
+    let now = new Date('2026-09-16T12:00:00.000Z')
+    const { port, sent } = captureEmails()
+    const service = await openAuthService({
+      emailPort: port,
+      passwordResetTtlMs: 60_000,
+      now: () => now,
+    })
+    await service.register({ email: 'user@example.com', password: PASSWORD })
+    await service.requestPasswordReset({ email: 'user@example.com' })
+    const token = tokenFrom(sent[0]?.resetUrl)
+
+    now = new Date('2026-09-16T12:01:00.000Z')
+    await expect(
+      service.resetPassword({ token, password: NEW_PASSWORD })
+    ).rejects.toMatchObject({ code: 'invalid_reset_token' })
+  })
+
+  it('refuses an unknown token shape', async () => {
+    const service = await openAuthService()
+    await expect(
+      service.resetPassword({ token: 'nope', password: NEW_PASSWORD })
+    ).rejects.toMatchObject({ code: 'invalid_reset_token' })
+  })
+
+  it('enforces the password rules on reset too', async () => {
+    const { port, sent } = captureEmails()
+    const service = await openAuthService({ emailPort: port })
+    await service.register({ email: 'user@example.com', password: PASSWORD })
+    await service.requestPasswordReset({ email: 'user@example.com' })
+    const token = tokenFrom(sent[0]?.resetUrl)
+
+    await expect(
+      service.resetPassword({ token, password: 'short' })
+    ).rejects.toMatchObject({ code: 'invalid_registration' })
+  })
+
+  it('invalidates an earlier link when a new one is requested', async () => {
+    const { port, sent } = captureEmails()
+    const service = await openAuthService({ emailPort: port })
+    await service.register({ email: 'user@example.com', password: PASSWORD })
+
+    await service.requestPasswordReset({ email: 'user@example.com' })
+    const first = tokenFrom(sent[0]?.resetUrl)
+    await service.requestPasswordReset({ email: 'user@example.com' })
+    const second = tokenFrom(sent[1]?.resetUrl)
+
+    await expect(
+      service.resetPassword({ token: first, password: NEW_PASSWORD })
+    ).rejects.toMatchObject({ code: 'invalid_reset_token' })
+    await expect(
+      service.resetPassword({ token: second, password: NEW_PASSWORD })
+    ).resolves.toBeUndefined()
+  })
+
+  it('clears a login lockout so the new password works immediately', async () => {
+    const { port, sent } = captureEmails()
+    const service = await openAuthService({ emailPort: port })
+    await service.register({ email: 'user@example.com', password: PASSWORD })
+
+    // Trip the failure limit.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(
+        service.login({
+          email: 'user@example.com',
+          password: 'wrong password!',
+        })
+      ).rejects.toMatchObject({ code: 'invalid_credentials' })
+    }
+
+    await service.requestPasswordReset({ email: 'user@example.com' })
+    await service.resetPassword({
+      token: tokenFrom(sent[0]?.resetUrl),
+      password: NEW_PASSWORD,
+    })
+
+    await expect(
+      service.login({ email: 'user@example.com', password: NEW_PASSWORD })
+    ).resolves.toBeTruthy()
   })
 })

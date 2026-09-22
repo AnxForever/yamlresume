@@ -22,7 +22,7 @@
  * IN THE SOFTWARE.
  */
 
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import {
   createServer,
@@ -54,12 +54,26 @@ import {
   TailorResumeRequestSchema,
 } from '@yamlresume/resume-agent'
 
-import { AuthError, AuthService, type AuthSession, type AuthUser } from './auth'
+import {
+  type AuthCredentials,
+  AuthError,
+  AuthService,
+  type AuthSession,
+  type AuthUser,
+} from './auth'
+import { createSmtpEmailPort, readSmtpConfig } from './email'
 import {
   MultipartRequestError,
   parseAnswerMultipartRequest,
   parseMultipartRequest,
 } from './multipart'
+import { readOAuthProviders } from './oauth'
+import {
+  PROFILE_MATERIAL_LIMIT,
+  ProfilePayloadSchema,
+  parseStoredProfile,
+  serializeProfile,
+} from './profile'
 
 const DEFAULT_PORT = 8787
 const DEFAULT_HOST = '127.0.0.1'
@@ -77,10 +91,17 @@ export const API_ROUTES = [
   { method: 'post', path: '/v1/auth/login' },
   { method: 'get', path: '/v1/auth/me' },
   { method: 'post', path: '/v1/auth/logout' },
+  { method: 'post', path: '/v1/auth/password-reset' },
+  { method: 'post', path: '/v1/auth/password-reset/confirm' },
+  { method: 'get', path: '/v1/auth/oauth/{provider}/start' },
+  { method: 'get', path: '/v1/auth/oauth/{provider}/callback' },
   { method: 'post', path: '/v1/chat' },
   { method: 'get', path: '/v1/provider-credentials' },
   { method: 'put', path: '/v1/provider-credentials/{providerId}' },
   { method: 'delete', path: '/v1/provider-credentials/{providerId}' },
+  { method: 'get', path: '/v1/profile' },
+  { method: 'put', path: '/v1/profile' },
+  { method: 'delete', path: '/v1/profile' },
   { method: 'post', path: '/v1/tailor-resume' },
   { method: 'post', path: '/v1/runs' },
   { method: 'get', path: '/v1/runs/{id}' },
@@ -192,12 +213,29 @@ function authErrorResponse(
   switch (authError.code) {
     case 'invalid_registration':
     case 'invalid_provider_credential':
+    case 'invalid_profile':
       error(response, 400, authError.code, authError.message, requestId)
       return
     case 'user_exists':
       error(response, 409, authError.code, authError.message, requestId)
       return
     case 'invalid_credentials':
+    case 'invalid_invite_code':
+      error(response, 403, authError.code, authError.message, requestId)
+      return
+    case 'invalid_reset_token':
+      error(response, 400, authError.code, authError.message, requestId)
+      return
+    case 'reset_rate_limited':
+      error(response, 429, authError.code, authError.message, requestId)
+      return
+    case 'oauth_unavailable':
+    case 'invalid_oauth_state':
+    case 'oauth_email_unverified':
+    case 'oauth_email_unavailable':
+    case 'oauth_failed':
+      error(response, 400, authError.code, authError.message, requestId)
+      return
     case 'not_authenticated':
       error(response, 401, authError.code, authError.message, requestId)
       return
@@ -256,9 +294,15 @@ function setSessionCookie(
   auth: AgentApiAuthOptions,
   session: AuthSession
 ): void {
+  // `Expires` only for a remembered session. Without it the browser treats
+  // the cookie as session-scoped and drops it on close, which is exactly what
+  // an unticked "remember me" should mean.
+  const expiry = session.persistent
+    ? `; Expires=${new Date(session.expiresAt).toUTCString()}`
+    : ''
   response.setHeader(
     'Set-Cookie',
-    `${sessionCookieName(auth)}=${session.token}; Path=/; HttpOnly; SameSite=Lax; Expires=${new Date(session.expiresAt).toUTCString()}${auth.secureCookies ? '; Secure' : ''}`
+    `${sessionCookieName(auth)}=${session.token}; Path=/; HttpOnly; SameSite=Lax${expiry}${auth.secureCookies ? '; Secure' : ''}`
   )
 }
 
@@ -373,9 +417,46 @@ async function requireAuthenticatedRequest(
   }
 }
 
+/**
+ * Invitation codes that gate registration.
+ *
+ * Empty means registration is open — that is the development and
+ * single-operator default. When codes are configured, a would-be account must
+ * present one, which is what lets the browser-level gate be removed without
+ * leaving sign-up open to the whole internet.
+ */
+function readInviteCodes(env: NodeJS.ProcessEnv): string[] {
+  return (env.RESUME_AGENT_INVITE_CODES ?? '')
+    .split(',')
+    .map((code) => code.trim())
+    .filter((code) => code.length > 0)
+}
+
+/** Compares without leaking length or prefix through timing. */
+function matchesInviteCode(
+  supplied: string,
+  codes: readonly string[]
+): boolean {
+  const suppliedBytes = Buffer.from(supplied, 'utf8')
+  let matched = false
+  for (const code of codes) {
+    const codeBytes = Buffer.from(code, 'utf8')
+    // timingSafeEqual throws on a length mismatch, so lengths are compared
+    // first and the result folded in rather than short-circuiting.
+    const sameLength = suppliedBytes.length === codeBytes.length
+    const candidate = sameLength
+      ? suppliedBytes
+      : Buffer.alloc(codeBytes.length)
+    if (timingSafeEqual(candidate, codeBytes) && sameLength) {
+      matched = true
+    }
+  }
+  return matched
+}
+
 function authCredentials(
   payload: unknown
-): { email: string; password: string } | undefined {
+): (AuthCredentials & { inviteCode?: string }) | undefined {
   if (
     typeof payload !== 'object' ||
     payload === null ||
@@ -385,13 +466,32 @@ function authCredentials(
   }
   const record = payload as Record<string, unknown>
   if (
-    Object.keys(record).some((key) => key !== 'email' && key !== 'password')
+    Object.keys(record).some(
+      (key) =>
+        key !== 'email' &&
+        key !== 'password' &&
+        key !== 'remember' &&
+        key !== 'inviteCode'
+    )
   ) {
     return undefined
   }
-  const { email, password } = record
+  const { email, password, remember, inviteCode } = record
+  // `remember` is optional; anything that is not a boolean is rejected rather
+  // than coerced, so a typo cannot silently produce a persistent session.
+  if (remember !== undefined && typeof remember !== 'boolean') {
+    return undefined
+  }
+  if (inviteCode !== undefined && typeof inviteCode !== 'string') {
+    return undefined
+  }
   return typeof email === 'string' && typeof password === 'string'
-    ? { email, password }
+    ? {
+        email,
+        password,
+        remember: remember === true,
+        ...(typeof inviteCode === 'string' ? { inviteCode } : {}),
+      }
     : undefined
 }
 
@@ -435,6 +535,16 @@ interface AgentApiRuntimeCapabilities {
   providerConfigured: boolean
   runStore: 'memory' | 'sqlite'
   authentication: 'enabled' | 'disabled'
+  oauthProviders?: Array<{ id: string; label: string }>
+  /** Whether a new account needs an invitation code. */
+  registration?: 'open' | 'invite'
+  /**
+   * Present only when this server has accounts, because a profile is stored
+   * per account. Its absence is the client's signal that the profile routes
+   * are unavailable, and its `materials` cap is the limit the editor enforces
+   * — the frontend hard-codes neither.
+   */
+  profile?: { materials: number }
 }
 
 function capabilities(runtime: AgentApiRuntimeCapabilities) {
@@ -447,8 +557,15 @@ function capabilities(runtime: AgentApiRuntimeCapabilities) {
       login: 'POST /v1/auth/login',
       currentUser: 'GET /v1/auth/me',
       logout: 'POST /v1/auth/logout',
+      requestPasswordReset: 'POST /v1/auth/password-reset',
+      confirmPasswordReset: 'POST /v1/auth/password-reset/confirm',
+      oauthStart: 'GET /v1/auth/oauth/:provider/start',
+      oauthCallback: 'GET /v1/auth/oauth/:provider/callback',
       chat: 'POST /v1/chat',
       providerCredentials: 'GET/PUT/DELETE /v1/provider-credentials',
+      // Advertised so a client can tell an older deployment (which has no
+      // profile routes) from one whose profile is merely empty.
+      profile: 'GET/PUT/DELETE /v1/profile',
       tailorResume: 'POST /v1/tailor-resume',
       createRun: 'POST /v1/runs',
       getRun: 'GET /v1/runs/:id',
@@ -500,6 +617,11 @@ function capabilities(runtime: AgentApiRuntimeCapabilities) {
         template: style.template,
       })),
     },
+    // Only advertised when the routes actually exist: accumulating a profile
+    // needs an account to scope it to, and a server with auth off has none.
+    ...(runtime.authentication === 'enabled'
+      ? { profile: { materials: PROFILE_MATERIAL_LIMIT } }
+      : {}),
     runtime,
   }
 }
@@ -572,6 +694,11 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
   const agent = options.agent ?? defaultAgent?.agent
   if (!agent) throw new Error('Agent API initialization failed')
   const runService = options.runService ?? new ResumeAgentRunService(agent)
+  // Registration policy is deployment configuration, not an account rule, so
+  // it is read here where both the capabilities payload and the register
+  // handler can see it.
+  const inviteCodes = readInviteCodes(options.env ?? process.env)
+
   const runtime: AgentApiRuntimeCapabilities = {
     providerConfigured:
       options.runtime?.providerConfigured ??
@@ -580,6 +707,13 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
     authentication:
       options.runtime?.authentication ??
       (options.auth ? 'enabled' : 'disabled'),
+    oauthProviders:
+      options.runtime?.oauthProviders ??
+      options.auth?.service.listOAuthProviders() ??
+      [],
+    registration:
+      options.runtime?.registration ??
+      (inviteCodes.length > 0 ? 'invite' : 'open'),
   }
 
   return createServer(async (request, response) => {
@@ -661,6 +795,14 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
             isRegistration ? 'invalid_registration' : 'invalid_credentials'
           )
         }
+        if (isRegistration && inviteCodes.length > 0) {
+          const supplied = input.inviteCode ?? ''
+          if (!matchesInviteCode(supplied, inviteCodes)) {
+            // Same answer for "no code" and "wrong code": the caller learns
+            // nothing about which codes exist.
+            throw new AuthError('invalid_invite_code')
+          }
+        }
         const session = isRegistration
           ? await options.auth.service.register(input)
           : await options.auth.service.login(input)
@@ -690,6 +832,130 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
         noContent(response, requestId)
       } catch (authError) {
         authErrorResponse(response, authError, requestId)
+      }
+      return
+    }
+
+    if (
+      options.auth &&
+      request.method === 'POST' &&
+      url.pathname === '/v1/auth/password-reset'
+    ) {
+      try {
+        const payload = (await readJson(request)) as { email?: unknown }
+        if (typeof payload?.email === 'string') {
+          await options.auth.service.requestPasswordReset({
+            email: payload.email,
+          })
+        }
+        // Always 204, whatever happened: a different status for "no such
+        // account" would turn this endpoint into an account oracle.
+        noContent(response, requestId)
+      } catch (resetError) {
+        authErrorResponse(response, resetError, requestId)
+      }
+      return
+    }
+
+    if (
+      options.auth &&
+      request.method === 'POST' &&
+      url.pathname === '/v1/auth/password-reset/confirm'
+    ) {
+      try {
+        const payload = (await readJson(request)) as {
+          token?: unknown
+          password?: unknown
+        }
+        if (
+          typeof payload?.token !== 'string' ||
+          typeof payload?.password !== 'string'
+        ) {
+          error(
+            response,
+            400,
+            'invalid_reset_token',
+            'A reset token and a new password are required',
+            requestId
+          )
+          return
+        }
+        await options.auth.service.resetPassword({
+          token: payload.token,
+          password: payload.password,
+        })
+        clearSessionCookie(response, options.auth)
+        noContent(response, requestId)
+      } catch (resetError) {
+        authErrorResponse(response, resetError, requestId)
+      }
+      return
+    }
+
+    const oauthStart = url.pathname.match(
+      /^\/v1\/auth\/oauth\/([a-z0-9_-]+)\/start$/u
+    )
+    if (options.auth && request.method === 'GET' && oauthStart) {
+      try {
+        // Derived from the request so the callback URL matches the host the
+        // browser used; a fixed default would break every deployment that is
+        // not on the assumed port.
+        const forwardedProto = request.headers['x-forwarded-proto']
+        const host = request.headers.host ?? 'localhost'
+        const protocol =
+          typeof forwardedProto === 'string' ? forwardedProto : 'http'
+        const target = options.auth.service.beginOAuth(oauthStart[1] ?? '', {
+          redirectBase: `${protocol}://${host}`,
+        })
+        response.statusCode = 302
+        response.setHeader('Location', target)
+        response.setHeader('Cache-Control', 'no-store')
+        response.end()
+      } catch (oauthError) {
+        authErrorResponse(response, oauthError, requestId)
+      }
+      return
+    }
+
+    const oauthCallback = url.pathname.match(
+      /^\/v1\/auth\/oauth\/([a-z0-9_-]+)\/callback$/u
+    )
+    if (options.auth && request.method === 'GET' && oauthCallback) {
+      const code = url.searchParams.get('code')
+      const state = url.searchParams.get('state')
+      // Failure lands back in the app with a flag rather than a JSON body, so
+      // a browser never ends up staring at an API error document.
+      const failureRedirect = (reason: string) => {
+        response.statusCode = 302
+        response.setHeader(
+          'Location',
+          `${options.auth?.allowedOrigin}/#auth_error=${reason}`
+        )
+        response.setHeader('Cache-Control', 'no-store')
+        response.end()
+      }
+      if (!code || !state) {
+        failureRedirect('oauth_failed')
+        return
+      }
+      try {
+        const forwardedProto = request.headers['x-forwarded-proto']
+        const host = request.headers.host ?? 'localhost'
+        const protocol =
+          typeof forwardedProto === 'string' ? forwardedProto : 'http'
+        const session = await options.auth.service.completeOAuth(
+          oauthCallback[1] ?? '',
+          { code, state, redirectBase: `${protocol}://${host}` }
+        )
+        setSessionCookie(response, options.auth, session)
+        response.statusCode = 302
+        response.setHeader('Location', options.auth.allowedOrigin)
+        response.setHeader('Cache-Control', 'no-store')
+        response.end()
+      } catch (oauthError) {
+        failureRedirect(
+          oauthError instanceof AuthError ? oauthError.code : 'oauth_failed'
+        )
       }
       return
     }
@@ -763,6 +1029,103 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
           { providerId, apiKey }
         )
         success(response, 200, credential, requestId)
+      } catch (authError) {
+        authErrorResponse(response, authError, requestId)
+      }
+      return
+    }
+
+    if (
+      options.auth &&
+      url.pathname === '/v1/profile' &&
+      request.method === 'GET'
+    ) {
+      try {
+        const identity = await authenticateRequest(request, options.auth)
+        if (!identity) throw new AuthError('not_authenticated')
+        const stored = await options.auth.service.readProfile(identity.user.id)
+        if (!stored) {
+          // "No profile yet" is a state, not a failure — but it is still a
+          // missing resource, and the client distinguishes it from an empty
+          // document so it can tell "never saved" from "saved as blank".
+          error(
+            response,
+            404,
+            'profile_not_found',
+            'No profile has been saved for this account',
+            requestId
+          )
+          return
+        }
+        success(
+          response,
+          200,
+          parseStoredProfile(stored.payload, stored),
+          requestId
+        )
+      } catch (authError) {
+        authErrorResponse(response, authError, requestId)
+      }
+      return
+    }
+
+    if (
+      options.auth &&
+      url.pathname === '/v1/profile' &&
+      request.method === 'PUT'
+    ) {
+      try {
+        const identity = await authenticateRequest(request, options.auth)
+        if (!identity) throw new AuthError('not_authenticated')
+        let payload: unknown
+        try {
+          payload = await readJson(request)
+        } catch (requestError) {
+          error(
+            response,
+            400,
+            'invalid_profile',
+            getErrorMessage(requestError),
+            requestId
+          )
+          return
+        }
+        const parsed = ProfilePayloadSchema.safeParse(payload)
+        if (!parsed.success) {
+          error(
+            response,
+            400,
+            'invalid_profile',
+            'Profile data is invalid',
+            requestId,
+            validationDetails(parsed.error.issues)
+          )
+          return
+        }
+        const summary = await options.auth.service.putProfile(
+          identity.user.id,
+          serializeProfile(parsed.data)
+        )
+        success(response, 200, summary, requestId)
+      } catch (authError) {
+        authErrorResponse(response, authError, requestId)
+      }
+      return
+    }
+
+    if (
+      options.auth &&
+      url.pathname === '/v1/profile' &&
+      request.method === 'DELETE'
+    ) {
+      try {
+        const identity = await authenticateRequest(request, options.auth)
+        if (!identity) throw new AuthError('not_authenticated')
+        // Deletion is idempotent: whether or not a profile was there, the
+        // caller's next `GET` returns 404, which is the only thing they can
+        // observe. Reporting "was it there" would leak nothing useful.
+        await options.auth.service.deleteProfile(identity.user.id)
+        noContent(response, requestId)
       } catch (authError) {
         authErrorResponse(response, authError, requestId)
       }
@@ -1203,6 +1566,15 @@ async function createRuntimeAuth(
   if (secureCookies !== (origin.protocol === 'https:')) {
     throw new AgentApiRuntimeError('invalid_configuration')
   }
+  // Providers are opt-in by configuration; the frontend only renders the
+  // buttons for whatever comes back in `/v1/capabilities`.
+  const oauthProviders = readOAuthProviders(env)
+  // Absent SMTP settings are fine: the service then keeps its logging port.
+  // A *broken* setting throws, so a typo cannot silently stop reset mail.
+  const smtp = readSmtpConfig(env)
+  const oauthRedirectBase =
+    env.RESUME_AGENT_OAUTH_REDIRECT_BASE?.trim() ||
+    `http://localhost:${env.PORT?.trim() || DEFAULT_PORT}`
   const databasePath = resolve(
     env.RESUME_AGENT_AUTH_DB_PATH?.trim() || DEFAULT_AUTH_DATABASE_PATH
   )
@@ -1212,6 +1584,10 @@ async function createRuntimeAuth(
       databasePath,
       credentialEncryptionKeys,
       activeCredentialEncryptionKeyId,
+      oauthProviders,
+      oauthRedirectBase,
+      resetUrlBase: allowedOrigin,
+      ...(smtp ? { emailPort: createSmtpEmailPort(smtp) } : {}),
     })
     return { service, allowedOrigin, secureCookies }
   } catch (error) {

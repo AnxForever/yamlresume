@@ -141,6 +141,117 @@ paths:
       responses:
         '204':
           description: Session absent or revoked
+  /v1/auth/oauth/{provider}/start:
+    get:
+      tags: [Authentication]
+      operationId: startOAuthSignIn
+      summary: Redirect the browser to a configured provider's consent screen
+      description: >
+        Answers 302 with a Location pointing at the provider. State and the
+        PKCE verifier are generated and stored server-side. Only providers
+        whose client credentials are configured are reachable; the list is
+        published under `runtime.oauthProviders` in `/v1/capabilities` so the
+        frontend never renders a button for a provider that is switched off.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google, github]
+      responses:
+        '302':
+          description: Redirect to the provider
+        '400':
+          description: Provider not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/auth/oauth/{provider}/callback:
+    get:
+      tags: [Authentication]
+      operationId: completeOAuthSignIn
+      summary: Complete a provider sign-in and issue a session cookie
+      description: >
+        Exchanges the authorization code, reads the provider identity, and
+        links it to an account by provider subject id. A verified email may
+        attach the identity to an existing account; an unverified one may only
+        create a new account. Success redirects to the application origin with
+        the session cookie set; failure redirects with `#auth_error=<code>`.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect back to the application
+  /v1/auth/password-reset:
+    post:
+      tags: [Authentication]
+      operationId: requestPasswordReset
+      summary: Request a password reset link for an email address
+      description: >
+        Always answers 204, whether or not the address has an account, so the
+        endpoint cannot be used to discover which emails are registered. The
+        link is delivered through the server's email port; the built-in
+        development port writes it to the server log.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+      responses:
+        '204':
+          description: Request accepted
+  /v1/auth/password-reset/confirm:
+    post:
+      tags: [Authentication]
+      operationId: confirmPasswordReset
+      summary: Set a new password using a reset token
+      description: >
+        The token is single-use and expires. A successful reset also revokes
+        every existing session for the account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:
+                  type: string
+                password:
+                  type: string
+                  minLength: 12
+                  maxLength: 128
+      responses:
+        '204':
+          description: Password replaced and sessions revoked
+        '400':
+          description: Token missing, expired, already used, or password rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/provider-credentials:
     get:
       tags: [Provider Credentials]
@@ -209,6 +320,84 @@ paths:
       responses:
         '204':
           description: Credential absent or deleted
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+  /v1/profile:
+    get:
+      tags: [Profile]
+      operationId: getProfile
+      summary: Read the current user's encrypted career profile
+      description: >
+        The profile is the shared evidence source for every tailoring run: the
+        base resume, the default tailor preferences and the standing text and
+        link materials. It is stored encrypted per account and is never shared
+        between users.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The stored profile plus when it was first written and last replaced
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProfileResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '404':
+          description: >
+            No profile has been saved for this account yet. Distinct from a
+            saved-but-empty profile, so the client can tell "never saved" from
+            "saved as blank".
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    put:
+      tags: [Profile]
+      operationId: putProfile
+      summary: Replace the current user's career profile
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfilePayload'
+      responses:
+        '200':
+          description: Profile replaced; the first-save timestamp is preserved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProfileSummary'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+    delete:
+      tags: [Profile]
+      operationId: deleteProfile
+      summary: Delete the current user's career profile
+      description: >
+        Idempotent: a later GET returns 404 whether or not a profile was there.
+        Deleting the profile does not sign the user out and does not delete the
+        account.
+      security:
+        - sessionCookie: []
+      responses:
+        '204':
+          description: Profile absent or deleted
         '401':
           $ref: '#/components/responses/AuthenticationRequired'
   /v1/chat:
@@ -609,6 +798,89 @@ components:
         updatedAt:
           type: string
           format: date-time
+    ProfileMaterial:
+      type: object
+      additionalProperties: false
+      required: [id, kind, title, value, createdAt]
+      description: >
+        A standing supplement to the base resume. Only these two kinds persist;
+        uploaded files (PDF, DOCX) are not stored and travel with each run
+        instead.
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+        kind:
+          type: string
+          enum: [text, link]
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        value:
+          type: string
+          minLength: 1
+          description: >
+            Markdown text when `kind` is `text`; an absolute HTTP(S) URL when
+            `kind` is `link`. Non-HTTP schemes are rejected because the value is
+            rendered as an anchor href.
+        createdAt:
+          type: string
+          format: date-time
+    ProfilePayload:
+      type: object
+      additionalProperties: false
+      properties:
+        resumeYaml:
+          type: string
+          maxLength: 200000
+          default: ''
+          description: The base resume, as YAMLResume YAML or plain text.
+        preferences:
+          description: >
+            Default tailor preferences for new runs, matching the object
+            `POST /v1/runs` accepts. `null` means no default is set.
+          oneOf:
+            - $ref: '#/components/schemas/TailorPreferences'
+            - type: 'null'
+          default: null
+        materials:
+          type: array
+          maxItems: 50
+          default: []
+          items:
+            $ref: '#/components/schemas/ProfileMaterial'
+    ProfileSummary:
+      type: object
+      additionalProperties: false
+      required: [createdAt, updatedAt]
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+          description: First save; preserved across later replacements.
+        updatedAt:
+          type: string
+          format: date-time
+    ProfileResponse:
+      allOf:
+        - $ref: '#/components/schemas/ProfileSummary'
+        - type: object
+          required: [resumeYaml, preferences, materials]
+          properties:
+            resumeYaml:
+              type: string
+            preferences:
+              type: object
+              nullable: true
+              description: >
+                Loosely typed on read: an older build's shape is still returned
+                rather than discarded.
+            materials:
+              type: array
+              items:
+                type: object
     ApiMeta:
       type: object
       required: [apiVersion, requestId]
@@ -651,6 +923,9 @@ components:
                 - login_rate_limited
                 - not_authenticated
                 - invalid_provider_credential
+                - invalid_profile
+                - profile_not_found
+                - profile_unavailable
                 - authentication_disabled
                 - authentication_failed
                 - origin_not_allowed

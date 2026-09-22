@@ -32,6 +32,7 @@ import { ResumeTailoringAgent } from '@yamlresume/resume-agent'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { AuthService } from './auth'
+import type { OAuthProviderDescriptor } from './oauth'
 import { createAgentApiServer, startAgentApiServer } from './server'
 
 const services: AuthService[] = []
@@ -47,12 +48,16 @@ function fakeAgent(): ResumeTailoringAgent {
 }
 
 async function withAuthServer<T>(
-  callback: (baseUrl: string) => Promise<T>
+  callback: (baseUrl: string) => Promise<T>,
+  options: { oauthProviders?: OAuthProviderDescriptor[] } = {}
 ): Promise<T> {
   const auth = await AuthService.open({
     databasePath: ':memory:',
     credentialEncryptionKeys: [{ id: 'test-v1', key: Buffer.alloc(32, 0x5a) }],
     activeCredentialEncryptionKeyId: 'test-v1',
+    ...(options.oauthProviders
+      ? { oauthProviders: options.oauthProviders }
+      : {}),
     passwordScrypt: {
       cost: 2 ** 10,
       blockSize: 8,
@@ -394,5 +399,403 @@ describe('authenticated agent API', () => {
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
+  })
+})
+
+describe('OAuth HTTP routes', () => {
+  /** A provider descriptor whose endpoints are never actually reached: these
+   * tests cover the two server routes, not the exchange itself. */
+  function descriptor(): OAuthProviderDescriptor {
+    return {
+      id: 'fake',
+      label: 'Fake',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      authorizeUrl: 'https://provider.test/authorize',
+      tokenUrl: 'https://provider.test/token',
+      userInfoUrl: 'https://provider.test/userinfo',
+      scopes: ['email'],
+      usesPkce: true,
+      mapUserInfo: () => undefined,
+    }
+  }
+
+  it('announces configured providers in capabilities', async () => {
+    await withAuthServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/capabilities`)
+        const body = (await response.json()) as {
+          data: { runtime: { oauthProviders: unknown } }
+        }
+        expect(body.data.runtime.oauthProviders).toEqual([
+          { id: 'fake', label: 'Fake' },
+        ])
+      },
+      { oauthProviders: [descriptor()] }
+    )
+  })
+
+  it('announces none when nothing is configured', async () => {
+    await withAuthServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/capabilities`)
+      const body = (await response.json()) as {
+        data: { runtime: { oauthProviders: unknown } }
+      }
+      expect(body.data.runtime.oauthProviders).toEqual([])
+    })
+  })
+
+  it('redirects a start request to the provider with state', async () => {
+    await withAuthServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/auth/oauth/fake/start`, {
+          redirect: 'manual',
+        })
+        expect(response.status).toBe(302)
+        const location = new URL(response.headers.get('location') ?? '')
+        expect(location.origin + location.pathname).toBe(
+          'https://provider.test/authorize'
+        )
+        expect(location.searchParams.get('state')).toHaveLength(43)
+        expect(location.searchParams.get('redirect_uri')).toBe(
+          `http://127.0.0.1:${new URL(baseUrl).port}/v1/auth/oauth/fake/callback`
+        )
+      },
+      { oauthProviders: [descriptor()] }
+    )
+  })
+
+  it('rejects a start request for an unconfigured provider', async () => {
+    await withAuthServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/auth/oauth/google/start`, {
+        redirect: 'manual',
+      })
+      expect(response.status).toBe(400)
+      const body = (await response.json()) as { error: { code: string } }
+      expect(body.error.code).toBe('oauth_unavailable')
+    })
+  })
+
+  it('sends a failed callback back to the app instead of a JSON error', async () => {
+    await withAuthServer(
+      async (baseUrl) => {
+        const response = await fetch(
+          `${baseUrl}/v1/auth/oauth/fake/callback?code=x&state=${'z'.repeat(43)}`,
+          { redirect: 'manual' }
+        )
+        expect(response.status).toBe(302)
+        expect(response.headers.get('location')).toBe(
+          'http://localhost:5173/#auth_error=invalid_oauth_state'
+        )
+      },
+      { oauthProviders: [descriptor()] }
+    )
+  })
+
+  it('reports a callback with no parameters as a failure redirect', async () => {
+    await withAuthServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/auth/oauth/fake/callback`, {
+          redirect: 'manual',
+        })
+        expect(response.status).toBe(302)
+        expect(response.headers.get('location')).toContain('auth_error=')
+      },
+      { oauthProviders: [descriptor()] }
+    )
+  })
+})
+
+describe('invitation-gated registration', () => {
+  function withCodes<T>(
+    codes: string,
+    callback: (baseUrl: string) => Promise<T>
+  ): Promise<T> {
+    const previous = process.env.RESUME_AGENT_INVITE_CODES
+    process.env.RESUME_AGENT_INVITE_CODES = codes
+    return withAuthServer(callback).finally(() => {
+      if (previous === undefined) {
+        delete process.env.RESUME_AGENT_INVITE_CODES
+      } else {
+        process.env.RESUME_AGENT_INVITE_CODES = previous
+      }
+    })
+  }
+
+  function register(baseUrl: string, body: Record<string, unknown>) {
+    return fetch(`${baseUrl}/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it('reports an open policy when no codes are configured', async () => {
+    await withAuthServer(async (baseUrl) => {
+      const body = (await (
+        await fetch(`${baseUrl}/v1/capabilities`)
+      ).json()) as {
+        data: { runtime: { registration: string } }
+      }
+      expect(body.data.runtime.registration).toBe('open')
+    })
+  })
+
+  it('declares an invite policy and enforces it', async () => {
+    await withCodes('let-me-in', async (baseUrl) => {
+      const capabilities = (await (
+        await fetch(`${baseUrl}/v1/capabilities`)
+      ).json()) as { data: { runtime: { registration: string } } }
+      expect(capabilities.data.runtime.registration).toBe('invite')
+
+      const withoutCode = await register(baseUrl, {
+        email: 'a@example.com',
+        password: 'correct horse battery staple',
+      })
+      expect(withoutCode.status).toBe(403)
+
+      const wrongCode = await register(baseUrl, {
+        email: 'b@example.com',
+        password: 'correct horse battery staple',
+        inviteCode: 'not-it',
+      })
+      expect(wrongCode.status).toBe(403)
+      const wrongBody = (await wrongCode.json()) as { error: { code: string } }
+      // The same answer whether the code was absent or wrong.
+      expect(wrongBody.error.code).toBe('invalid_invite_code')
+
+      const accepted = await register(baseUrl, {
+        email: 'c@example.com',
+        password: 'correct horse battery staple',
+        inviteCode: 'let-me-in',
+      })
+      expect(accepted.status).toBe(201)
+    })
+  })
+
+  it('accepts any of several configured codes', async () => {
+    await withCodes('one, two ,three', async (baseUrl) => {
+      const response = await register(baseUrl, {
+        email: 'd@example.com',
+        password: 'correct horse battery staple',
+        inviteCode: 'two',
+      })
+      expect(response.status).toBe(201)
+    })
+  })
+
+  it('leaves login unaffected by the invitation policy', async () => {
+    await withCodes('let-me-in', async (baseUrl) => {
+      await register(baseUrl, {
+        email: 'e@example.com',
+        password: 'correct horse battery staple',
+        inviteCode: 'let-me-in',
+      })
+      const login = await fetch(`${baseUrl}/v1/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'e@example.com',
+          password: 'correct horse battery staple',
+        }),
+      })
+      // No invite code needed to sign in to an account that already exists.
+      expect(login.status).toBe(200)
+    })
+  })
+})
+
+const PROFILE_ORIGIN = 'http://localhost:5173'
+
+function profileHeaders(cookie?: string): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    Origin: PROFILE_ORIGIN,
+    ...(cookie ? { Cookie: cookie } : {}),
+  }
+}
+
+function material(id: string, kind: 'text' | 'link', value: string) {
+  return {
+    id,
+    kind,
+    title: `${kind}-${id}`,
+    value,
+    createdAt: '2026-09-16T12:00:00.000Z',
+  }
+}
+
+describe('career profile over HTTP', () => {
+  it('refuses every profile route without a session', async () => {
+    await withAuthServer(async (baseUrl) => {
+      for (const method of ['GET', 'PUT', 'DELETE']) {
+        const response = await fetch(`${baseUrl}/v1/profile`, {
+          method,
+          headers: profileHeaders(),
+          ...(method === 'PUT' ? { body: JSON.stringify({}) } : {}),
+        })
+        expect(response.status).toBe(401)
+      }
+    })
+  })
+
+  it('separates "never saved" from "saved", then round-trips and deletes', async () => {
+    await withAuthServer(async (baseUrl) => {
+      const cookie = await registerUser(baseUrl, 'profile@example.com')
+      const headers = profileHeaders(cookie)
+
+      // A missing profile is a 404, distinct from a saved-but-empty document:
+      // the page must be able to tell "you have not set this up" from "yours
+      // is blank", or it will show an empty editor to someone with no profile.
+      const absent = await fetch(`${baseUrl}/v1/profile`, { headers })
+      expect(absent.status).toBe(404)
+      expect(await absent.json()).toMatchObject({
+        error: { code: 'profile_not_found' },
+      })
+
+      const written = await fetch(`${baseUrl}/v1/profile`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          resumeYaml: 'basics:\n  name: Ada Lovelace\n',
+          preferences: { styles: ['ats-compact'], formats: ['pdf'] },
+          materials: [
+            material('m1', 'text', '用 FastAPI 实现了…'),
+            material('m2', 'link', 'https://github.com/example'),
+          ],
+        }),
+      })
+      expect(written.status).toBe(200)
+      const summary = (await written.json()) as {
+        data: { createdAt: string; updatedAt: string }
+      }
+      expect(summary.data.createdAt).toBe(summary.data.updatedAt)
+
+      const read = await fetch(`${baseUrl}/v1/profile`, { headers })
+      expect(read.status).toBe(200)
+      expect(await read.json()).toMatchObject({
+        data: {
+          resumeYaml: 'basics:\n  name: Ada Lovelace\n',
+          preferences: { styles: ['ats-compact'], formats: ['pdf'] },
+          createdAt: summary.data.createdAt,
+          updatedAt: summary.data.updatedAt,
+        },
+      })
+      const body = (await (
+        await fetch(`${baseUrl}/v1/profile`, { headers })
+      ).json()) as { data: { materials: unknown[] } }
+      expect(body.data.materials).toHaveLength(2)
+
+      const removed = await fetch(`${baseUrl}/v1/profile`, {
+        method: 'DELETE',
+        headers,
+      })
+      expect(removed.status).toBe(204)
+      expect((await fetch(`${baseUrl}/v1/profile`, { headers })).status).toBe(
+        404
+      )
+      // Idempotent: deleting nothing is still a success.
+      expect(
+        (
+          await fetch(`${baseUrl}/v1/profile`, {
+            method: 'DELETE',
+            headers,
+          })
+        ).status
+      ).toBe(204)
+    })
+  })
+
+  it('keeps one account’s profile invisible to another', async () => {
+    await withAuthServer(async (baseUrl) => {
+      const first = await registerUser(baseUrl, 'first@example.com')
+      const second = await registerUser(baseUrl, 'second@example.com')
+
+      await fetch(`${baseUrl}/v1/profile`, {
+        method: 'PUT',
+        headers: profileHeaders(first),
+        body: JSON.stringify({ resumeYaml: 'first-only' }),
+      })
+
+      const other = await fetch(`${baseUrl}/v1/profile`, {
+        headers: profileHeaders(second),
+      })
+      expect(other.status).toBe(404)
+
+      const mine = await fetch(`${baseUrl}/v1/profile`, {
+        headers: profileHeaders(first),
+      })
+      expect(await mine.json()).toMatchObject({
+        data: { resumeYaml: 'first-only' },
+      })
+    })
+  })
+
+  it('rejects a bad payload with a field path, and stores nothing', async () => {
+    await withAuthServer(async (baseUrl) => {
+      const cookie = await registerUser(baseUrl, 'invalid@example.com')
+      const headers = profileHeaders(cookie)
+
+      const rejected = async (payload: unknown) => {
+        const response = await fetch(`${baseUrl}/v1/profile`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify(payload),
+        })
+        expect(response.status).toBe(400)
+        const body = (await response.json()) as {
+          error: { code: string; details?: Array<{ path?: string }> }
+        }
+        expect(body.error.code).toBe('invalid_profile')
+        return body
+      }
+
+      // A `javascript:` href would be stored XSS the moment the profile page
+      // renders materials, so the scheme is refused at the boundary.
+      const scripted = await rejected({
+        materials: [material('m1', 'link', 'javascript:alert(1)')],
+      })
+      expect(scripted.error.details?.[0]?.path).toBe('materials.0.value')
+
+      await rejected({
+        materials: [material('m1', 'link', 'ftp://example.com/x')],
+      })
+      await rejected({
+        materials: [material('m1', 'text', 'x')].concat(
+          Array.from({ length: 50 }, (_, index) =>
+            material(`extra-${index}`, 'text', 'x')
+          )
+        ),
+      })
+      await rejected({ preferences: { styles: ['not-a-style'] } })
+      await rejected({ resumeYaml: 42 })
+
+      // Nothing above may have landed: a rejected write is not a partial one.
+      expect((await fetch(`${baseUrl}/v1/profile`, { headers })).status).toBe(
+        404
+      )
+    })
+  })
+
+  it('accepts a profile with only the fields the client actually filled', async () => {
+    await withAuthServer(async (baseUrl) => {
+      const cookie = await registerUser(baseUrl, 'minimal@example.com')
+      const headers = profileHeaders(cookie)
+
+      // Every field is optional, so a blank save is a save — it must not be
+      // mistaken for "no profile".
+      const response = await fetch(`${baseUrl}/v1/profile`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({}),
+      })
+      expect(response.status).toBe(200)
+
+      const read = await fetch(`${baseUrl}/v1/profile`, { headers })
+      expect(read.status).toBe(200)
+      expect(await read.json()).toMatchObject({
+        data: { resumeYaml: '', preferences: null, materials: [] },
+      })
+    })
   })
 })

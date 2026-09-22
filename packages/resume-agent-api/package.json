@@ -19,13 +19,15 @@
   },
   "dependencies": {
     "@yamlresume/resume-agent": "workspace:*",
-    "zod": "^4.3.6",
+    "busboy": "^1.6.0",
+    "nodemailer": "^10.0.10",
     "tslib": "^2.8.1",
-    "busboy": "^1.6.0"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^24.4.0",
     "@types/busboy": "^1.5.4",
+    "@types/node": "^24.4.0",
+    "@types/nodemailer": "^8.0.2",
     "yaml": "^2.8.2"
   }
 }
