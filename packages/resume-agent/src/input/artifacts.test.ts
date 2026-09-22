@@ -312,6 +312,36 @@ describe('extractArtifact', () => {
     })
   })
 
+  it('recognizes legacy Word containers and returns a safe extraction error', async () => {
+    const legacyHeader = Buffer.from('D0CF11E0A1B11AE1', 'hex')
+
+    await expect(
+      extractArtifact({
+        filename: 'candidate.doc',
+        contentBase64: legacyHeader.toString('base64'),
+      })
+    ).rejects.toMatchObject({
+      code: 'document_extraction_failed',
+      message: 'Could not extract text from the legacy Word document.',
+    })
+  })
+
+  it('extracts visible text from a real Word 97 CFB fixture', async () => {
+    const buffer = await readFile(
+      new URL('./fixtures/legacy-word-test.doc', import.meta.url)
+    )
+
+    const result = await extractArtifact({
+      filename: 'candidate.doc',
+      contentBase64: buffer.toString('base64'),
+    })
+
+    expect(result.mediaType).toBe('application/msword')
+    expect(result.kind).toBe('text')
+    expect(result.text).toContain('My name is Ryan')
+    expect(result.text).toContain('several paragraphs')
+  })
+
   it('distinguishes an ODT package from DOCX before selecting a parser', async () => {
     const odt = renderOdtDocument({
       title: 'Synthetic Candidate',

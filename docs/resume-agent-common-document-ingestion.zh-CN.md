@@ -1,8 +1,8 @@
 # Resume Agent 常见文档输入 Feature Brief
 
 > Feature ID：RA-001B
-> 状态：Partial implementation；RA-001B-A1 可信识别、RA-001B-B ODT 与 RA-001B-C RTF 正文提取已开发级实现，
-> 旧 DOC extractor 与 CFB/Word stream 核验仍为 Planned
+> 状态：Partial implementation；RA-001B-A1 可信识别、RA-001B-B ODT、RA-001B-C RTF 与
+> RA-001B-D legacy DOC 受限 extractor 已开发级实现；目前已有一个公开 Word 97 CFB fixture，但真实 Unicode corpus、隔离执行和跨平台验收仍未完成
 > 最后审阅：2026-09-16
 > 范围：可信文件识别，以及 ODT、RTF、旧版 DOC 的文本提取；不包含 OCR、宏执行或通用 Office 转换服务。
 
@@ -56,7 +56,8 @@ RTF 已完成有界可见正文 extractor；旧 DOC 尚无 extractor，不能把
 
 - 当前真实 parser 与测试证明 PDF/DOCX 路径存在，但检测发生在解析之前的边界仍是缺口。
 - `word-extractor@1.0.4`（MIT，npm 元数据最后更新 2022-06-29）声明可从 Buffer 读取
-  OLE `.doc` 与 DOCX，并处理 Unicode；它是技术 spike 候选，不是已批准依赖。
+  OLE `.doc` 与 DOCX，并处理 Unicode；源码审阅后作为受限 adapter 采用，但不把其同步解析器
+  当作生产隔离边界。
 - 本机存在 LibreOffice，可用于开发期兼容性对照；它不是 runtime 隐式依赖，不能因此
   把部署环境标记为支持 DOC/ODT。
 
@@ -195,7 +196,7 @@ XML/RTF nesting 128 层。
 - parser 在 worker/subprocess 或等价资源隔离边界运行，并有 timeout/内存约束；
 - 只返回 body text 与稳定 warning；不提取/执行宏、对象、链接和附件；
 - `word-extractor` 只有在真实 fixture、损坏 corpus、超限、Unicode、许可和错误脱敏全部通过
-  后才可采用。否则保留 adapter，使用受控转换服务或明确不启用。
+  后才可提升为 operational；当前只采用 Buffer adapter、5 秒超时和 1,000,000 字符上限，保留开发级状态。
 
 ## 8. 错误与隐私契约
 
@@ -223,9 +224,16 @@ XML/RTF nesting 128 层。
 5. ODT path traversal、重复 entry、展开超限、加密和损坏 XML 安全失败。
 6. RTF 最小正文、段落、转义和 Unicode 提取。
 7. RTF hidden destination、嵌入 object、深层 group、截断输入安全失败。
-8. DOC 合成 fixture 经隔离 adapter 提取；非 Word CFB 与损坏 DOC 拒绝。
+8. 真实 Word 97 CFB fixture 经 adapter 提取；非 Word CFB 与损坏 DOC 拒绝。
 9. extractor timeout/超限/底层私密异常只暴露稳定错误。
 10. 同一 fixture 分别作为 candidate file 与 job file 走完整输入归一化路径。
+
+2026-09-16 legacy DOC spike 已完成 RED → GREEN 的检测与安全失败 seam：CFB magic header
+现在识别为 `application/msword`，Buffer adapter 调用固定版本 `word-extractor@1.0.4`，并设置
+5 秒超时与 1,000,000 字符上限；伪 CFB 输入返回稳定 `document_extraction_failed`，不泄露
+parser 异常。随后使用 Apache POI 公开的 `test.doc`（SHA-256 已记录）验证真实 CFB 文本提取，
+并通过 API multipart candidate/job 文件路径；该样本不包含 Unicode corpus，隔离执行和跨平台验收
+仍未完成，因此这一切片继续保持 Partial implementation，不能标记 Operational。
 
 每一步只写一个公开行为测试，再补最小实现；不得先加入三种 parser 后统一补测试。
 
@@ -250,7 +258,7 @@ XML/RTF nesting 128 层。
 | RA-001B-A | upload → trusted detection；伪装文件不能选错 parser | Partial implementation：A1 已开发级实现 | Partial：OWASP、内容签名、fatal 解码、有界 ZIP index、mismatch/对抗 tests | backfilled | CFB Word stream、真实跨来源 corpus 与 fuzz |
 | RA-001B-B | ODT package → visible text | Implemented for development | Partial：OASIS package/schema、OWASP XML、对抗 tests、candidate/JD/API/Run、四个真实本地 package 与独立 reader 对照 | none | 跨 OS/异构 corpus、fuzz、样式派生隐藏语义、生产隔离与 telemetry |
 | RA-001B-C | RTF stream → Unicode visible text | Implemented for development | Partial：Microsoft/IANA RTF 规范、两个独立 reader 源码、本机 LibreOffice、bounded scanner 与对抗 tests | none | candidate/JD/API/Run/restart 纵向验收、跨 OS corpus、font-table charset、fuzz、隔离与 telemetry |
-| RA-001B-D | legacy DOC → isolated visible text | Planned | Partial：MS-DOC、候选包元数据 | none | parser spike、隔离、损坏 corpus |
+| RA-001B-D | legacy DOC → visible text | Partial implementation | MS-DOC CFB signature detection、MIT `word-extractor@1.0.4` 源码/许可审阅、Buffer adapter、5 秒超时、1,000,000 字符上限、伪 CFB 稳定错误测试；加入 Apache POI `test.doc` 的真实 Word 97 CFB fixture（仅保留公开测试样本，来源与 SHA-256 已记录） | backfilled | 真实 Unicode/异构 corpus、真正可中止的 worker 隔离、跨 OS、API capabilities 与生产观测 |
 | RA-001B-E | parser failure → safe user error | In development：检测/PDF/DOCX/ODT/RTF/API/Run 已统一 | Partial：固定错误、RTF/同步 HTTP 与异步 Run 脱敏 tests | backfilled | DOC extractor 与生产日志 |
 
 ### 11.1 当前实施切片：RA-001B-A
@@ -456,3 +464,6 @@ Provider 的生成质量或线上部署已通过。
   <https://github.com/mazira/rtf-stream-parser>
 - `word-extractor` repository：
   <https://github.com/morungos/node-word-extractor>
+- 真实 CFB fixture（Apache POI `test-data/document/test.doc`，Apache-2.0
+  repository test data；SHA-256 `fcaa1af5e3e90a7a09d4106d2aedc7fea397dec554f2cdb1238891607a2ef21f`）：
+  <https://github.com/apache/poi/blob/trunk/test-data/document/test.doc>

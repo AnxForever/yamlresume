@@ -33,6 +33,7 @@ import { inspectOdtPackage, ODT_MEDIA_TYPE } from '@/input/odt'
 
 export const DOCX_MEDIA_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+export const DOC_MEDIA_TYPE = 'application/msword'
 export { ODT_MEDIA_TYPE } from '@/input/odt'
 
 export type SupportedInputFormat =
@@ -84,7 +85,7 @@ function mediaTypeForExtension(filename: string): string | undefined {
     case 'docx':
       return DOCX_MEDIA_TYPE
     case 'doc':
-      return 'application/msword'
+      return DOC_MEDIA_TYPE
     case 'json':
     case 'jsonld':
       return 'application/json'
@@ -183,7 +184,7 @@ function formatForMediaType(
       return 'odt'
     case 'application/rtf':
       return 'rtf'
-    case 'application/msword':
+    case DOC_MEDIA_TYPE:
       return 'doc'
     case 'image/png':
       return 'png'
@@ -287,6 +288,13 @@ function mapArchiveError(error: unknown): never {
 }
 
 function detectSignedFormat(buffer: Buffer): DetectedInputFormat | undefined {
+  if (buffer.subarray(0, 8).equals(Buffer.from('D0CF11E0A1B11AE1', 'hex'))) {
+    return {
+      format: 'doc',
+      canonicalMediaType: DOC_MEDIA_TYPE,
+      confidence: 'signature',
+    }
+  }
   if (buffer.subarray(0, 5).equals(Buffer.from('%PDF-', 'ascii'))) {
     return {
       format: 'pdf',

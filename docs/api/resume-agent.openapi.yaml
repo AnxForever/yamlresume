@@ -270,9 +270,9 @@ paths:
               $ref: '#/components/schemas/TailorResumeMultipartRequest'
             encoding:
               jobFiles:
-                contentType: application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.oasis.opendocument.text, text/plain, text/markdown, image/png, image/jpeg, image/webp
+                contentType: application/pdf, application/msword, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.oasis.opendocument.text, application/rtf, text/plain, text/markdown, image/png, image/jpeg, image/webp
               candidateFiles:
-                contentType: application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.oasis.opendocument.text, text/plain, text/markdown, image/png, image/jpeg, image/webp
+                contentType: application/pdf, application/msword, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.oasis.opendocument.text, application/rtf, text/plain, text/markdown, image/png, image/jpeg, image/webp
       responses:
         '200':
           description: Tailoring workflow completed; individual artifact failures are reported in the result

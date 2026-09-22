@@ -22,7 +22,7 @@
  * IN THE SOFTWARE.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -298,6 +298,9 @@ describe('agent API', () => {
       expect(capabilitiesPayload.data?.input?.fileTypes).toContain(
         'application/rtf'
       )
+      expect(capabilitiesPayload.data?.input?.fileTypes).toContain(
+        'application/msword'
+      )
 
       const request = {
         jobDescription:
@@ -375,6 +378,7 @@ describe('agent API', () => {
       expect(payload.data?.input?.fileTypes).toContain(
         'application/vnd.oasis.opendocument.text'
       )
+      expect(payload.data?.input?.fileTypes).toContain('application/msword')
       expect(payload.data?.output?.formats).toContain('docx')
       expect(payload.data?.output?.formats).toContain('txt')
       expect(payload.data?.output?.formats).toContain('rtf')
@@ -852,6 +856,36 @@ describe('agent API', () => {
           type: 'text/plain',
         }),
         'job.txt'
+      )
+
+      const response = await fetch(`${baseUrl}/v1/tailor-resume`, {
+        method: 'POST',
+        body: form,
+      })
+      const payload = (await response.json()) as {
+        data?: { status?: string }
+      }
+
+      expect(response.status).toBe(200)
+      expect(payload.data?.status).toBe('completed')
+    })
+  })
+
+  it('accepts a real legacy Word document through the multipart contract', async () => {
+    const fixture = await readFile(
+      new URL(
+        '../../resume-agent/src/input/fixtures/legacy-word-test.doc',
+        import.meta.url
+      )
+    )
+
+    await withServer(async (baseUrl) => {
+      const form = new FormData()
+      form.set('candidate', JSON.stringify({ resume: candidate }))
+      form.append(
+        'jobFiles',
+        new Blob([fixture], { type: 'application/msword' }),
+        'job.doc'
       )
 
       const response = await fetch(`${baseUrl}/v1/tailor-resume`, {

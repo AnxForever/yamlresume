@@ -29,8 +29,13 @@ import mammoth from 'mammoth'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 import type { ExtractedArtifact, InputFile } from '@/contracts'
-import { DOCX_MEDIA_TYPE, detectInputFormat } from '@/input/detection'
+import {
+  DOC_MEDIA_TYPE,
+  DOCX_MEDIA_TYPE,
+  detectInputFormat,
+} from '@/input/detection'
 import { ArtifactInputError } from '@/input/errors'
+import { extractLegacyDocText } from '@/input/legacy-doc'
 import { extractOdtText, ODT_MEDIA_TYPE } from '@/input/odt'
 import { extractRtfText } from '@/input/rtf'
 
@@ -230,6 +235,7 @@ function kindFor(mediaType: string): ExtractedArtifact['kind'] {
   if (mediaType === DOCX_MEDIA_TYPE) {
     return 'docx'
   }
+  if (mediaType === DOC_MEDIA_TYPE) return 'text'
   if (IMAGE_MEDIA_TYPES.has(mediaType)) return 'image'
   return 'text'
 }
@@ -324,6 +330,25 @@ export async function extractArtifact(
       throw new ArtifactInputError(
         'document_extraction_failed',
         'Could not extract DOCX text.'
+      )
+    }
+  }
+
+  if (mediaType === DOC_MEDIA_TYPE) {
+    try {
+      const text = await extractLegacyDocText(buffer)
+      return {
+        id,
+        filename: file.filename,
+        mediaType,
+        kind: 'text',
+        text: requireExtractedText(text),
+        warnings,
+      }
+    } catch {
+      throw new ArtifactInputError(
+        'document_extraction_failed',
+        'Could not extract text from the legacy Word document.'
       )
     }
   }
