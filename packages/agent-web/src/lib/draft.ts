@@ -104,6 +104,14 @@ export interface PersistedDraft {
 }
 
 export const DRAFT_STORAGE_KEY = `${DRAFT_STORAGE_PREFIX}current`
+/**
+ * The launcher's chosen scenario preset.
+ *
+ * It needs its own key: `saveDraft` deletes the record when both texts are
+ * empty, so storing a selection inside it would mean a user who only picked a
+ * preset silently lost it on the next reload.
+ */
+export const PRESET_STORAGE_KEY = `${DRAFT_STORAGE_PREFIX}preset`
 
 function storage(): Storage | null {
   try {
@@ -154,6 +162,34 @@ export function saveDraft(draft: PersistedDraft): void {
       return
     }
     store.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft))
+  } catch {
+    // Storage-disabled viewers just lose the convenience, not the session.
+  }
+}
+
+export function loadPresetId(): string {
+  const store = storage()
+  if (!store) {
+    return ''
+  }
+  try {
+    return store.getItem(PRESET_STORAGE_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function savePresetId(presetId: string): void {
+  const store = storage()
+  if (!store) {
+    return
+  }
+  try {
+    if (presetId) {
+      store.setItem(PRESET_STORAGE_KEY, presetId)
+    } else {
+      store.removeItem(PRESET_STORAGE_KEY)
+    }
   } catch {
     // Storage-disabled viewers just lose the convenience, not the session.
   }

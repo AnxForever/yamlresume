@@ -92,13 +92,14 @@ export function SettingsDialog({
             <Field>
               <FieldLabel>后端地址</FieldLabel>
               <Input
-                type="url"
                 value={baseUrl}
                 onChange={(event) => setBaseUrl(event.target.value)}
-                placeholder="http://localhost:8787"
+                placeholder="留空 = 与本站同源"
               />
               <FieldDescription>
-                resume-agent-api 的地址。API Key
+                留空表示后端和本站由同一个地址提供（部署时的常见做法），此时无需配置。
+                只有后端跑在别处时才需要填写，例如本地开发用的
+                http://localhost:8787。API Key
                 只在后端环境变量里配置，不会保存在浏览器。
               </FieldDescription>
             </Field>

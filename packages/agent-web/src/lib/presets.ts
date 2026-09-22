@@ -34,22 +34,23 @@ import {
   Sparkles,
 } from 'lucide-react'
 
-import type { OutputFormat, StylePresetID } from '@/lib/api/types'
+import type {
+  OutputFormat,
+  StylePresetID,
+  TailorPreferences,
+} from '@/lib/api/types'
 
 /**
  * Output preferences sent as `preferences` on `POST /v1/runs`.
  *
- * Every field here exists in the backend `TailorPreferencesSchema`. Nothing in
- * this file may invent an option: unknown styles or formats are rejected by
- * Zod before an LLM call, so a made-up preset would fail at submit time.
+ * Re-exported from the backend contract types in `lib/api/types` rather than
+ * declared here, because the transport layer and a saved profile both have to
+ * name the same shape. Every field exists in the backend
+ * `TailorPreferencesSchema`: nothing in this file may invent an option, since
+ * unknown styles or formats are rejected by Zod before an LLM call, so a
+ * made-up preset would fail at submit time.
  */
-export interface TailorPreferences {
-  language?: string
-  maxPages?: 1 | 2
-  targetTitle?: string
-  formats: OutputFormat[]
-  styles: StylePresetID[]
-}
+export type { TailorPreferences }
 
 export type PresetCategory =
   | 'recommended'

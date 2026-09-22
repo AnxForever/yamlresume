@@ -22,20 +22,25 @@
  * IN THE SOFTWARE.
  */
 
-import { AppShell } from '@/components/shell/app-shell'
-
 /**
- * The shell must not be served from a shared cache.
+ * jsdom does not implement `matchMedia`, and `@appica/ui-react`'s motion-aware
+ * components reach for it through `useReducedMotion` — `Select` does so on its
+ * first render. Without this, any test that renders one of them dies with
+ * `window.matchMedia is not a function`, which is an environment gap rather
+ * than a fault in the component under test.
  *
- * Next prerenders a static route with `Cache-Control: s-maxage=31536000`, which
- * tells every intermediary — a CDN, or a corporate gateway's transparent
- * proxy — that this HTML is good for a year. It is not: the same URL serves a
- * different app after every deploy, and an intermediary that never purges will
- * keep handing out the old build no matter how many browsers the user tries.
- * Rendering per request costs nothing here; the page is a client-side shell.
+ * The stub answers "no preference": reduced motion off, and no media query
+ * matching. That is the neutral baseline a test should observe.
  */
-export const dynamic = 'force-dynamic'
-
-export default function Home() {
-  return <AppShell />
+if (typeof window !== 'undefined' && !window.matchMedia) {
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
 }

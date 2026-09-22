@@ -28,6 +28,7 @@ import {
   FileText,
   History,
   LayoutGrid,
+  LogOut,
   Search,
   Settings,
   SquarePen,
@@ -35,7 +36,6 @@ import {
 } from 'lucide-react'
 import { useId, useState } from 'react'
 import { Logo } from '@/components/brand/logo'
-import { StatusBadge } from '@/components/ui/status-badge'
 import { cx } from '@/lib/cx'
 
 export type ShellView = 'new' | 'plaza' | 'runs' | 'profile'
@@ -50,7 +50,6 @@ const PRIMARY_NAV: NavItem[] = [
   { id: 'new', label: '新建定制', icon: <SquarePen size={18} /> },
   { id: 'plaza', label: '能力广场', icon: <LayoutGrid size={18} /> },
   { id: 'runs', label: '运行记录', icon: <History size={18} /> },
-  { id: 'profile', label: '个人主页', icon: <UserRound size={18} /> },
 ]
 
 export interface RecentRun {
@@ -59,37 +58,27 @@ export interface RecentRun {
   subtitle: string
 }
 
-export type BackendHealth = 'checking' | 'online' | 'offline'
-
 export interface SidebarProps {
   activeItem: ShellView
   recentRuns?: RecentRun[]
-  health: BackendHealth
   onSelectItem: (id: ShellView) => void
   onSelectRun?: (id: string) => void
   onOpenSettings: () => void
-  onLogout: () => void
-}
-
-const HEALTH_META: Record<
-  BackendHealth,
-  { label: string; tone: 'done' | 'fail' | 'mute' }
-> = {
-  checking: { label: '连接中', tone: 'mute' },
-  online: { label: '后端在线', tone: 'done' },
-  offline: { label: '后端离线', tone: 'fail' },
+  /** Omitted when the server has no accounts, hiding the sign-out control. */
+  onLogout?: () => void
+  /** Shown beside sign-out so the user knows which account is active. */
+  userEmail?: string
 }
 
 export function Sidebar({
   activeItem,
   recentRuns = [],
-  health,
   onSelectItem,
   onSelectRun,
   onOpenSettings,
   onLogout,
+  userEmail,
 }: SidebarProps) {
-  const healthMeta = HEALTH_META[health]
   const [query, setQuery] = useState('')
   const searchId = useId()
   const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
@@ -186,27 +175,56 @@ export function Sidebar({
         </div>
       </div>
 
-      <div className="border-border mt-4 flex items-center justify-between border-t px-1 pt-4">
-        <StatusBadge tone={healthMeta.tone} dot>
-          {healthMeta.label}
-        </StatusBadge>
-        <div className="flex items-center gap-1">
+      <div className="border-border mt-4 flex items-center gap-1 border-t px-1 pt-4">
+        {/* The account row opens 个人主页. It used to sign the user out on a
+            single click, which is the last thing anyone expects from their own
+            name — signing out is now its own labelled control. */}
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation()
+            onSelectItem('profile')
+          }}
+          aria-current={activeItem === 'profile' ? 'page' : undefined}
+          aria-label="个人主页"
+          title={userEmail ? `已登录：${userEmail}` : '个人主页'}
+          className={cx(
+            'flex min-w-0 flex-1 items-center gap-2 rounded-xs px-2 py-2 text-left transition-colors',
+            activeItem === 'profile'
+              ? 'bg-background text-foreground-strong shadow-md'
+              : 'text-foreground hover:bg-[var(--overlay-hover)]'
+          )}
+        >
+          <span className="bg-foreground-strong text-background flex size-7 shrink-0 items-center justify-center rounded-full">
+            <UserRound size={15} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-sm">个人主页</span>
+        </button>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          aria-label="设置"
+          className="text-foreground-muted hover:text-foreground-strong hover:bg-[var(--overlay-hover)] flex size-9 shrink-0 items-center justify-center rounded-full transition-colors"
+        >
+          <Settings size={18} />
+        </button>
+        {/* Only rendered when the server actually has accounts: signing out of
+            a server with auth disabled would 503 and bounce the user to a
+            login screen that cannot work. */}
+        {onLogout ? (
           <button
             type="button"
-            onClick={onOpenSettings}
-            aria-label="设置"
-            className="text-foreground-muted hover:text-foreground-strong hover:bg-[var(--overlay-hover)] flex size-9 items-center justify-center rounded-full transition-colors"
+            onClick={(event) => {
+              event.stopPropagation()
+              onLogout()
+            }}
+            aria-label="退出登录"
+            title="退出登录"
+            className="text-foreground-muted hover:text-foreground-strong hover:bg-[var(--overlay-hover)] flex size-9 shrink-0 items-center justify-center rounded-full transition-colors"
           >
-            <Settings size={18} />
+            <LogOut size={17} />
           </button>
-          <button
-            type="button"
-            onClick={onLogout}
-            className="text-foreground-muted hover:text-foreground-strong rounded-full px-2 py-1 text-xs"
-          >
-            退出
-          </button>
-        </div>
+        ) : null}
       </div>
     </aside>
   )

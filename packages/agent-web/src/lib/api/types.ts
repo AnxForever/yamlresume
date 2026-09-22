@@ -279,6 +279,58 @@ export type StylePresetID =
   | 'modern-casual'
   | 'developer-two-column'
 
+/**
+ * Mirrors the backend `TailorPreferencesSchema`, which is what `POST /v1/runs`
+ * accepts and what a saved profile stores as its defaults.
+ *
+ * It lives here rather than in `lib/presets.ts` because it is a backend
+ * contract, not a UI scenario preset: the transport layer has to name it, and
+ * a transport importing from the launcher's preset list would be backwards.
+ * `lib/presets.ts` re-exports it for existing callers.
+ */
+export interface TailorPreferences {
+  language?: string
+  maxPages?: 1 | 2
+  targetTitle?: string
+  formats: OutputFormat[]
+  styles: StylePresetID[]
+}
+
+/**
+ * A standing supplement to the base resume.
+ *
+ * Only `text` and `link` persist. Uploaded files (PDF, DOCX) are deliberately
+ * not stored server-side — they travel with each run instead — so nothing here
+ * should imply a file library exists.
+ */
+export interface ProfileMaterial {
+  id: string
+  kind: 'text' | 'link'
+  title: string
+  value: string
+  createdAt: string
+}
+
+export interface ProfilePayload {
+  resumeYaml: string
+  /** Defaults for new runs, matching what `POST /v1/runs` accepts. */
+  preferences: TailorPreferences | null
+  materials: ProfileMaterial[]
+}
+
+export interface ProfileSummary {
+  /** First save; preserved across later replacements. */
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * What `GET /v1/profile` returns. The server writes the shapes above but reads
+ * them back loosely so a document an older build stored still round-trips;
+ * `lib/profile.ts` is where that looseness is narrowed.
+ */
+export interface ProfileResponse extends ProfilePayload, ProfileSummary {}
+
 export interface OutputArtifact {
   format: OutputFormat
   style: StylePresetID

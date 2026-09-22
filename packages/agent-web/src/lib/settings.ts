@@ -31,7 +31,7 @@
  * or JD content.
  */
 
-import { DEFAULT_AGENT_API_BASE_URL } from '@/lib/api/client'
+import { configuredBaseUrl } from '@/lib/api/client'
 
 export interface AppSettings {
   baseUrl: string
@@ -42,7 +42,9 @@ export const DRAFT_STORAGE_PREFIX = 'career-agent:draft:'
 export const RUNS_STORAGE_KEY = 'career-agent:runs:v1'
 
 export function defaultSettings(): AppSettings {
-  return { baseUrl: DEFAULT_AGENT_API_BASE_URL }
+  // Empty means same-origin, which is the correct default for a deployment and
+  // a perfectly usable one (relative URLs) anywhere the API is proxied.
+  return { baseUrl: configuredBaseUrl() }
 }
 
 function safeGetItem(key: string): string | null {
@@ -72,12 +74,30 @@ export function loadSettings(): AppSettings {
   }
   try {
     const parsed = JSON.parse(raw) as Partial<AppSettings>
-    return {
-      baseUrl:
-        typeof parsed.baseUrl === 'string' && parsed.baseUrl.trim().length > 0
-          ? parsed.baseUrl.trim()
-          : DEFAULT_AGENT_API_BASE_URL,
+    const storedBaseUrl =
+      typeof parsed.baseUrl === 'string' ? parsed.baseUrl.trim() : ''
+
+    // A browser can retain the development setting (localhost:8787) when the
+    // same profile later opens the deployed app. In production that points at
+    // the viewer's machine and looks like a refresh-time backend disconnect.
+    // Keep explicitly configured remote URLs, but migrate loopback addresses
+    // back to the deployment's same-origin default.
+    if (storedBaseUrl && process.env.NODE_ENV === 'production') {
+      try {
+        const hostname = new URL(storedBaseUrl).hostname
+        if (
+          hostname === 'localhost' ||
+          hostname === '127.0.0.1' ||
+          hostname === '::1'
+        ) {
+          return { baseUrl: configuredBaseUrl() }
+        }
+      } catch {
+        // Invalid persisted values are handled by the default below.
+      }
     }
+
+    return { baseUrl: storedBaseUrl || configuredBaseUrl() }
   } catch {
     return defaultSettings()
   }
@@ -87,9 +107,13 @@ export function saveSettings(settings: AppSettings): void {
   safeSetItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
 }
 
+/**
+ * Trailing slashes are dropped. An empty value is preserved as "same origin"
+ * rather than being replaced by a localhost address that would be meaningless
+ * on a server.
+ */
 export function normalizeBaseUrl(value: string): string {
-  const trimmed = value.trim().replace(/\/+$/, '')
-  return trimmed.length > 0 ? trimmed : DEFAULT_AGENT_API_BASE_URL
+  return value.trim().replace(/\/+$/, '')
 }
 
 /**

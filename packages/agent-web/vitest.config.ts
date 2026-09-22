@@ -15,6 +15,8 @@ export default mergeConfig(
     },
     test: {
       environment: 'jsdom',
+      // Fills the browser APIs jsdom omits; see the file for what and why.
+      setupFiles: ['./src/test/setup.ts'],
       include: ['src/**/*.{test,spec}.{ts,tsx}'],
     },
   })

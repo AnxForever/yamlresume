@@ -1,12 +1,12 @@
 # Career Agent Web 前端 Feature Brief
 
 > 功能 ID：RA-013 / Unit 9A
-> 状态：Designed，未实现（本文只走完路线图第 6 节门禁的第 1–5 步）
-> 基线：2026-09-16，`f8b7468`
+> 状态：Implemented for development；尚未 Operational
+> 最后复核：2026-09-16
 > 依赖：RA-008（HTTP API，已实现）、RA-009（异步 Run，开发级）、
-> RA-011（HITL，契约与状态机已落地，回答端点进行中）
+> RA-011（HITL，契约、状态机和回答端点已落地）
 >
-> 注意：RA-011 正由并行工作推进。本文引用的 `InteractionRequest` 形状以
+> 注意：本文引用的 `InteractionRequest` 形状以
 > `packages/resume-agent/src/contracts.ts` 为准，若与本文不一致，以代码为准。
 
 ## 1. 用户问题与成功结果
@@ -259,30 +259,31 @@ normalizing_candidate → needs_input → needs_input → analyzing_jd
 | --- | --- |
 | 首屏可交互 | 本地 < 1.5s |
 | 阶段状态延迟 | 轮询模式下 < 2s 反映后端阶段变化 |
-| 大产物渲染 | 5 样式 × 7 格式响应不卡死主线程（分片/懒加载） |
+| 大产物渲染 | 5 样式 × 10 格式响应不卡死主线程（当前产物按按钮下载，HTML 预览使用 sandbox） |
 | 键盘可达 | 所有交互控件可 Tab 到达并有可见焦点环 |
 | 无障碍 | 阶段状态变化通过 `aria-live` 播报；仅靠颜色不传达状态 |
 
-## 10. 测试证据（计划）
+## 10. 测试证据
 
 | 层 | 证明什么 |
 | --- | --- |
 | 单元（Vitest + Testing Library） | `PollingRunEventStream` 差分出正确事件序列；控件按 `control` 类型渲染；答案校验规则 |
 | 契约 | 用 OpenAPI 生成的类型编译通过；`capabilities` 驱动表单而非硬编码 |
 | 集成（fake 后端） | 完整 Run：创建 → 阶段推进 → 完成 → 下载；失败 Run；404 恢复；部分格式失败 |
-| 人工验收 | 真实后端 + 真实模型跑一次，确认 diff / 匹配 / 预览可读 |
+| 自动化结果 | 14 个测试文件、190 项通过；API 客户端、轮询差分、状态投影、HITL 控件、下载、认证边界和 composer 合同均覆盖 |
+| 类型/构建 | agent-web TypeScript 通过；Next.js 16.3.5 生产构建通过；API 与 resume-agent 包类型检查和构建通过 |
+| 人工验收 | 真实后端 + 真实模型的浏览器上传到下载仍未完成；后端真实 Provider Eval 已单独记录 |
 
 覆盖率目标与仓库一致（~100%），测试文件与源码同目录 `name.test.tsx`。
 
 ## 11. 剩余缺口
 
-1. 回答端点尚未出现在 `server.ts`，且 `control` 只实现了 `text`；其余 9 种控件
-   前端需按契约预留渲染器，暂时无法端到端验证；
+1. `file` 控件仍不能在浏览器回答后重新归一化；当前安全降级为只读说明并允许重新发起运行；
 2. 后端无 SSE，实时性受轮询限制；
 3. 后端无鉴权，本前端只能本地跑，不可公网部署；
 4. 无 `Idempotency-Key`，重复提交靠前端锁；
 5. 大产物走 JSON Base64，未来改对象存储时下载逻辑要重写；
 6. agent-elements 的 React 19 / Tailwind v4 组合未在本仓库验证。
 
-下一道门禁：本文与 `career-agent-web-interaction-design.zh-CN.md` 评审通过后，
-先做"空壳验证 + `RunEventStream` 单元测试"这一个最小单元，再进 UI 实现。
+下一道门禁：用真实部署 API、真实 Provider 和浏览器完成一次从上传到下载的人工验收，
+并补充可访问性与大产物性能记录；在此之前保持 `Implemented for development`，不标记 `Operational`。

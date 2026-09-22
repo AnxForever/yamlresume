@@ -22,9 +22,42 @@
  * IN THE SOFTWARE.
  */
 
-import type { InteractionAnswer, ResumeAgentRun } from '@/lib/api/types'
+import type {
+  InteractionAnswer,
+  ProfilePayload,
+  ProfileResponse,
+  ProfileSummary,
+  ResumeAgentRun,
+} from '@/lib/api/types'
 
-export const DEFAULT_AGENT_API_BASE_URL = 'http://localhost:8787'
+/**
+ * Where the API lives when nothing else says otherwise.
+ *
+ * An empty string means "the origin this page was served from": in a
+ * deployment the API is normally published on the same origin behind a
+ * reverse proxy, and relative URLs then work with no configuration at all —
+ * and with none of the CORS or cookie problems that a second origin brings.
+ */
+export const SAME_ORIGIN_BASE_URL = ''
+
+/** The address the API listens on when run locally for development. */
+export const LOCAL_DEV_AGENT_API_BASE_URL = 'http://localhost:8787'
+
+/**
+ * Resolved once at build time. `NEXT_PUBLIC_*` variables are inlined into the
+ * client bundle by Next, so this cannot be read at runtime.
+ */
+export function configuredBaseUrl(): string {
+  const fromEnv = process.env.NEXT_PUBLIC_AGENT_API_BASE_URL?.trim()
+  if (fromEnv) {
+    return fromEnv.replace(/\/+$/, '')
+  }
+  // Development talks to the local API on its own port; a production build
+  // talks to whatever serves it.
+  return process.env.NODE_ENV === 'development'
+    ? LOCAL_DEV_AGENT_API_BASE_URL
+    : SAME_ORIGIN_BASE_URL
+}
 
 /**
  * Per-request ceiling. Chosen well above the slowest legitimate call (a full
@@ -72,6 +105,8 @@ export interface AuthUser {
 export interface AuthSession {
   user: AuthUser
   expiresAt: string
+  /** `true` when the server issued a persistent (survives restart) cookie. */
+  persistent?: boolean
 }
 
 /**
@@ -93,6 +128,17 @@ export type ApiResult<T> =
  */
 export type GetRunResult =
   | { kind: 'found'; run: ResumeAgentRun }
+  | { kind: 'not_found' }
+  | { kind: 'error'; error: ApiFailure }
+
+/**
+ * Three-way, for the same reason `GetRunResult` is: having no profile yet is
+ * the normal state of a new account, not a transport failure, and collapsing
+ * the two would leave the page unable to tell "you have not set this up" from
+ * "the server is unreachable".
+ */
+export type GetProfileResult =
+  | { kind: 'found'; profile: ProfileResponse }
   | { kind: 'not_found' }
   | { kind: 'error'; error: ApiFailure }
 
@@ -132,6 +178,28 @@ export interface AgentCapabilities {
       template: string
     }>
   }
+  /**
+   * What this server process actually has switched on. `authentication`
+   * decides whether the app shows a login gate at all: when it is `disabled`
+   * every `/v1/auth/*` route answers 503, so a login screen would be a dead
+   * end that no credentials could ever get past.
+   */
+  runtime?: {
+    providerConfigured: boolean
+    runStore: 'memory' | 'sqlite'
+    authentication: 'enabled' | 'disabled'
+    /** Social sign-in providers this server has credentials for. */
+    oauthProviders?: Array<{ id: string; label: string }>
+    /** `invite` means the register form must ask for an invitation code. */
+    registration?: 'open' | 'invite'
+  }
+  /**
+   * Present only when this server has accounts, because a profile is stored
+   * per account. Its absence is how the profile page knows the routes are
+   * unavailable, and `materials` is the cap the editor enforces — neither is
+   * hard-coded on this side.
+   */
+  profile?: { materials: number }
 }
 
 export interface AgentApiClientOptions {
@@ -162,10 +230,7 @@ export class AgentApiClient {
   private readonly requestIdFactory: () => string
 
   constructor(options: AgentApiClientOptions = {}) {
-    this.baseUrl = (options.baseUrl ?? DEFAULT_AGENT_API_BASE_URL).replace(
-      /\/+$/,
-      ''
-    )
+    this.baseUrl = (options.baseUrl ?? configuredBaseUrl()).replace(/\/+$/, '')
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis)
     this.requestIdFactory = options.requestIdFactory ?? defaultRequestId
   }
@@ -176,24 +241,71 @@ export class AgentApiClient {
 
   async login(
     email: string,
-    password: string
+    password: string,
+    remember = false
   ): Promise<ApiResult<AuthSession>> {
-    return this.send<AuthSession>('POST', '/v1/auth/login', { email, password })
+    return this.send<AuthSession>('POST', '/v1/auth/login', {
+      email,
+      password,
+      remember,
+    })
   }
   async register(
     email: string,
-    password: string
+    password: string,
+    remember = false,
+    inviteCode?: string
   ): Promise<ApiResult<AuthSession>> {
     return this.send<AuthSession>('POST', '/v1/auth/register', {
       email,
       password,
+      remember,
+      ...(inviteCode ? { inviteCode } : {}),
     })
   }
-  async me(): Promise<ApiResult<AuthSession>> {
-    return this.send<AuthSession>('GET', '/v1/auth/me')
+  /**
+   * Resolve the current identity.
+   *
+   * Returns the bare `AuthUser`, not an `AuthSession`: the session cookie is
+   * HttpOnly, so the browser can never read the token or its expiry — the
+   * server responds with just the user it resolved from the cookie
+   * (`server.ts` passes `identity.user`). `login`/`register` do return a full
+   * `AuthSession`, which is where `expiresAt` comes from.
+   */
+  async me(): Promise<ApiResult<AuthUser>> {
+    return this.send<AuthUser>('GET', '/v1/auth/me')
   }
   async logout(): Promise<ApiResult<null>> {
     return this.send<null>('POST', '/v1/auth/logout')
+  }
+
+  /**
+   * Ask for a reset link. Resolves the same way whether or not the address has
+   * an account — the server answers 204 either way on purpose, so the UI must
+   * never imply "we found you" or "we did not".
+   */
+  async requestPasswordReset(email: string): Promise<ApiResult<null>> {
+    return this.send<null>('POST', '/v1/auth/password-reset', { email })
+  }
+
+  /** Finish a reset. On success every existing session for the account is gone. */
+  async confirmPasswordReset(
+    token: string,
+    password: string
+  ): Promise<ApiResult<null>> {
+    return this.send<null>('POST', '/v1/auth/password-reset/confirm', {
+      token,
+      password,
+    })
+  }
+
+  /**
+   * Where the browser must go to start a provider sign-in. This is a full-page
+   * navigation, not a fetch: the provider needs to show its own consent screen
+   * and the session cookie is set on the callback.
+   */
+  oauthStartUrl(providerId: string): string {
+    return `${this.baseUrl}/v1/auth/oauth/${encodeURIComponent(providerId)}/start`
   }
 
   async capabilities(): Promise<ApiResult<AgentCapabilities>> {
@@ -295,8 +407,37 @@ export class AgentApiClient {
     return { kind: 'error', error: result.error }
   }
 
+  /**
+   * Read the signed-in user's career profile.
+   *
+   * A server built before these routes existed answers 404 to all three verbs.
+   * The caller tells that apart from "this account has no profile yet" by
+   * checking `capabilities.endpoints.profile` first.
+   */
+  async getProfile(): Promise<GetProfileResult> {
+    const result = await this.send<ProfileResponse>('GET', '/v1/profile')
+    if (result.kind === 'ok') {
+      return { kind: 'found', profile: result.data }
+    }
+    if (result.error.status === 404) {
+      return { kind: 'not_found' }
+    }
+    return { kind: 'error', error: result.error }
+  }
+
+  async putProfile(
+    payload: ProfilePayload
+  ): Promise<ApiResult<ProfileSummary>> {
+    return this.send<ProfileSummary>('PUT', '/v1/profile', payload)
+  }
+
+  /** The route answers 204 with no body, so the payload is `null`. */
+  async deleteProfile(): Promise<ApiResult<null>> {
+    return this.send<null>('DELETE', '/v1/profile')
+  }
+
   private async send<T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     path: string,
     body?: unknown
   ): Promise<ApiResult<T>> {
@@ -367,10 +508,38 @@ export class AgentApiClient {
     clearTimeout(timer)
 
     const headerRequestId = response.headers?.get?.('X-Request-Id') ?? undefined
+    const fallbackRequestId = headerRequestId ?? requestId
+
+    // Read the body as text rather than `json()`. Several routes answer 204
+    // with a deliberately empty body (`POST /v1/auth/logout`, `DELETE
+    // /v1/profile`), and `response.json()` rejects on those — which turned
+    // every successful logout into an `invalid_response` error that no caller
+    // could tell apart from a real transport failure.
+    const body = await response.text()
+    if (body.trim().length === 0) {
+      if (!response.ok) {
+        return {
+          kind: 'error',
+          error: {
+            code: 'unknown_error',
+            message: `请求失败（${response.status}）`,
+            status: response.status,
+            requestId: fallbackRequestId,
+          },
+        }
+      }
+      // A no-content response has no payload; the caller names `T` and knows
+      // its route returns nothing, so `null` is the honest value here.
+      return {
+        kind: 'ok',
+        data: null as unknown as T,
+        requestId: fallbackRequestId,
+      }
+    }
 
     let payload: unknown
     try {
-      payload = await response.json()
+      payload = JSON.parse(body) as unknown
     } catch {
       return {
         kind: 'error',
@@ -378,7 +547,7 @@ export class AgentApiClient {
           code: 'invalid_response',
           message: '后端返回的不是合法 JSON',
           status: response.status,
-          ...(headerRequestId ? { requestId: headerRequestId } : { requestId }),
+          requestId: fallbackRequestId,
         },
       }
     }

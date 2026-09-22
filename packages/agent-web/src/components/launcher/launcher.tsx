@@ -24,16 +24,22 @@
 
 'use client'
 
+import { ArrowUp, LoaderCircle, Paperclip, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { LogoMark } from '@/components/brand/logo'
 import type { SubmitRunResult } from '@/components/shell/app-shell'
 import type { AgentApiClient, ChatMessage } from '@/lib/api/client'
-import { type AttachedFile, loadDraft, saveDraft } from '@/lib/draft'
+import { type AttachedFile, loadPresetId, savePresetId } from '@/lib/draft'
 import {
   availablePresets,
   SCENARIO_PRESETS,
   type TailorPreferences,
 } from '@/lib/presets'
+
+/**
+ * Development-only affordances (the "start your backend" instructions) are
+ * compiled out of a production bundle rather than shown to end users.
+ */
+const isDevelopment = process.env.NODE_ENV === 'development'
 
 let fileCounter = 0
 
@@ -72,7 +78,11 @@ export interface LauncherViewProps {
   onRetryCapabilities: () => void
   onOpenSettings: () => void
   client: AgentApiClient
+  /** The saved base resume; sent as the run's candidate input. */
   profileResume: string
+  /** The saved default output preferences, or null to follow the preset. */
+  profilePreferences: TailorPreferences | null
+  onOpenProfile: () => void
 }
 
 interface CapabilityView {
@@ -111,19 +121,20 @@ export function LauncherView({
   onOpenSettings,
   client,
   profileResume,
+  profilePreferences,
+  onOpenProfile,
 }: LauncherViewProps) {
-  const [jobDescription, setJobDescription] = useState('')
-  const [candidateYaml, setCandidateYaml] = useState('')
   const [files, setFiles] = useState<AttachedFile[]>([])
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [draftRestored, setDraftRestored] = useState(false)
   const [presetId, setPresetId] = useState('')
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatBusy, setChatBusy] = useState(false)
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatReady, setChatReady] = useState(false)
+  /** Opting out is a per-session choice; the profile itself is not touched. */
+  const [useProfileResume, setUseProfileResume] = useState(true)
 
   const capabilityView =
     capabilities.kind === 'ready' ? asCapabilityView(capabilities.data) : null
@@ -132,27 +143,20 @@ export function LauncherView({
       capabilityView ? availablePresets(capabilityView) : SCENARIO_PRESETS,
     [capabilityView]
   )
-  // Restore the previously typed draft on mount. Only the text survives —
-  // attached files cannot be serialized, so the user is told when they were
-  // dropped rather than silently losing them.
+  // Only the chosen preset survives a reload. The job text and candidate YAML
+  // used to be persisted here as well, but nothing has rendered those fields
+  // since the input area became a single box — they were written and read back
+  // without ever reaching a run.
   useEffect(() => {
-    const stored = loadDraft()
-    if (!stored) {
-      return
+    const stored = loadPresetId()
+    if (stored) {
+      setPresetId(stored)
     }
-    setJobDescription(stored.jobDescription)
-    setCandidateYaml(stored.candidateYaml)
-    if (stored.presetId) {
-      setPresetId(stored.presetId)
-    }
-    setDraftRestored(true)
   }, [])
 
-  // Persist text as it is typed (the writes are tiny and idempotent), so a
-  // failed run or a refresh never costs the user the paste again.
   useEffect(() => {
-    saveDraft({ jobDescription, candidateYaml, presetId })
-  }, [jobDescription, candidateYaml, presetId])
+    savePresetId(presetId)
+  }, [presetId])
 
   // Once the presets are known, make sure the selected one still exists (the
   // backend may not support it) and otherwise fall back to the featured one.
@@ -220,8 +224,13 @@ export function LauncherView({
     try {
       const result = await onSubmitRun({
         jobDescription: transcript,
-        candidateYaml: '',
-        preferences: preset.preferences,
+        // The saved profile is the candidate input. This is what makes the
+        // profile page more than a notepad: before this, the resume stored
+        // there reached the chat call and nothing else, so every run started
+        // from the conversation alone.
+        candidateYaml: useProfileResume ? profileResume : '',
+        // Saved defaults win over the preset; the preset still names the run.
+        preferences: profilePreferences ?? preset.preferences,
         jobFiles: [],
         candidateFiles: [
           ...files.filter((entry) => entry.role === 'candidate'),
@@ -243,25 +252,7 @@ export function LauncherView({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[760px] flex-col px-8 pt-[14vh] pb-12">
-      <header className="mb-8 flex items-center gap-4">
-        <LogoMark size={48} />
-        <div>
-          <h1 className="text-foreground-strong text-[24px] font-semibold tracking-tight">
-            为这份岗位定制简历
-          </h1>
-          <p className="text-foreground mt-2 text-[15px]">
-            粘贴 JD 和你的简历，生成可追溯、能过 ATS 的定制版本。
-          </p>
-        </div>
-      </header>
-
-      {draftRestored ? (
-        <p className="text-foreground-muted bg-background shadow-md mb-4 rounded-md px-4 py-3 text-sm leading-relaxed">
-          已恢复上次输入的内容。带过的文件不会保存，需要的话请重新拖进来。
-        </p>
-      ) : null}
-
+    <div className="mx-auto flex w-full max-w-[960px] flex-1 flex-col justify-center px-6 py-12 sm:px-10">
       {capabilities.kind === 'error' ? (
         <div
           role="alert"
@@ -269,23 +260,39 @@ export function LauncherView({
         >
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-foreground-strong text-sm font-medium">
-                还差一步：需要先在本机启动后端
-              </p>
-              <p className="text-foreground-muted mt-2 text-sm leading-relaxed">
-                Career Agent
-                的简历处理跑在一个本机后端服务上（它保管你的材料，不经过第三方）。
-                在项目目录打开终端运行：
-              </p>
-              <code className="text-foreground-strong bg-background-muted mt-2 block rounded-xs px-3 py-2 font-mono text-xs">
-                pnpm agent-api dev
-              </code>
-              <p className="text-foreground-muted mt-2 text-xs leading-relaxed">
-                启动后点「重试」。地址不对就打开设置改。当前地址连不上：
-                <span className="text-foreground-subtle">
-                  {capabilities.message}
-                </span>
-              </p>
+              {isDevelopment ? (
+                <>
+                  <p className="text-foreground-strong text-sm font-medium">
+                    还差一步：需要先在本机启动后端
+                  </p>
+                  <p className="text-foreground-muted mt-2 text-sm leading-relaxed">
+                    Career Agent
+                    的简历处理跑在一个本机后端服务上（它保管你的材料，不经过第三方）。
+                    在项目目录打开终端运行：
+                  </p>
+                  <code className="text-foreground-strong bg-background-muted mt-2 block rounded-xs px-3 py-2 font-mono text-xs">
+                    pnpm agent-api dev
+                  </code>
+                  <p className="text-foreground-muted mt-2 text-xs leading-relaxed">
+                    启动后点「重试」。地址不对就打开设置改。当前地址连不上：
+                    <span className="text-foreground-subtle">
+                      {capabilities.message}
+                    </span>
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-foreground-strong text-sm font-medium">
+                    服务暂时不可用
+                  </p>
+                  <p className="text-foreground-muted mt-2 text-sm leading-relaxed">
+                    没能连上后端服务。稍后重试；如果持续如此，请联系部署这个站点的人。
+                  </p>
+                  <p className="text-foreground-subtle mt-2 text-xs leading-relaxed">
+                    {capabilities.message}
+                  </p>
+                </>
+              )}
             </div>
             <div className="flex shrink-0 flex-col items-stretch gap-2">
               <button
@@ -316,6 +323,52 @@ export function LauncherView({
         </p>
       ) : null}
 
+      <p
+        className={
+          useProfileResume && profileResume.trim().length > 0
+            ? 'text-foreground-muted mx-auto mb-3 w-full max-w-[760px] px-1 text-xs leading-relaxed'
+            : 'text-foreground-subtle mx-auto mb-3 w-full max-w-[760px] px-1 text-xs leading-relaxed'
+        }
+      >
+        {profileResume.trim().length === 0 ? (
+          <>
+            档案里还没有基础简历，这次运行只会用对话内容。
+            <button
+              type="button"
+              onClick={onOpenProfile}
+              className="text-secondary-emphasis ml-1 underline underline-offset-2"
+            >
+              去个人主页添加
+            </button>
+          </>
+        ) : useProfileResume ? (
+          <>
+            本次会以个人主页的基础简历（
+            {profileResume.trim().length.toLocaleString('zh-CN')}{' '}
+            字符）作为你的材料。
+            <button
+              type="button"
+              onClick={() => setUseProfileResume(false)}
+              className="text-secondary-emphasis ml-1 underline underline-offset-2"
+            >
+              这次不用
+            </button>
+          </>
+        ) : (
+          <>
+            本次不使用档案里的基础简历。若对话里没有你的经历，Agent
+            将没有可引用的证据。
+            <button
+              type="button"
+              onClick={() => setUseProfileResume(true)}
+              className="text-secondary-emphasis ml-1 underline underline-offset-2"
+            >
+              改回使用
+            </button>
+          </>
+        )}
+      </p>
+
       <UnifiedAgentInput
         input={chatInput}
         onInputChange={setChatInput}
@@ -333,7 +386,7 @@ export function LauncherView({
   )
 }
 
-function UnifiedAgentInput({
+export function UnifiedAgentInput({
   input,
   onInputChange,
   messages,
@@ -360,18 +413,28 @@ function UnifiedAgentInput({
 }) {
   const fileInput = useRef<HTMLInputElement>(null)
   return (
-    <section
-      className="bg-background shadow-md rounded-md p-5"
-      aria-label="Agent 输入"
-    >
-      <h2 className="text-foreground-strong text-sm font-medium">
-        告诉 Agent 你要做什么
-      </h2>
-      <p className="text-foreground-muted mt-1 text-xs">
-        直接输入文字，或把任意简历、职位描述、作品集文件拖进这里。缺少信息时
-        Agent 会继续询问。
-      </p>
-      <div className="my-3 flex max-h-56 flex-col gap-2 overflow-y-auto">
+    <section className="mx-auto w-full max-w-[760px]" aria-label="Agent 输入">
+      {files.length > 0 ? (
+        <ul className="mb-3 flex flex-wrap gap-2 px-1">
+          {files.map((file) => (
+            <li
+              key={file.id}
+              className="bg-background text-foreground-muted border-border flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs shadow-sm"
+            >
+              <span className="max-w-48 truncate">{file.name}</span>
+              <button
+                type="button"
+                onClick={() => onRemoveFile(file.id)}
+                aria-label={`移除 ${file.name}`}
+                className="text-foreground-subtle hover:text-foreground-strong -mr-1 flex size-4 items-center justify-center rounded-full transition-colors"
+              >
+                <X size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="mb-3 flex max-h-56 flex-col gap-2 overflow-y-auto px-1">
         {messages.map((entry, index) => (
           <p
             key={`${entry.role}-${index}`}
@@ -385,32 +448,15 @@ function UnifiedAgentInput({
           </p>
         ))}
       </div>
-      {files.length > 0 ? (
-        <ul className="mb-3 flex flex-wrap gap-2">
-          {files.map((file) => (
-            <li
-              key={file.id}
-              className="bg-background-muted text-foreground rounded-full px-3 py-1 text-xs"
-            >
-              {file.name}
-              <button
-                type="button"
-                className="ml-2"
-                onClick={() => onRemoveFile(file.id)}
-                aria-label={`移除 ${file.name}`}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
       {error ? (
-        <p role="alert" className="text-error-emphasis mb-2 text-xs">
+        <p
+          role="alert"
+          className="text-error-emphasis bg-error-subtle mb-3 rounded-lg px-3 py-2 text-xs"
+        >
           {error}
         </p>
       ) : null}
-      <div className="flex items-end gap-2 rounded-md bg-background-muted p-2">
+      <div className="bg-background focus-within:border-primary/50 focus-within:ring-primary/10 rounded-2xl border border-[var(--border-subtle)] p-3 shadow-[0_8px_30px_oklch(0.3_0.02_250/8%)] transition-[border-color,box-shadow] focus-within:ring-4 sm:p-4">
         <input
           ref={fileInput}
           type="file"
@@ -422,14 +468,6 @@ function UnifiedAgentInput({
             event.target.value = ''
           }}
         />
-        <button
-          type="button"
-          onClick={() => fileInput.current?.click()}
-          className="text-foreground-muted px-2 py-2 text-xl"
-          aria-label="添加文件"
-        >
-          ＋
-        </button>
         <textarea
           value={input}
           onChange={(event) => onInputChange(event.target.value)}
@@ -439,25 +477,42 @@ function UnifiedAgentInput({
               onSend()
             }
           }}
-          rows={2}
-          placeholder="例如：帮我做一份后端工程师简历"
-          className="text-foreground-strong placeholder:text-foreground-muted min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none"
+          rows={5}
+          aria-label="输入消息"
+          placeholder="请输入文字"
+          className="text-foreground-strong placeholder:text-foreground-subtle min-h-[7.5rem] w-full resize-none bg-transparent px-2 py-2 text-[15px] leading-relaxed outline-none sm:min-h-[8.5rem]"
         />
-        <button
-          type="button"
-          onClick={onSend}
-          disabled={busy || input.trim().length === 0}
-          className="bg-primary text-primary-foreground rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
-        >
-          {busy ? '处理中…' : '发送'}
-        </button>
+        <div className="mt-2 flex items-center justify-between px-1">
+          <button
+            type="button"
+            onClick={() => fileInput.current?.click()}
+            className="text-foreground-muted hover:text-foreground-strong hover:bg-[var(--overlay-hover)] flex size-9 items-center justify-center rounded-full transition-colors"
+            aria-label="添加文件"
+            title="添加文件"
+          >
+            <Paperclip size={18} strokeWidth={1.8} />
+          </button>
+          <button
+            type="button"
+            onClick={onSend}
+            disabled={busy || input.trim().length === 0}
+            aria-label={busy ? '处理中' : '发送消息'}
+            className="bg-primary text-primary-foreground hover:bg-primary-strong flex size-9 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            {busy ? (
+              <LoaderCircle size={17} className="animate-spin" />
+            ) : (
+              <ArrowUp size={18} strokeWidth={2.2} />
+            )}
+          </button>
+        </div>
       </div>
       {ready ? (
         <button
           type="button"
           onClick={onGenerate}
           disabled={busy}
-          className="bg-secondary-emphasis text-secondary-foreground mt-3 rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
+          className="bg-secondary-emphasis text-secondary-foreground mt-3 rounded-full px-4 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
         >
           根据对话生成简历
         </button>

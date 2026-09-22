@@ -22,7 +22,7 @@
  * IN THE SOFTWARE.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const store = new Map<string, string>()
 
@@ -40,6 +40,10 @@ vi.stubGlobal('localStorage', {
   },
 })
 
+import {
+  configuredBaseUrl,
+  LOCAL_DEV_AGENT_API_BASE_URL,
+} from '@/lib/api/client'
 import {
   clearLocalData,
   DRAFT_STORAGE_PREFIX,
@@ -74,6 +78,28 @@ describe('settings persistence', () => {
     store.set(SETTINGS_STORAGE_KEY, JSON.stringify({ baseUrl: '   ' }))
     expect(loadSettings()).toEqual(defaultSettings())
   })
+
+  it('migrates a development loopback address in production', () => {
+    store.clear()
+    vi.stubEnv('NODE_ENV', 'production')
+    store.set(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({ baseUrl: 'http://localhost:8787' })
+    )
+
+    expect(loadSettings().baseUrl).toBe('')
+  })
+
+  it('keeps an explicitly configured remote address in production', () => {
+    store.clear()
+    vi.stubEnv('NODE_ENV', 'production')
+    store.set(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({ baseUrl: 'https://api.example.com' })
+    )
+
+    expect(loadSettings().baseUrl).toBe('https://api.example.com')
+  })
 })
 
 describe('normalizeBaseUrl', () => {
@@ -102,5 +128,45 @@ describe('clearLocalData', () => {
     expect(store.has(RUNS_STORAGE_KEY)).toBe(false)
     expect(store.has(`${DRAFT_STORAGE_PREFIX}abc`)).toBe(false)
     expect(store.get('unrelated-app-key')).toBe('keep me')
+  })
+})
+
+describe('base URL resolution', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('talks to the same origin in a production build by default', () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('NEXT_PUBLIC_AGENT_API_BASE_URL', '')
+
+    // A deployment must not need anyone to type an address into a settings
+    // dialog: relative URLs against whatever served the page.
+    expect(configuredBaseUrl()).toBe('')
+  })
+
+  it('talks to the local API on its own port in development', () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    vi.stubEnv('NEXT_PUBLIC_AGENT_API_BASE_URL', '')
+
+    expect(configuredBaseUrl()).toBe(LOCAL_DEV_AGENT_API_BASE_URL)
+  })
+
+  it('honours an explicitly configured address in any environment', () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('NEXT_PUBLIC_AGENT_API_BASE_URL', 'https://api.example.com/')
+
+    expect(configuredBaseUrl()).toBe('https://api.example.com')
+  })
+
+  it('keeps an empty value as "same origin" instead of defaulting to localhost', () => {
+    expect(normalizeBaseUrl('')).toBe('')
+    expect(normalizeBaseUrl('   ')).toBe('')
+  })
+
+  it('still trims a real address', () => {
+    expect(normalizeBaseUrl('  https://api.example.com//  ')).toBe(
+      'https://api.example.com'
+    )
   })
 })

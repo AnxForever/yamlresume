@@ -30,15 +30,13 @@ function jsonResponse(
   body: unknown,
   init: { status?: number; requestId?: string } = {}
 ): Response {
-  return {
-    ok: (init.status ?? 200) < 400,
+  // A real `Response`, not a hand-rolled stand-in: the client reads the body
+  // as text so it can tell an empty 204 from a malformed payload, and a fake
+  // that only implements `json()` would hide exactly that distinction.
+  return new Response(JSON.stringify(body), {
     status: init.status ?? 200,
-    headers: {
-      get: (name: string) =>
-        name === 'X-Request-Id' ? (init.requestId ?? null) : null,
-    },
-    json: async () => body,
-  } as unknown as Response
+    headers: init.requestId ? { 'X-Request-Id': init.requestId } : {},
+  })
 }
 
 function client(
@@ -246,14 +244,9 @@ describe('AgentApiClient', () => {
   })
 
   it('reports a non-JSON response without throwing', async () => {
-    const fetchImpl = vi.fn(async () => ({
-      kind: 'ok',
-      status: 200,
-      headers: { get: () => null },
-      json: async () => {
-        throw new Error('Unexpected token <')
-      },
-    }))
+    const fetchImpl = vi.fn(
+      async () => new Response('<html>gateway error</html>', { status: 200 })
+    )
 
     const result = await client(fetchImpl as unknown as typeof fetch).health()
 
@@ -383,6 +376,122 @@ describe('AgentApiClient multipart and answers', () => {
           value: 'Ada',
         }),
       })
+    )
+  })
+})
+
+describe('no-content responses', () => {
+  it('treats a 204 with an empty body as success, not a parse failure', async () => {
+    // `POST /v1/auth/logout` and `DELETE /v1/profile` answer 204 with no body.
+    // Reading those with `response.json()` rejected, so a successful logout
+    // came back as `invalid_response` — a failure the caller could not tell
+    // apart from the server being unreachable.
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }))
+
+    await expect(
+      client(fetchImpl as unknown as typeof fetch).logout()
+    ).resolves.toMatchObject({ kind: 'ok', data: null })
+  })
+
+  it('reports an empty error body with its status rather than a parse error', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 502 }))
+
+    const result = await client(fetchImpl as unknown as typeof fetch).health()
+
+    expect(result).toMatchObject({
+      kind: 'error',
+      error: { code: 'unknown_error', status: 502 },
+    })
+  })
+})
+
+describe('profile', () => {
+  it('returns a found profile without treating it as a run', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        data: {
+          resumeYaml: 'name: Ada',
+          preferences: { styles: ['ats-compact'], formats: ['pdf'] },
+          materials: [],
+          createdAt: '2026-09-16T12:00:00.000Z',
+          updatedAt: '2026-09-17T09:30:00.000Z',
+        },
+      })
+    )
+
+    const result = await client(
+      fetchImpl as unknown as typeof fetch
+    ).getProfile()
+
+    expect(result).toMatchObject({
+      kind: 'found',
+      profile: { resumeYaml: 'name: Ada' },
+    })
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://localhost:8787/v1/profile',
+      expect.objectContaining({ method: 'GET' })
+    )
+  })
+
+  it('separates "no profile yet" from a transport failure', async () => {
+    // A new account has no profile. Reporting that as an error would put a
+    // retry button in front of a perfectly normal state.
+    const missing = vi.fn(async () =>
+      jsonResponse(
+        { error: { code: 'profile_not_found', message: 'No profile' } },
+        { status: 404 }
+      )
+    )
+    await expect(
+      client(missing as unknown as typeof fetch).getProfile()
+    ).resolves.toEqual({ kind: 'not_found' })
+
+    const broken = vi.fn(async () =>
+      jsonResponse(
+        { error: { code: 'storage_failed', message: 'nope' } },
+        { status: 500 }
+      )
+    )
+    await expect(
+      client(broken as unknown as typeof fetch).getProfile()
+    ).resolves.toMatchObject({ kind: 'error' })
+  })
+
+  it('puts the profile and deletes it with the documented verbs', async () => {
+    const payload = {
+      resumeYaml: 'name: Ada',
+      preferences: {
+        styles: ['ats-compact'] as const,
+        formats: ['pdf'] as const,
+      },
+      materials: [],
+    }
+    const put = vi.fn(async () =>
+      jsonResponse({
+        data: {
+          createdAt: '2026-09-16T12:00:00.000Z',
+          updatedAt: '2026-09-16T12:00:00.000Z',
+        },
+      })
+    )
+
+    const written = await client(put as unknown as typeof fetch).putProfile(
+      payload as never
+    )
+
+    expect(written.kind).toBe('ok')
+    expect(put).toHaveBeenCalledWith(
+      'http://localhost:8787/v1/profile',
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify(payload) })
+    )
+
+    const remove = vi.fn(async () => new Response(null, { status: 204 }))
+    await expect(
+      client(remove as unknown as typeof fetch).deleteProfile()
+    ).resolves.toMatchObject({ kind: 'ok' })
+    expect(remove).toHaveBeenCalledWith(
+      'http://localhost:8787/v1/profile',
+      expect.objectContaining({ method: 'DELETE' })
     )
   })
 })
