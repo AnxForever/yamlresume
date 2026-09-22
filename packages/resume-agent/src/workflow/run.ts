@@ -210,6 +210,7 @@ const DEFAULT_TASK_LEASE_MS = 60_000
 const MAX_TIMER_DELAY_MS = 2_147_483_647
 const DEFAULT_MAX_TASK_ATTEMPTS = 3
 const DEFAULT_RECOVERY_LIMIT = 100
+const DEFAULT_TASK_POLL_MS = 1_000
 const TASK_ATTEMPTS_EXHAUSTED: AgentRunFailure = {
   code: 'agent_task_attempts_exhausted',
   message: 'The resume tailoring task exceeded its retry limit.',
@@ -248,6 +249,8 @@ export interface ResumeAgentRunServiceOptions {
   workerId?: string
   taskLeaseMs?: number
   taskHeartbeatMs?: number
+  /** Interval for the durable worker to look for released or newly queued tasks. */
+  taskPollMs?: number
   maxTaskAttempts?: number
 }
 
@@ -428,8 +431,11 @@ export class ResumeAgentRunService {
   private readonly workerId: string
   private readonly taskLeaseMs: number
   private readonly taskHeartbeatMs: number
+  private readonly taskPollMs: number
   private readonly maxTaskAttempts: number
   private readonly activeHeartbeats = new Set<RunTaskLeaseHeartbeat>()
+  private pollTimer: ReturnType<typeof setTimeout> | undefined
+  private pollInFlight = false
   private closed = false
 
   constructor(
@@ -445,6 +451,7 @@ export class ResumeAgentRunService {
     this.taskLeaseMs = options.taskLeaseMs ?? DEFAULT_TASK_LEASE_MS
     this.taskHeartbeatMs =
       options.taskHeartbeatMs ?? Math.max(1, Math.floor(this.taskLeaseMs / 3))
+    this.taskPollMs = options.taskPollMs ?? DEFAULT_TASK_POLL_MS
     this.maxTaskAttempts = options.maxTaskAttempts ?? DEFAULT_MAX_TASK_ATTEMPTS
     if (
       !this.workerId.trim() ||
@@ -454,6 +461,9 @@ export class ResumeAgentRunService {
       !Number.isSafeInteger(this.taskHeartbeatMs) ||
       this.taskHeartbeatMs < 1 ||
       this.taskHeartbeatMs >= this.taskLeaseMs ||
+      !Number.isSafeInteger(this.taskPollMs) ||
+      this.taskPollMs < 10 ||
+      this.taskPollMs > MAX_TIMER_DELAY_MS ||
       !Number.isSafeInteger(this.maxTaskAttempts) ||
       this.maxTaskAttempts <= 0 ||
       this.maxTaskAttempts > 1_000
@@ -490,12 +500,27 @@ export class ResumeAgentRunService {
     return run
   }
 
+  /**
+   * Starts the durable worker poller. Recovery at process boot is not enough:
+   * a task can be released after a transient execution failure, or be created
+   * by another request after boot. The bounded poller closes that gap while
+   * preserving the same claim/lease/fencing path used by startup recovery.
+   */
+  startWorker(): void {
+    if (!this.durableStore || this.closed || this.pollTimer) return
+    this.scheduleWorkerPoll(0)
+  }
+
   async get(id: string): Promise<ResumeAgentRun | undefined> {
     return (await this.store.get(id))?.snapshot
   }
 
   async close(): Promise<void> {
     this.closed = true
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer)
+      this.pollTimer = undefined
+    }
     await Promise.all(
       [...this.activeHeartbeats].map((heartbeat) => heartbeat.abandon())
     )
@@ -533,6 +558,27 @@ export class ResumeAgentRunService {
       if (task) await this.executeClaimedTask(task)
     } catch {
       // The committed task remains available or leased for later recovery.
+    }
+  }
+
+  private scheduleWorkerPoll(delayMs: number): void {
+    if (this.closed || !this.durableStore || this.pollTimer) return
+    this.pollTimer = setTimeout(() => {
+      this.pollTimer = undefined
+      void this.pollWorker()
+    }, delayMs)
+    const timer = this.pollTimer as unknown as { unref?: () => void }
+    timer.unref?.()
+  }
+
+  private async pollWorker(): Promise<void> {
+    if (this.closed || !this.durableStore || this.pollInFlight) return
+    this.pollInFlight = true
+    try {
+      await this.claimAndExecuteNextTask()
+    } finally {
+      this.pollInFlight = false
+      this.scheduleWorkerPoll(this.taskPollMs)
     }
   }
 

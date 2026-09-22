@@ -37,7 +37,7 @@ RA-015C 的结果是：
 | exactly-once 声明 | Reject | 没有分布式事务；LLM 调用等外部 side effect 可能重复 |
 | 仅在启动时扫描 Run status | Reject | status 不能区分“无需任务”和“任务丢失”，outbox 才是事实来源 |
 | 无限 lease | Reject | worker crash 后任务永不恢复 |
-| 自动后台 polling timer | Defer | 本切片提供显式 drain 和现有 schedule trigger，避免隐藏 timer/句柄 |
+| 自动后台 polling timer | Adapt in RA-015F | 本切片仍只定义 outbox 语义；常驻 timer 的生命周期、unref 与 close 清理由 RA-015F 独立记录 |
 
 ## 4. 契约
 
@@ -159,7 +159,7 @@ drain
 | lease | SQS visibility timeout/receipt handle 类比；SQLite RETURNING；RA-015D generation/takeover 与 RA-015E renewal/fenced-mutation tests | Covered for one-host application lifecycle | Provider side effect 仍可重复；无 RA-015F worker lifecycle |
 | idempotent replay | RA-015A revision/idempotency；terminal replay test | Partial | 非 terminal LLM 阶段仍可能重复调用 |
 | exactly-once | 无法证明 | Rejected claim | 保持 at-least-once 文档 |
-| automatic polling | 无 | Deferred | 需要外部生命周期显式调用 drain；尚无 production worker/runbook |
+| automatic polling | RA-015F bounded same-host poller | Implemented for development | 仍无 production worker/runbook、DLQ/backoff 与多主机证据 |
 
 ## 10. 会推翻方案的证据
 
@@ -170,7 +170,7 @@ drain
 
 ## 11. 明确延期
 
-- RA-015E 已补上 heartbeat 与 leased Run mutation fencing；自动常驻 poller、claim-ahead lifecycle、dead-letter storage/redrive、backoff/jitter 和运维指标仍延期；
+- RA-015E 已补上 heartbeat 与 leased Run mutation fencing；RA-015F 已补上有界常驻 poller，但 claim-ahead/backpressure、dead-letter storage/redrive、backoff/jitter 和运维指标仍延期；
 - 完整 stage checkpoint，避免 crash 时重复未完成的 LLM 调用；
 - PostgreSQL task claim（例如 `FOR UPDATE SKIP LOCKED`）与多主机部署；
 - exactly-once 外部 side effect 声明。

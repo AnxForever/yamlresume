@@ -22,7 +22,11 @@
  * IN THE SOFTWARE.
  */
 
-import { describe, expect, it } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { describe, expect, it, vi } from 'vitest'
 
 import type { LlmClient } from '@/contracts'
 import { renderOdtDocument } from '@/rendering/odt'
@@ -32,6 +36,7 @@ import {
   ResumeAgentRunService,
   type StoredResumeAgentRun,
 } from '@/workflow/run'
+import { SqliteRunStore } from '@/workflow/sqlite-run-store'
 
 const candidate = {
   content: {
@@ -1360,6 +1365,67 @@ describe('ResumeAgentRunService', () => {
     expect(completed?.result?.questions).toEqual([
       expect.objectContaining({ severity: 'optional' }),
     ])
+  })
+
+  it('polls durable tasks inserted after worker startup', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'resume-agent-poller-'))
+    const store = await SqliteRunStore.open(join(directory, 'runs.sqlite'))
+    const service = new ResumeAgentRunService(fakeAgent(), {
+      store,
+      taskPollMs: 10,
+      // Generous on purpose. This test is about whether the worker notices a
+      // task inserted after it started — not about lease timing. A 100ms lease
+      // with a 20ms heartbeat expires on a loaded machine before the heartbeat
+      // can renew it, the task is reclaimed, and the run ends up `failed`
+      // instead of `completed`. That made the test fail whenever the rest of
+      // the workspace suite was running alongside it.
+      taskLeaseMs: 5000,
+      taskHeartbeatMs: 500,
+    })
+    try {
+      service.startWorker()
+      const createdAt = new Date().toISOString()
+      await store.createWithTask(
+        {
+          revision: 0,
+          snapshot: {
+            id: 'run-poller-inserted',
+            status: 'queued',
+            createdAt,
+            updatedAt: createdAt,
+          },
+          request: {
+            jobDescription:
+              'We need a TypeScript Engineer to build reliable systems.',
+            candidate: { resume: candidate },
+          },
+        },
+        {
+          id: 'run-poller-inserted:prepare:0',
+          runId: 'run-poller-inserted',
+          kind: 'prepare',
+          createdAt,
+        }
+      )
+
+      // Wait on the condition with an explicit budget, rather than on a fixed
+      // iteration count whose real deadline depended on how fast each read
+      // happened to be. Keep the budget under the suite's 10s testTimeout so
+      // a genuine failure reports the status it saw instead of a bare
+      // "test timed out".
+      await vi.waitFor(
+        async () => {
+          expect((await service.get('run-poller-inserted'))?.status).toBe(
+            'completed'
+          )
+        },
+        { timeout: 5000, interval: 10 }
+      )
+    } finally {
+      await service.close()
+      store.close()
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 })
 

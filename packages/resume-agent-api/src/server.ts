@@ -1305,6 +1305,9 @@ export async function startAgentApiServer(
       runtime: { providerConfigured, runStore },
     })
     await listen(server, port, host)
+    // Keep polling after startup recovery so released tasks and tasks created
+    // by later requests are retried without requiring another process restart.
+    runService.startWorker()
     const address = server.address()
     if (!address || typeof address === 'string') {
       throw new AgentApiRuntimeError('listen_failed')

@@ -120,9 +120,9 @@ uses an in-memory revision and atomic compare-and-set within one Node.js
 process. An opt-in SQLite adapter persists the same versioned Store contract
 across restarts, coordinates connections on one host, and transactionally
 stores workflow tasks with Run mutations, but uses Node's active-development
-synchronous SQLite API. It provides explicit bounded restart drain plus
-generation-safe heartbeat and Run mutation fencing while a claimed callback is
-executing, but not an automatic worker, claim-ahead lifecycle, authentication,
+synchronous SQLite API. It provides explicit bounded restart drain, a bounded
+same-host worker poller, and generation-safe heartbeat and Run mutation fencing
+while a claimed callback is executing, but not DLQ/backoff, authentication,
 retention, or a binary file-answer loop. Completed public snapshots intentionally contain
 the generated resume and artifacts for the user; revisions, source requests,
 checkpoints, answer receipts, raw answers, and raw model completions remain
@@ -153,9 +153,10 @@ private. See the
 | RA-012 | Structured-output validation and bounded repair | Implemented | Shared module, three-boundary workflow tests, safe API error test | Covered | Backfilled | Operational provider comparison is tracked by RA-010 |
 | RA-015A | Revision-safe RunStore and atomic answer acceptance | Implemented for development | Atomic in-memory create/CAS, deterministic concurrent answer tests, clone and privacy tests; durable realization tracked by RA-015B/C | Covered for one process | Backfilled | Operational multi-instance evidence remains RA-015D |
 | RA-015B | Durable versioned RunStore | Implemented for development; not operational | SQLite schema introduced at v1, disk reopen, SQL CAS across connections, safe failure and privacy tests; current adapter migrated to v2 | Covered for one host | None | Async production driver, encryption and retention |
-| RA-015C | Transactional Run outbox and restart recovery | Implemented for development; explicit drain only | Run + task atomic transactions, v1→v2 migration, lease/ack/release, lost-hint restart and terminal replay tests | Partial | None | Heartbeat/fencing supplied by RA-015E; no automatic poller, DLQ/backoff or operational evidence |
+| RA-015C | Transactional Run outbox and restart recovery | Implemented for development; explicit drain plus RA-015F poller | Run + task atomic transactions, v1→v2 migration, lease/ack/release, lost-hint restart, terminal replay and runtime poller tests | Partial | None | DLQ/backoff, Provider effect fencing and operational evidence |
 | RA-015D | Multi-worker lease takeover and fault verification | Implemented for development; same-host only | Claim-generation fencing, same-Run serialization, crash takeover, bounded batch/attempts and privacy tests | Partial | Reopened-by-change | Long-task heartbeat/fencing supplied by RA-015E; no DLQ/redrive, automatic worker or multi-host evidence |
-| RA-015E | Run task lease heartbeat and lost-lease write isolation | Implemented for development; same-host only | Exact-generation renewal, Store-side leased CAS, deferred Provider/fake-clock takeover, renewal failure, shutdown and timer cleanup tests | Partial | Reopened-by-change | At-least-once Provider calls; RA-015F claim-ahead/automatic worker, metrics and multi-host adapter remain |
+| RA-015E | Run task lease heartbeat and lost-lease write isolation | Implemented for development; same-host only | Exact-generation renewal, Store-side leased CAS, deferred Provider/fake-clock takeover, renewal failure, shutdown and timer cleanup tests | Partial | Reopened-by-change | At-least-once Provider calls; RA-015F concurrency/backpressure, metrics and multi-host adapter remain |
+| RA-015F | Durable Run automatic worker poller | Implemented for development; same-host only | Explicit `startWorker()` lifecycle, bounded one-task polling, unref timer, close cleanup and post-start task test | Partial | None | DLQ/backoff, Provider idempotency/cancellation, multi-host and operational evidence |
 | RA-016 | Authentication, Run ownership and Provider credential vault | Implemented for development; backend enabled by default with explicit keyring | OWASP/Node evidence, scrypt users, digest-only opaque sessions, persistent login throttling, AES-GCM Provider vault, durable Run ownership, cookie/CORS HTTP and adversarial/restart tests | Partial | Backfilled | Frontend login, verification/reset/MFA, KMS, distributed rate limits, audit operations and Provider adapter consumption |
 
 ### RA-001B-A1 evidence detail
