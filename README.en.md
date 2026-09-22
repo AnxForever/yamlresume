@@ -75,8 +75,10 @@ Where to start: [product roadmap](docs/resume-agent-product-roadmap.zh-CN.md)
 → [structured-output reliability](docs/resume-agent-structured-output-reliability.zh-CN.md)
 → [evaluation harness](docs/resume-agent-evaluation-harness.zh-CN.md). The
 [engineering learning guide](docs/career-agent-learning-guide.zh-CN.md) orders
-the same material as a study path. Most design documents are in Chinese; the
-backend document is in English.
+the same material as a study path. For the development story as
+"problem → root cause → fix → evidence", including what went wrong, read the
+[development narrative](docs/career-agent-interview-narrative.zh-CN.md). Most
+design documents are in Chinese; the backend document is in English.
 
 ---
 

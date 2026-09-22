@@ -43,7 +43,7 @@
 
 campaign 的样本只有 3 个合成案例、至多 2 轮重复（Wilson 95% 区间 [0.30, 0.90]），它是诊断用的基线，不是效果宣称。
 
-从哪里读起：[产品路线图](docs/resume-agent-product-roadmap.zh-CN.md) → [后端设计与证据台账](docs/resume-agent-backend.md) → [结构化输出可靠性](docs/resume-agent-structured-output-reliability.zh-CN.md) → [评估框架](docs/resume-agent-evaluation-harness.zh-CN.md)。想按学习路径读，看[工程学习指南](docs/career-agent-learning-guide.zh-CN.md)。
+从哪里读起：[产品路线图](docs/resume-agent-product-roadmap.zh-CN.md) → [后端设计与证据台账](docs/resume-agent-backend.md) → [结构化输出可靠性](docs/resume-agent-structured-output-reliability.zh-CN.md) → [评估框架](docs/resume-agent-evaluation-harness.zh-CN.md)。想按学习路径读，看[工程学习指南](docs/career-agent-learning-guide.zh-CN.md)。想看「问题 → 根因 → 修法 → 证据」的开发叙事，包括做错的部分，读[开发叙事与问题记录](docs/career-agent-interview-narrative.zh-CN.md)。
 
 ---
 

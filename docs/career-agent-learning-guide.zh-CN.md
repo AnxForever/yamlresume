@@ -446,6 +446,10 @@ telemetry 仍是明确缺口。完整证据与 RED → GREEN 记录见
 10. [`resume-agent-implementation-plan.md`](./resume-agent-implementation-plan.md)：理解实现顺序和遗留缺口；
 11. 按本文第 3 节的顺序阅读源代码和相邻测试。
 
+如果想先看「问题 → 根因 → 修法 → 证据」的叙事版本，以及这个项目做错过什么，读
+[`career-agent-interview-narrative.zh-CN.md`](./career-agent-interview-narrative.zh-CN.md)；
+它把本文第 8 节的学习记录和各 Feature Brief 里散落的 RED → GREEN 记录串成了可以复述的故事。
+
 ### 10.2 再读外部一手资料
 
 1. [Anthropic: Building effective agents](https://www.anthropic.com/research/building-effective-agents)：重点理解 workflow 与 agent 的区别，以及先使用简单、可组合模式；
