@@ -39,6 +39,7 @@ import {
   createOpenAICompatibleClientFromEnv,
   DraftValidationError,
   InMemoryRunStore,
+  type InputFile,
   InteractionAnswerSchema,
   type LlmClient,
   LlmConfigurationError,
@@ -54,7 +55,11 @@ import {
 } from '@yamlresume/resume-agent'
 
 import { AuthError, AuthService, type AuthSession, type AuthUser } from './auth'
-import { MultipartRequestError, parseMultipartRequest } from './multipart'
+import {
+  MultipartRequestError,
+  parseAnswerMultipartRequest,
+  parseMultipartRequest,
+} from './multipart'
 
 const DEFAULT_PORT = 8787
 const DEFAULT_HOST = '127.0.0.1'
@@ -790,8 +795,20 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
         }
       }
       let answerPayload: unknown
+      let answerFiles: InputFile[] = []
       try {
-        answerPayload = await readPayload(request)
+        if (
+          request.headers['content-type']?.startsWith('multipart/form-data')
+        ) {
+          // A `file`-control answer references uploaded binaries; they ride
+          // along in the same multipart request, keyed by the fileIds the
+          // answer declares.
+          const parsedMultipart = await parseAnswerMultipartRequest(request)
+          answerPayload = parsedMultipart.answer
+          answerFiles = parsedMultipart.candidateFiles
+        } else {
+          answerPayload = await readPayload(request)
+        }
       } catch (requestError) {
         error(
           response,
@@ -815,7 +832,9 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
         return
       }
       try {
-        const run = await runService.answer(answerMatch[1], parsedAnswer.data)
+        const run = await runService.answer(answerMatch[1], parsedAnswer.data, {
+          candidateFiles: answerFiles,
+        })
         success(response, 202, run, requestId)
       } catch (answerError) {
         if (answerError instanceof RunAnswerError) {

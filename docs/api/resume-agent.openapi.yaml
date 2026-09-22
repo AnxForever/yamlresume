@@ -394,6 +394,28 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/InteractionAnswer'
+          multipart/form-data:
+            schema:
+              type: object
+              required: [answer]
+              properties:
+                answer:
+                  allOf:
+                    - $ref: '#/components/schemas/InteractionAnswer'
+                  description: >-
+                    JSON-encoded answer. A `file`-control value references
+                    uploaded parts by fileId, e.g.
+                    `[{"fileId":"answer-1","mediaType":"text/plain"}]`.
+            encoding:
+              answer:
+                contentType: application/json
+            description: >-
+              Required when the active interaction's control type is `file`:
+              every referenced binary rides along as a `file:<fileId>` part
+              in the same request. The server ingests the uploaded files,
+              re-normalizes the candidate profile from the full material set,
+              and resumes the run. A JSON body is still accepted for every
+              non-file control.
       responses:
         '202':
           description: Answer accepted; the run is paused again or resuming

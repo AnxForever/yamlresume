@@ -23,7 +23,11 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import type { JsonCompletionRequest, LlmClient } from '@/contracts'
+import type {
+  JsonCompletionRequest,
+  LlmClient,
+  ResumeTailoringCheckpoint,
+} from '@/contracts'
 import { StructuredOutputValidationError } from '@/llm/structured-output'
 import { renderOdtDocument } from '@/rendering/odt'
 import { ResumeTailoringAgent } from '@/workflow/agent'
@@ -771,6 +775,100 @@ describe('ResumeTailoringAgent', () => {
       transportAttempts: 2,
       modelDurationMs: 4,
     })
+  })
+
+  it('re-ingests answer files into the candidate and re-normalizes the profile', async () => {
+    // A `file` interaction answer carries binaries. The candidate profile
+    // has to be rebuilt from the full material set — the original artifacts
+    // plus the new ones — not patched field by field, because the new
+    // material can change any part of the profile.
+    const responses = [
+      {
+        resume: {
+          ...candidate,
+          content: {
+            ...candidate.content,
+            projects: [
+              ...candidate.content.projects,
+              {
+                name: 'Answer project',
+                startDate: '2025',
+                summary: '- Delivered the answer-file material',
+                keywords: ['Go'],
+              },
+            ],
+          },
+        },
+        sourceArtifactIds: ['answer-file-1'],
+        questions: [],
+        warnings: [],
+      },
+    ]
+    const seenPrompts: string[] = []
+    const llm: LlmClient = {
+      async completeJson(request) {
+        seenPrompts.push(request.user)
+        return {
+          data: responses.shift(),
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const checkpoint: ResumeTailoringCheckpoint = {
+      version: 1,
+      jobText: 'Backend engineer role.',
+      jobArtifacts: [],
+      candidateArtifacts: [
+        {
+          id: 'original-1',
+          filename: 'resume.md',
+          mediaType: 'text/markdown',
+          kind: 'text',
+          text: 'Original resume material.',
+          warnings: [],
+        },
+      ],
+      candidate,
+      preferences: {},
+      questions: [],
+      warnings: [],
+      trace: [],
+    }
+
+    const updated = await new ResumeTailoringAgent(llm).reingestCandidate(
+      checkpoint,
+      [
+        {
+          id: 'answer-file-1',
+          filename: 'answers.txt',
+          text: 'The answer file describes a Go project delivered in 2025.',
+        },
+      ]
+    )
+
+    expect(updated.candidateArtifacts.map((artifact) => artifact.id)).toEqual([
+      'original-1',
+      'answer-file-1',
+    ])
+    expect(
+      updated.candidate.content.projects.some(
+        (project) => project.name === 'Answer project'
+      )
+    ).toBe(true)
+    // The normalization prompt must see both the original and the new
+    // material, or the rebuilt profile would drop what was already known.
+    expect(seenPrompts[0]).toContain('Original resume material.')
+    expect(seenPrompts[0]).toContain('answer file describes a Go project')
+    expect(
+      updated.trace
+        .map((event) => event.name)
+        .includes('ingest_candidate_files')
+    ).toBe(true)
   })
 
   it('stops the workflow when job analysis repair is exhausted', async () => {

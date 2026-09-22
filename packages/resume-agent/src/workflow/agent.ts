@@ -25,9 +25,11 @@
 import type {
   AgentRunStatus,
   AgentTraceEvent,
+  CandidateInput,
   ChatRequest,
   ChatResponse,
   DraftResponse,
+  InputFile,
   JobSpec,
   LlmClient,
   ResumeTailoringCheckpoint,
@@ -352,6 +354,70 @@ export class ResumeTailoringAgent {
       preferences,
       questions: normalizedCandidate.questions,
       warnings: normalizedCandidate.warnings,
+      trace,
+    }
+  }
+
+  /**
+   * Ingest files supplied as the answer to a `file` interaction and rebuild
+   * the candidate profile from the full material set.
+   *
+   * This is deliberately not a field patch: a `file` answer adds evidence,
+   * and evidence can change any part of the profile — a new project, a
+   * corrected date, a summary that now reads differently. Patching one
+   * field would silently ignore everything else the new material implies.
+   * The normalization therefore runs again over the original artifacts plus
+   * the new ones, and its fresh questions replace the answered one.
+   *
+   * The job side is untouched: the job description does not change because
+   * the candidate answered a question about themselves.
+   */
+  async reingestCandidate(
+    checkpoint: ResumeTailoringCheckpoint,
+    files: InputFile[],
+    options: ResumeTailoringRunOptions = {}
+  ): Promise<ResumeTailoringCheckpoint> {
+    const llm = budgetedLlmClient(this.llm, toRunBudget(options.budget))
+    const trace = structuredClone(checkpoint.trace)
+
+    await reportStatus(options, 'ingesting_inputs')
+    addTrace(trace, 'ingest_candidate_files', 'started', {
+      newFiles: files.length,
+    })
+    const newArtifacts = await extractArtifacts(files)
+    const candidateArtifacts = [
+      ...checkpoint.candidateArtifacts,
+      ...newArtifacts,
+    ]
+    addTrace(trace, 'ingest_candidate_files', 'completed', {
+      candidateArtifacts: candidateArtifacts.length,
+    })
+
+    await reportStatus(options, 'normalizing_candidate')
+    addTrace(trace, 'normalize_candidate', 'started')
+    // The canonical YAML is intentionally left empty: re-normalization must
+    // read the material, not a stale normalized profile that predates the
+    // answer. The old profile is the input being replaced.
+    const reingestInput: CandidateInput = { files: [] }
+    const normalizedCandidate = await normalizeCandidateInput(
+      llm,
+      reingestInput,
+      candidateArtifacts
+    )
+    addTrace(trace, 'normalize_candidate', 'completed', {
+      questions: normalizedCandidate.questions.length,
+      warnings: normalizedCandidate.warnings.length,
+      ...(normalizedCandidate.telemetry
+        ? structuredOutputMetadata(normalizedCandidate.telemetry)
+        : {}),
+    })
+
+    return {
+      ...checkpoint,
+      candidateArtifacts,
+      candidate: normalizedCandidate.resume,
+      questions: normalizedCandidate.questions,
+      warnings: [...checkpoint.warnings, ...normalizedCandidate.warnings],
       trace,
     }
   }

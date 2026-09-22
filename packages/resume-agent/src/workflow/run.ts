@@ -27,7 +27,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import type {
   AgentRunFailure,
   AgentRunStatus,
+  InputFile,
   InteractionAnswer,
+  InteractionFileReference,
   InteractionRequest,
   ResumeAgentRun,
   ResumeTailoringCheckpoint,
@@ -41,6 +43,7 @@ import {
   applyInteractionAnswer,
   createInteractionRequests,
   InteractionValidationError,
+  validateInteractionAnswer,
 } from '@/workflow/interaction'
 
 export type RunAnswerErrorCode =
@@ -623,7 +626,21 @@ export class ResumeAgentRunService {
     }
   }
 
-  async answer(id: string, answer: InteractionAnswer): Promise<ResumeAgentRun> {
+  /**
+   * Record an answer to the active interaction.
+   *
+   * A `file` answer takes a different path from every other control: the
+   * binaries it references are ingested and the candidate profile is
+   * rebuilt from the full material set (`reingestCandidate`), because new
+   * evidence can change any part of the profile — not one field. The
+   * referenced files must ride along in `options.candidateFiles`, keyed by
+   * the same `fileId`s the answer declares.
+   */
+  async answer(
+    id: string,
+    answer: InteractionAnswer,
+    options: { candidateFiles?: InputFile[] } = {}
+  ): Promise<ResumeAgentRun> {
     const current = await this.store.get(id)
     if (!current) {
       throw new RunAnswerError('run_not_found', 'Run not found')
@@ -664,6 +681,17 @@ export class ResumeAgentRunService {
       )
     }
 
+    if (interaction.control.type === 'file') {
+      return this.answerWithFiles(
+        id,
+        answer,
+        interaction,
+        current,
+        valueFingerprint,
+        options.candidateFiles ?? []
+      )
+    }
+
     let candidate: ResumeTailoringCheckpoint['candidate']
     try {
       candidate = applyInteractionAnswer(
@@ -677,11 +705,6 @@ export class ResumeAgentRunService {
       }
       throw error
     }
-    const checkpoint: ResumeTailoringCheckpoint = {
-      ...current.checkpoint,
-      candidate,
-      questions: removeAnsweredQuestion(current.checkpoint, interaction),
-    }
     const remaining = current.pendingInteractions?.slice(1) ?? []
     const answerReceipts = [
       ...(current.answerReceipts ?? []),
@@ -692,21 +715,52 @@ export class ResumeAgentRunService {
         answeredAt: this.now().toISOString(),
       },
     ]
-    if (remaining[0]) {
+    return this.resumeAfterAnswer(
+      id,
+      current,
+      {
+        ...current.checkpoint,
+        candidate,
+        questions: removeAnsweredQuestion(current.checkpoint, interaction),
+      },
+      remaining,
+      answerReceipts,
+      answer
+    )
+  }
+
+  /**
+   * Shared tail of every answer path: persist the updated checkpoint plus
+   * the next queue (empty means resume to job analysis) and return the
+   * resulting snapshot.
+   *
+   * `checkpoint` is already final — the caller applied the field patch or
+   * the re-ingestion — so this method only decides between pausing again
+   * and moving on, exactly as the original single path did.
+   */
+  private async resumeAfterAnswer(
+    id: string,
+    current: StoredResumeAgentRun,
+    checkpoint: ResumeTailoringCheckpoint,
+    nextInteractions: InteractionRequest[],
+    answerReceipts: InteractionAnswerReceipt[],
+    answer: InteractionAnswer
+  ): Promise<ResumeAgentRun> {
+    if (nextInteractions[0]) {
       const snapshot: ResumeAgentRun = {
         ...current.snapshot,
         updatedAt: this.now().toISOString(),
-        interactions: [remaining[0]],
+        interactions: [nextInteractions[0]],
       }
       const updated = await this.store.compareAndSet({
         ...current,
         snapshot,
         checkpoint,
-        pendingInteractions: remaining,
+        pendingInteractions: nextInteractions,
         answerReceipts,
       })
       if (!updated) {
-        return this.resolveAnswerConflict(id, answer, valueFingerprint)
+        return this.resolveAnswerConflict(id, answer, answerFingerprint(answer))
       }
       return snapshot
     }
@@ -737,7 +791,7 @@ export class ResumeAgentRunService {
         )
       : await this.store.compareAndSet(nextStoredRun)
     if (!updated) {
-      return this.resolveAnswerConflict(id, answer, valueFingerprint)
+      return this.resolveAnswerConflict(id, answer, answerFingerprint(answer))
     }
     if (this.durableStore) {
       this.schedule(() => this.claimAndExecuteNextTask())
@@ -745,6 +799,96 @@ export class ResumeAgentRunService {
       this.schedule(() => this.executeCompletion(id))
     }
     return snapshot
+  }
+
+  /**
+   * The `file`-control answer path: ingest the referenced binaries, rebuild
+   * the candidate from the full material set, then either pause with the
+   * fresh questions re-normalization produced or resume the run.
+   *
+   * Re-normalization's questions replace the whole queue rather than
+   * appending to it: the candidate was just rebuilt, so questions queued
+   * against the previous profile may no longer apply. An empty answer
+   * (only legal for an optional interaction) skips ingestion entirely.
+   */
+  private async answerWithFiles(
+    id: string,
+    answer: InteractionAnswer,
+    interaction: InteractionRequest,
+    current: StoredResumeAgentRun,
+    valueFingerprint: string,
+    candidateFiles: InputFile[]
+  ): Promise<ResumeAgentRun> {
+    let references: InteractionFileReference[]
+    try {
+      references = validateInteractionAnswer(
+        interaction,
+        answer.value
+      ) as InteractionFileReference[]
+    } catch (error) {
+      if (error instanceof InteractionValidationError) {
+        throw new RunAnswerError('invalid_answer', error.message)
+      }
+      throw error
+    }
+    const filesById = new Map(
+      candidateFiles.map((file) => [file.id ?? '', file])
+    )
+    const missing = references.find(
+      (reference) => !filesById.has(reference.fileId)
+    )
+    if (missing) {
+      throw new RunAnswerError(
+        'invalid_answer',
+        `No uploaded file was provided for ${missing.fileId}`
+      )
+    }
+    if (!current.checkpoint) {
+      throw new RunAnswerError(
+        'run_checkpoint_missing',
+        'Run checkpoint is unavailable'
+      )
+    }
+
+    const answerReceipts = [
+      ...(current.answerReceipts ?? []),
+      {
+        interactionId: answer.interactionId,
+        idempotencyKey: answer.idempotencyKey,
+        valueFingerprint,
+        answeredAt: this.now().toISOString(),
+      },
+    ]
+
+    // An empty answer to an optional question: nothing to ingest, the run
+    // simply moves on, exactly like skipping any other question.
+    if (references.length === 0) {
+      return this.resumeAfterAnswer(
+        id,
+        current,
+        current.checkpoint,
+        [],
+        answerReceipts,
+        answer
+      )
+    }
+
+    const referencedFiles = references.map(
+      (reference) => filesById.get(reference.fileId) as InputFile
+    )
+    const reingested = await this.agent.reingestCandidate(
+      current.checkpoint,
+      referencedFiles
+    )
+    const followUps = createInteractionRequests(reingested.questions)
+    return this.resumeAfterAnswer(
+      id,
+      current,
+      reingested,
+      followUps,
+      answerReceipts,
+      answer
+    )
   }
 
   private async resolveAnswerConflict(

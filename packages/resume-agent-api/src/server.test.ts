@@ -755,6 +755,225 @@ describe('agent API', () => {
     )
   })
 
+  it('accepts a file answer as multipart and re-ingests the uploaded binary', async () => {
+    // The `file` control cannot be answered with JSON alone: the answer
+    // references uploaded files, so the binaries ride along in the same
+    // multipart request as the answer body.
+    const tasks: Array<() => Promise<void>> = []
+    let modelCalls = 0
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        modelCalls += 1
+        const data =
+          modelCalls === 1
+            ? {
+                resume: candidate,
+                sourceArtifactIds: ['candidate-source'],
+                questions: [
+                  {
+                    field: 'content.basics.name',
+                    question: 'Which file contains your full legal name?',
+                    reason: 'The extracted material never stated it.',
+                    severity: 'blocking',
+                    control: {
+                      type: 'file',
+                      acceptedMediaTypes: ['text/plain'],
+                      maxFiles: 1,
+                    },
+                  },
+                ],
+                warnings: [],
+              }
+            : modelCalls === 2
+              ? {
+                  resume: {
+                    ...candidate,
+                    content: {
+                      ...candidate.content,
+                      basics: {
+                        ...candidate.content.basics,
+                        name: 'Ada Lovelace',
+                      },
+                    },
+                  },
+                  sourceArtifactIds: ['candidate-source', 'answer-file-1'],
+                  questions: [],
+                  warnings: [],
+                }
+              : {
+                  targetTitle: 'TypeScript Engineer',
+                  seniority: 'junior',
+                  summary: 'TypeScript engineer',
+                  requirements: [],
+                  keywords: [],
+                }
+        return {
+          data: data as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const agent = new ResumeTailoringAgent(llm)
+    const runService = new ResumeAgentRunService(agent, {
+      idFactory: () => 'run-file-answer-api',
+      schedule: (task) => tasks.push(task),
+    })
+
+    await withServer(
+      async (baseUrl) => {
+        await fetch(`${baseUrl}/v1/runs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jobDescription:
+              'We need a TypeScript Engineer to build reliable systems.',
+            candidate: {
+              files: [
+                {
+                  id: 'candidate-source',
+                  filename: 'candidate.txt',
+                  text: 'Candidate profile without a legal name.',
+                },
+              ],
+            },
+          }),
+        })
+        await tasks[0]?.()
+
+        const form = new FormData()
+        form.set(
+          'answer',
+          JSON.stringify({
+            interactionId: 'candidate-normalization:1',
+            idempotencyKey: 'answer-file-1',
+            value: [{ fileId: 'answer-file-1', mediaType: 'text/plain' }],
+          })
+        )
+        form.append(
+          'file:answer-file-1',
+          new Blob(['My full legal name is Ada Lovelace.'], {
+            type: 'text/plain',
+          }),
+          'legal-name.txt'
+        )
+
+        const response = await fetch(
+          `${baseUrl}/v1/runs/run-file-answer-api/answers`,
+          {
+            method: 'POST',
+            body: form,
+          }
+        )
+        const payload = (await response.json()) as {
+          data?: { status?: string }
+          error?: { code?: string }
+        }
+
+        expect(response.status).toBe(202)
+        expect(payload.data?.status).toBe('analyzing_jd')
+        expect(tasks).toHaveLength(2)
+      },
+      agent,
+      runService
+    )
+  })
+
+  it('rejects a multipart file answer whose reference has no upload', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        return {
+          data: {
+            resume: candidate,
+            sourceArtifactIds: [],
+            questions: [
+              {
+                field: 'content.basics.name',
+                question: 'Which file contains your full legal name?',
+                reason: 'The extracted material never stated it.',
+                severity: 'blocking',
+                control: {
+                  type: 'file',
+                  acceptedMediaTypes: ['text/plain'],
+                  maxFiles: 1,
+                },
+              },
+            ],
+            warnings: [],
+          } as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const agent = new ResumeTailoringAgent(llm)
+    const runService = new ResumeAgentRunService(agent, {
+      idFactory: () => 'run-file-missing-api',
+      schedule: (task) => tasks.push(task),
+    })
+
+    await withServer(
+      async (baseUrl) => {
+        await fetch(`${baseUrl}/v1/runs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jobDescription:
+              'We need a TypeScript Engineer to build reliable systems.',
+            candidate: {
+              files: [
+                {
+                  id: 'candidate-source',
+                  filename: 'candidate.txt',
+                  text: 'Candidate profile.',
+                },
+              ],
+            },
+          }),
+        })
+        await tasks[0]?.()
+
+        const form = new FormData()
+        form.set(
+          'answer',
+          JSON.stringify({
+            interactionId: 'candidate-normalization:1',
+            idempotencyKey: 'answer-missing-1',
+            value: [{ fileId: 'never-uploaded', mediaType: 'text/plain' }],
+          })
+        )
+
+        const response = await fetch(
+          `${baseUrl}/v1/runs/run-file-missing-api/answers`,
+          {
+            method: 'POST',
+            body: form,
+          }
+        )
+        const payload = (await response.json()) as {
+          error?: { code?: string }
+        }
+        expect(response.status).toBe(400)
+        expect(payload.error?.code).toBe('invalid_answer')
+        // The run is untouched: still waiting for the same question.
+        const paused = await runService.get('run-file-missing-api')
+        expect(paused?.status).toBe('needs_input')
+        expect(tasks).toHaveLength(1)
+      },
+      agent,
+      runService
+    )
+  })
+
   it('returns stable validation and not-found errors for answers', async () => {
     await withServer(async (baseUrl) => {
       const invalidResponse = await fetch(

@@ -27,6 +27,9 @@
 - `POST /v1/runs/{id}/answers`；
 - 必填、类型、选项与自定义值验证；
 - 安全的 `content.*` 字段写回；
+- `file` 控件回答的 multipart 上传闭环：`answer` JSON 字段 + `file:<fileId>`
+  二进制部件，服务端提取文本、并入 checkpoint、重新归一化候选人，并从
+  归一化阶段恢复（2026-09-18 追加，RA-011-F）；
 - stale answer 与幂等键处理；
 - 恢复后从 JD 分析继续；
 - 包测试、HTTP 测试、OpenAPI 和学习记录。
@@ -36,7 +39,7 @@
 - 进程重启后的恢复；
 - 多实例共享状态；
 - 数据库事务、并发版本锁和长期保留策略；
-- 二进制文件回答的上传闭环；
+- 浏览器端 `file` 控件（前端仍显示 UnanswerableNotice，后端闭环先行）；
 - 草拟、验证等所有阶段的中断场景；
 - 顶层 Career Agent 路由、浏览器工具、招聘网站采集或学习计划能力；
 - 身份认证、租户隔离、加密和删除策略。
@@ -128,9 +131,25 @@ queued
 首期精度边界是刻意收窄的：`date` 和 `date_range` 只接受真实存在的
 `YYYY-MM-DD`，从而使范围比较和校验确定。YAMLResume 本身还能表示年份、月份
 或其他可解析日期，但本协议尚未定义精度字段；只有年份/月度证据时应使用文本
-控件，不能为满足日期选择器而虚构日。`file` 当前只接受外部系统已经上传好的
-`fileId + mediaType` 引用；回答端点不接收二进制，也不会在收到文件引用后重新
-运行候选人归一化。
+控件，不能为满足日期选择器而虚构日。
+
+### 5.1 `file` 控件：multipart 回答与重新归一化（RA-011-F，2026-09-18）
+
+`file` 控件**不是字段补丁**。它的回答引用上传的二进制，服务端必须：
+
+1. 在 `POST /v1/runs/{id}/answers` 上用 `multipart/form-data` 接收：
+   `answer` 字段是 JSON 回答，每个引用一个 `file:<fileId>` 部件；
+2. 校验回答里每个 `fileId` 都有对应上传（缺失 → `invalid_answer` 400，
+   且不写入任何状态）；
+3. 提取新文件文本，并入 `checkpoint.candidateArtifacts`；
+4. 用**全部材料**（旧 artifact + 新 artifact）重新运行候选人归一化——
+   而不是把文件引用写进某个 Resume 字段：新证据可能改变档案的任何部分
+   （新项目、修正日期、改写摘要），按字段补丁会静默丢掉其余含义；
+5. 重新归一化产出的新问题**替换整个等待队列**（候选人已被重建，针对旧
+   档案排队的其他问题可能失效）：有新问题则再次 `needs_input`，否则从
+   `analyzing_jd` 继续。可选问题的空回答跳过提取直接继续。
+
+幂等语义与其它控件一致：回答 receipt 只存值指纹，重复提交返回当前 Run。
 
 回答包含：
 
@@ -198,6 +217,12 @@ run(request) -> prepare + complete
 11. 同一轮审查修复了控件默认值解析结果未被采用、OpenAPI 日期说明错位，并
     增加真实日历日期、默认值和 answer receipt 指纹回归断言；
 12. OpenAPI、全量测试、构建、静态检查与 diff 检查。
+13. RA-011-F（2026-09-18）：`file` 控件回答走独立的重新归一化路径。
+    RED 先复现了协议层的断裂——文件引用写进 Resume 字段后永远过不了
+    `ResumeSchema`（「Answer does not produce a valid candidate profile」）；
+    GREEN 后 multipart 回答端点提取、并入、重建档案并从正确阶段恢复。
+    回答尾部的恢复逻辑提取为 `resumeAfterAnswer`，字段补丁与文件重新归一化
+    两条路径共用同一段「暂停或继续」代码，幂等与冲突处理保持不变。
 
 ## 9. RA-011 证据台账
 
@@ -207,15 +232,15 @@ run(request) -> prepare + complete
 | Parent / lifecycle | Resume Agent Run：归一化后暂停 → 回答 → 恢复 |
 | 用户结果 | 重要事实缺失时不猜测，可被结构化回答后继续 |
 | Delivery | Implemented for development；非 Enabled / Operational |
-| 当前状态 | 类型化控件、`needs_input`、内存 checkpoint、回答 API、字段写回、幂等与从 JD 分析恢复均已实现 |
+| 当前状态 | 类型化控件、`needs_input`、内存 checkpoint、回答 API、字段写回、幂等与从 JD 分析恢复均已实现；`file` 控件 multipart 上传与重新归一化闭环已实现（后端），浏览器控件未做 |
 | Primary evidence | LangGraph interrupts 官方文档，2026-09-16 |
 | Independent evidence | 现有状态机、fake LLM 测试与本地恢复实验 |
 | Decision | Adapt 显式 interrupt/checkpoint 原则，不引入框架 |
-| Edge cases | 空值、错误类型、自定义选项、非法路径、原型污染、数组索引、优先级乱序、stale、重复键、恢复失败、可选问题 |
+| Edge cases | 空值、错误类型、自定义选项、非法路径、原型污染、数组索引、优先级乱序、stale、重复键、恢复失败、可选问题、文件回答缺上传、文件回答引用不存在的 fileId、重复 fileId、可选文件问题的空回答 |
 | Acceptance | 包/API 行为测试；trace 证明前序阶段只执行一次；OpenAPI 与仓库门禁 |
 | Coverage | Partial |
 | Historical gap | None |
-| Remaining gap | durable store、并发版本锁、鉴权、二进制文件回答、日期精度、自动文件冲突检测、进程重启/多实例恢复、后续阶段 interrupt |
+| Remaining gap | durable store、并发版本锁、鉴权、浏览器端 `file` 控件、日期精度、自动文件冲突检测、进程重启/多实例恢复、后续阶段 interrupt |
 
 ## 10. 实现与验证证据
 
@@ -231,6 +256,30 @@ run(request) -> prepare + complete
   联合，而不是无法执行的自然语言占位符；
 - 公开快照测试证明原始候选人文件文本不进入暂停响应，回答 receipt 只保留
   SHA-256 指纹。
+
+2026-09-18 RA-011-F 追加验证（文件回答闭环）：
+
+```text
+pnpm agent test src/workflow/agent.test.ts src/workflow/run.test.ts
+=> 2 files / 37 tests passed（含 reingestCandidate 与 file 回答 2 项）
+
+pnpm agent-api test src/server.test.ts
+=> 1 file / 24 tests passed（含 multipart 文件回答 2 项）
+
+pnpm --filter @yamlresume/resume-agent exec tsc --noEmit
+pnpm --filter @yamlresume/resume-agent-api exec tsc --noEmit
+=> passed
+
+pnpm exec biome check packages/resume-agent/src packages/resume-agent-api/src
+=> 仅既有 2 处 test 文件 non-null-assertion warning，本次改动文件干净
+
+pnpm agent build（agent-api 测试依赖 dist）
+=> passed
+```
+
+注意：`resume-agent-api` 的测试解析 `@yamlresume/resume-agent` 到包的
+`dist`，改 agent 源码后必须先 `pnpm agent build` 再跑 API 测试——这是
+仓库的测试拓扑，不是本次引入的问题。
 
 2026-09-16 提交前实际验证：
 

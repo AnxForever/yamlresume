@@ -570,6 +570,194 @@ describe('ResumeAgentRunService', () => {
     expect(modelCalls).toBe(1)
   })
 
+  it('re-ingests files answered through a file interaction', async () => {
+    // A `file` answer is not a field patch: the uploaded binaries are
+    // ingested, the candidate is re-normalized from the full material set,
+    // and the run resumes from the re-normalization — either pausing again
+    // with fresh questions or continuing to job analysis.
+    const tasks: Array<() => Promise<void>> = []
+    const store = new InMemoryRunStore()
+    let modelCalls = 0
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        modelCalls += 1
+        const data =
+          modelCalls === 1
+            ? {
+                resume: candidate,
+                sourceArtifactIds: ['candidate-source'],
+                questions: [
+                  {
+                    field: 'content.basics.name',
+                    question: 'Which file contains your full legal name?',
+                    reason: 'The extracted material never stated it.',
+                    severity: 'blocking',
+                    control: {
+                      type: 'file',
+                      acceptedMediaTypes: ['text/plain'],
+                      maxFiles: 2,
+                    },
+                  },
+                ],
+                warnings: [],
+              }
+            : {
+                resume: {
+                  ...candidate,
+                  content: {
+                    ...candidate.content,
+                    basics: {
+                      ...candidate.content.basics,
+                      name: 'Ada Lovelace',
+                    },
+                  },
+                },
+                sourceArtifactIds: ['candidate-source', 'answer-file-1'],
+                questions: [],
+                warnings: [],
+              }
+        return {
+          data: data as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store,
+      idFactory: () => 'run-file-answer',
+      schedule: (task) => tasks.push(task),
+    })
+
+    await service.start({
+      jobDescription:
+        'We need a TypeScript Engineer to build reliable systems.',
+      candidate: {
+        files: [
+          {
+            id: 'candidate-source',
+            filename: 'candidate.txt',
+            mediaType: 'text/plain',
+            text: 'Candidate material without a legal name.',
+          },
+        ],
+      },
+    })
+    await tasks[0]?.()
+
+    const paused = await service.get('run-file-answer')
+    expect(paused?.status).toBe('needs_input')
+    expect(paused?.interactions?.[0]?.control.type).toBe('file')
+
+    const resumed = await service.answer(
+      'run-file-answer',
+      {
+        interactionId: 'candidate-normalization:1',
+        idempotencyKey: 'answer-file-1',
+        value: [{ fileId: 'answer-file-1', mediaType: 'text/plain' }],
+      },
+      {
+        candidateFiles: [
+          {
+            id: 'answer-file-1',
+            filename: 'legal-name.txt',
+            mediaType: 'text/plain',
+            text: 'My full legal name is Ada Lovelace.',
+          },
+        ],
+      }
+    )
+    // Re-normalization produced no new questions, so the run moved on to
+    // the job analysis stage with the rebuilt candidate.
+    expect(resumed.status).toBe('analyzing_jd')
+    expect(tasks).toHaveLength(2)
+
+    const stored = await store.get('run-file-answer')
+    expect(stored?.checkpoint?.candidateArtifacts.map((a) => a.id)).toEqual([
+      'candidate-source',
+      'answer-file-1',
+    ])
+    expect(stored?.checkpoint?.candidate.content.basics.name).toBe(
+      'Ada Lovelace'
+    )
+    expect(modelCalls).toBe(2)
+  })
+
+  it('rejects a file answer that references no uploaded file', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const store = new InMemoryRunStore()
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        return {
+          data: {
+            resume: candidate,
+            sourceArtifactIds: [],
+            questions: [
+              {
+                field: 'content.basics.name',
+                question: 'Which file contains your full legal name?',
+                reason: 'The extracted material never stated it.',
+                severity: 'blocking',
+                control: {
+                  type: 'file',
+                  acceptedMediaTypes: ['text/plain'],
+                  maxFiles: 1,
+                },
+              },
+            ],
+            warnings: [],
+          } as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store,
+      idFactory: () => 'run-file-missing',
+      schedule: (task) => tasks.push(task),
+    })
+
+    await service.start({
+      jobDescription: 'We need a TypeScript Engineer.',
+      candidate: {
+        files: [
+          {
+            id: 'candidate-source',
+            filename: 'candidate.txt',
+            mediaType: 'text/plain',
+            text: 'Candidate material.',
+          },
+        ],
+      },
+    })
+    await tasks[0]?.()
+
+    await expect(
+      service.answer(
+        'run-file-missing',
+        {
+          interactionId: 'candidate-normalization:1',
+          idempotencyKey: 'answer-missing-1',
+          value: [{ fileId: 'never-uploaded', mediaType: 'text/plain' }],
+        },
+        { candidateFiles: [] }
+      )
+    ).rejects.toMatchObject({ code: 'invalid_answer' })
+    // Nothing was written: the run is still waiting for the same question.
+    const paused = await service.get('run-file-missing')
+    expect(paused?.status).toBe('needs_input')
+    expect(paused?.interactions?.[0]?.id).toBe('candidate-normalization:1')
+  })
+
   it('applies an answer and resumes without repeating completed stages', async () => {
     const tasks: Array<() => Promise<void>> = []
     const store = new InMemoryRunStore()
