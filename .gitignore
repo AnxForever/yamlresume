@@ -169,3 +169,6 @@ packages/cli/my-resume.*
 # tooling scratch directories
 /.spec-workflow/
 /.playwright-mcp/
+
+# Per-package runtime data (SQLite run/auth stores written by the local API runtime)
+packages/*/.data/
