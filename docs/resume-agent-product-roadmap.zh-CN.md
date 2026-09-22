@@ -2,6 +2,8 @@
 
 > 当前代码从 YAMLResume 和简历定制能力起步，但产品本体是面向求职与职业成长全过程的 Career Agent。本文记录长期产品方向，不代表当前迭代必须一次完成。每个能力都必须单独经过：问题定义 → 调研 → 方案 → 验收标准 → 实现 → 单元/集成/Eval → 文档更新，测试通过后才能进入下一阶段。
 
+> **当前交付范围（2026-09-22）：只有 RP-001。** 第 4 节的 P1–P5 与 §2.2 台账中的 RP-000、RP-003–RP-006 是记录下来的方向，尚未开始实现，在 RP-001 通过 §2.1 的退出门槛之前也不会开始。对外描述以 README 的「项目状态」一节为准。
+
 如果你正在通过本项目学习 Agent 开发，请先阅读 [`career-agent-learning-guide.zh-CN.md`](./career-agent-learning-guide.zh-CN.md)。它解释工作流与 Agent、Runtime、Capability、Tool、State、Checkpoint、HITL、Eval 等概念，并把它们映射到当前代码和后续练习。
 
 ## 1. 产品愿景

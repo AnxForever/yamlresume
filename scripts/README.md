@@ -2,6 +2,18 @@
 
 This directory contains utility scripts for the yamlresume project.
 
+## project-metrics.mjs
+
+Prints the size of the Career Agent packages — tracked source and test files
+and lines, MIT headers excluded — plus the agent design docs and the number of
+commits on top of `upstream/main`. The numbers quoted in the README's project
+status section come from this script, so they can be regenerated rather than
+estimated.
+
+```bash
+node scripts/project-metrics.mjs
+```
+
 ## extract-changelog.sh
 
 Extracts changelog entries for a specific version from `CHANGELOG.md`.

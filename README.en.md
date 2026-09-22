@@ -43,6 +43,41 @@ untrusted component rather than an oracle.
   a prompt, a model or a runtime can be compared on reliability rather than on
   impressions.
 
+### Project status (2026-09-22)
+
+**The delivered scope is one line: RP-001, "job description + candidate
+material → an evidence-backed tailored resume".** The other product lines in
+the roadmap (a top-level Career Agent runtime, application materials, gap
+analysis and study plans, research, a job-market knowledge base, company
+health) are recorded directions only. None has been started, and none will be
+before this line passes its gate.
+
+This line is `Implemented for development`: the full workflow, HTTP API,
+workbench, durable run store and deterministic evaluation harness exist with
+tests. Real-model campaigns run end to end and have produced a scorable
+baseline, but quality and stability are not yet at the bar the project calls
+`Operational`. Every feature is labelled `Idea / Planned / Implemented /
+Enabled / Operational`; see the
+[evidence ledger](docs/resume-agent-product-roadmap.zh-CN.md#22-产品能力证据台账).
+
+| Number | Value | Source |
+| --- | ---: | --- |
+| Source in the three agent packages (MIT headers excluded) | 23.8K lines / 80 files | `node scripts/project-metrics.mjs` |
+| Tests | 673 cases / 48 files / 18.1K lines | `pnpm test` and the same script |
+| Design and evidence docs | 28 files / 7.4K lines | the same script |
+| Real DeepSeek campaign | pass 0/3 → 1/3 → 4/6, requirement coverage 0.37 → 0.57 | [public-job evaluation §9](docs/resume-agent-public-job-evaluation.zh-CN.md#9-2026-09-16-真实运行证据) |
+
+The campaign sample is 3 synthetic cases with at most 2 repeats (Wilson 95%
+interval [0.30, 0.90]). It is a diagnostic baseline, not a claim of quality.
+
+Where to start: [product roadmap](docs/resume-agent-product-roadmap.zh-CN.md)
+→ [backend design and evidence ledger](docs/resume-agent-backend.md)
+→ [structured-output reliability](docs/resume-agent-structured-output-reliability.zh-CN.md)
+→ [evaluation harness](docs/resume-agent-evaluation-harness.zh-CN.md). The
+[engineering learning guide](docs/career-agent-learning-guide.zh-CN.md) orders
+the same material as a study path. Most design documents are in Chinese; the
+backend document is in English.
+
 ---
 
 ## Upstream: YAMLResume
