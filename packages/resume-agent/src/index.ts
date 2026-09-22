@@ -158,6 +158,7 @@ export {
   extractArtifacts,
 } from './input/artifacts'
 export { artifactEvidence, normalizeCandidateInput } from './input/candidate'
+export { createOfflineLlmClient } from './llm/offline'
 export type { OpenAICompatibleConfig } from './llm/openai-compatible'
 export {
   createOpenAICompatibleClientFromEnv,

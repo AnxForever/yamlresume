@@ -2,6 +2,19 @@
 
 This directory contains utility scripts for the yamlresume project.
 
+## demo.sh
+
+Starts the Career Agent API and workbench locally with the offline heuristic
+provider (`RESUME_AGENT_LLM_PROVIDER=offline`), accounts switched off and an
+in-memory run store, so the whole pipeline runs with no model credentials. It
+builds `@yamlresume/core` and `@yamlresume/resume-agent` first, waits for the
+API health check, then starts the Next dev server on port 3100.
+
+```bash
+./scripts/demo.sh            # API on 127.0.0.1:8787, web on localhost:3100
+PORT=9000 ./scripts/demo.sh  # move the API
+```
+
 ## project-metrics.mjs
 
 Prints the size of the Career Agent packages — tracked source and test files

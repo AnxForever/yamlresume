@@ -36,6 +36,7 @@ import {
   ArtifactInputError,
   CandidateValidationError,
   ChatRequestSchema,
+  createOfflineLlmClient,
   createOpenAICompatibleClientFromEnv,
   DraftValidationError,
   InMemoryRunStore,
@@ -1422,15 +1423,38 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
   })
 }
 
+/**
+ * Pick the model provider from the environment.
+ *
+ * `RESUME_AGENT_LLM_PROVIDER=offline` selects the heuristic client that calls
+ * no model at all, for the local demo and browser smoke runs; it counts as a
+ * configured provider because every workflow stage can complete. Otherwise an
+ * OpenAI-compatible client is built from `OPENAI_*`, and when that is absent
+ * the API still starts but every model call fails with a stable
+ * configuration error, so health and capabilities stay reachable.
+ */
 function createDefaultAgent(env: NodeJS.ProcessEnv = process.env): {
   agent: ResumeTailoringAgent
   providerConfigured: boolean
+  provider: 'offline' | 'openai-compatible' | 'none'
 } {
+  const requested = env.RESUME_AGENT_LLM_PROVIDER?.trim() || 'openai-compatible'
+  if (requested === 'offline') {
+    return {
+      agent: new ResumeTailoringAgent(createOfflineLlmClient()),
+      providerConfigured: true,
+      provider: 'offline',
+    }
+  }
+  if (requested !== 'openai-compatible') {
+    throw new AgentApiRuntimeError('invalid_configuration')
+  }
   const client = createOpenAICompatibleClientFromEnv(env)
   if (client) {
     return {
       agent: new ResumeTailoringAgent(client),
       providerConfigured: true,
+      provider: 'openai-compatible',
     }
   }
   const unavailableClient: LlmClient = {
@@ -1441,6 +1465,7 @@ function createDefaultAgent(env: NodeJS.ProcessEnv = process.env): {
   return {
     agent: new ResumeTailoringAgent(unavailableClient),
     providerConfigured: false,
+    provider: 'none',
   }
 }
 
@@ -1690,7 +1715,7 @@ export async function startAgentApiServer(
     }
     const url = `http://${host}:${address.port}`
     options.logger?.(
-      `YAMLResume agent API listening on ${url} (${runStore} RunStore, auth ${auth ? 'enabled' : 'disabled'})`
+      `YAMLResume agent API listening on ${url} (${runStore} RunStore, auth ${auth ? 'enabled' : 'disabled'}, provider ${defaultAgent?.provider ?? 'injected'})`
     )
 
     let closing: Promise<void> | undefined
