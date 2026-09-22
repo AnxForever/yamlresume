@@ -2753,10 +2753,15 @@
                           "showIcons": {
                             "default": true,
                             "type": "boolean"
+                          },
+                          "showSkillLevels": {
+                            "default": true,
+                            "type": "boolean"
                           }
                         },
                         "required": [
-                          "showIcons"
+                          "showIcons",
+                          "showSkillLevels"
                         ],
                         "additionalProperties": false
                       },
