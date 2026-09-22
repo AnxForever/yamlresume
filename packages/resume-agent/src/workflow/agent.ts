@@ -59,6 +59,12 @@ import { buildResumeDiff } from '@/transparency/diff'
 import { buildQualityReport } from '@/transparency/quality'
 import { buildEvidenceIndex } from '@/validation/evidence'
 import { prepareDraftResume } from '@/validation/resume'
+import {
+  budgetedLlmClient,
+  type RunBudget,
+  type RunBudgetLimits,
+  toRunBudget,
+} from '@/workflow/budget'
 
 const JOB_ANALYSIS_SYSTEM_PROMPT =
   'You are a resume tailoring analyst. Extract job requirements into the requested JSON shape. Do not invent details that are not in the job description.'
@@ -134,6 +140,15 @@ type ActiveAgentRunStatus = Exclude<
 
 export interface ResumeTailoringRunOptions {
   onStatus?: (status: ActiveAgentRunStatus) => Promise<void> | void
+  /**
+   * Call and token ceilings for this run.
+   *
+   * Pass `RunBudgetLimits` to set ceilings, or an existing `RunBudget` to share
+   * one tracker across phases. `run` creates a single tracker and threads it
+   * through `prepare` and `complete`, so one run is metered as a whole rather
+   * than per phase.
+   */
+  budget?: RunBudget | RunBudgetLimits
 }
 
 async function reportStatus(
@@ -240,11 +255,15 @@ function normalizeJobSpec(value: unknown): unknown {
 export class ResumeTailoringAgent {
   constructor(private readonly llm: LlmClient) {}
 
-  async chat(request: ChatRequest): Promise<ChatResponse> {
+  async chat(
+    request: ChatRequest,
+    options: ResumeTailoringRunOptions = {}
+  ): Promise<ChatResponse> {
     const history = (request.history ?? [])
       .map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`)
       .join('\n')
-    const completion = await this.llm.completeJson<ChatResponse>({
+    const llm = budgetedLlmClient(this.llm, toRunBudget(options.budget))
+    const completion = await llm.completeJson<ChatResponse>({
       schemaName: 'ResumeAgentChatResponse',
       system:
         'You are a friendly resume assistant. Chat naturally in the user language. Do not require uploads. Ask for missing resume details conversationally. Set readyToGenerate true only when the user has provided enough information to draft a resume.',
@@ -264,14 +283,19 @@ export class ResumeTailoringAgent {
     request: TailorResumeRequest,
     options: ResumeTailoringRunOptions = {}
   ): Promise<TailorResumeResult> {
-    const checkpoint = await this.prepare(request, options)
-    return this.complete(checkpoint, options)
+    // One tracker for the whole run: `prepare` and `complete` must not each
+    // get a fresh allowance, or a run could spend the budget twice over.
+    const budget = toRunBudget(options.budget)
+    const shared: ResumeTailoringRunOptions = { ...options, budget }
+    const checkpoint = await this.prepare(request, shared)
+    return this.complete(checkpoint, shared)
   }
 
   async prepare(
     request: TailorResumeRequest,
     options: ResumeTailoringRunOptions = {}
   ): Promise<ResumeTailoringCheckpoint> {
+    const llm = budgetedLlmClient(this.llm, toRunBudget(options.budget))
     const trace: AgentTraceEvent[] = []
     const preferences = request.preferences ?? {}
     const candidateFiles = request.candidate.files ?? []
@@ -306,7 +330,7 @@ export class ResumeTailoringAgent {
     await reportStatus(options, 'normalizing_candidate')
     addTrace(trace, 'normalize_candidate', 'started')
     const normalizedCandidate = await normalizeCandidateInput(
-      this.llm,
+      llm,
       request.candidate,
       candidateArtifacts
     )
@@ -336,6 +360,7 @@ export class ResumeTailoringAgent {
     checkpoint: ResumeTailoringCheckpoint,
     options: ResumeTailoringRunOptions = {}
   ): Promise<TailorResumeResult> {
+    const llm = budgetedLlmClient(this.llm, toRunBudget(options.budget))
     const {
       candidate,
       candidateArtifacts,
@@ -353,7 +378,7 @@ export class ResumeTailoringAgent {
     addTrace(trace, 'analyze_job', 'started')
     let jobSpec: JobSpec
     try {
-      const jobCompletion = await completeStructuredOutput(this.llm, {
+      const jobCompletion = await completeStructuredOutput(llm, {
         request: {
           schemaName: 'JobSpec',
           system: JOB_ANALYSIS_SYSTEM_PROMPT,
@@ -401,7 +426,7 @@ export class ResumeTailoringAgent {
     addTrace(trace, 'draft_resume', 'started')
     let draftResponse: DraftResponse
     try {
-      const draftCompletion = await completeStructuredOutput(this.llm, {
+      const draftCompletion = await completeStructuredOutput(llm, {
         request: {
           schemaName: 'TailoredResumeDraft',
           system: DRAFT_SYSTEM_PROMPT,
