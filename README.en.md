@@ -70,6 +70,19 @@ Enabled / Operational`; see the
 The campaign sample is 3 synthetic cases with at most 2 repeats (Wilson 95%
 interval [0.30, 0.90]). It is a diagnostic baseline, not a claim of quality.
 
+Local one-command demo, with no model key, account or database:
+
+```
+pnpm install && ./scripts/demo.sh
+```
+
+It starts the API with `RESUME_AGENT_LLM_PROVIDER=offline`: a heuristic
+provider that calls no model answers all three LLM boundaries, and the real
+pipeline (matching, validation, diff, quality report, rendering, follow-up
+questions) runs unchanged. It does not rewrite resume text and its job
+analysis is a line splitter with a keyword lexicon; for real model quality,
+configure `OPENAI_*` and start the API directly.
+
 Where to start: [product roadmap](docs/resume-agent-product-roadmap.zh-CN.md)
 → [backend design and evidence ledger](docs/resume-agent-backend.md)
 → [structured-output reliability](docs/resume-agent-structured-output-reliability.zh-CN.md)

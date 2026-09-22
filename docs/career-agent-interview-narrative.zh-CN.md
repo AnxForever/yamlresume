@@ -283,8 +283,8 @@ template 错报给所有变体；进入逐格式 `try/catch` 之前一次性渲�
 3. **文档多于理解。** 7.4K 行设计文档，学习指南 12.1 的能力清单 10 项全部未勾。修正：§6 逐条
    自答并给代码位置；答不出的算下一次小实验。
 4. **文档与代码漂移。** 本地运行时 brief 写「浏览器使用确定性测试 Provider 走通了」，但源码里
-   没有可脚本化的 Provider 模块，只有测试文件里的内联 fake。修正：补 scripted `LlmClient`
-   让这句话为真，并作为一键 demo 的基础。
+   没有可脚本化的 Provider 模块，只有测试文件里的内联 fake。修正（2026-09-22）：
+   `llm/offline.ts` 的离线启发式 `LlmClient` 加 `scripts/demo.sh`，这句话现在为真。
 5. **对外数字没有可复现口径。** 「14.8K 行 / 67 个模块」对不上任何统计方式。修正：
    `scripts/project-metrics.mjs`，只数 git 跟踪文件，不含许可头。
 6. **小样本被当成成绩。** 4/6 的 Wilson 区间是 [0.30, 0.90]。修正：README 明确它是诊断
@@ -320,6 +320,7 @@ template 错报给所有变体；进入逐格式 `try/catch` 之前一次性渲�
 
 ## 8. 接下来
 
-- 一键 demo：脚本化 `LlmClient` + 内存 Store + 关闭认证，一条命令起 API 和工作台。
+- 一键 demo：已完成。`scripts/demo.sh` 用离线启发式 `LlmClient`、内存 Store、关闭认证
+  一条命令起 API 和工作台；它不改写文本、找不到姓名就提 blocking 问题而不是猜。
 - 语义检索切片：用 embedding 混合检索替换词法匹配器，草拟阶段只喂 top-k 证据；同一套
   campaign 给出 before / after。在此之前，§4.2 的匹配器就是 before。

@@ -43,6 +43,14 @@
 
 campaign 的样本只有 3 个合成案例、至多 2 轮重复（Wilson 95% 区间 [0.30, 0.90]），它是诊断用的基线，不是效果宣称。
 
+本地一键 demo（不需要模型密钥、账号或数据库）：
+
+```
+pnpm install && ./scripts/demo.sh
+```
+
+它用 `RESUME_AGENT_LLM_PROVIDER=offline` 起 API：一个不调用模型的启发式 Provider 回答全部三个 LLM 边界，真实流水线（匹配、校验、Diff、质量报告、渲染、HITL 提问）原样跑通。它不改写简历文本，岗位分析只是按行切分加关键词词典；要看真实模型质量，配置 `OPENAI_*` 后直接启动 API。
+
 从哪里读起：[产品路线图](docs/resume-agent-product-roadmap.zh-CN.md) → [后端设计与证据台账](docs/resume-agent-backend.md) → [结构化输出可靠性](docs/resume-agent-structured-output-reliability.zh-CN.md) → [评估框架](docs/resume-agent-evaluation-harness.zh-CN.md)。想按学习路径读，看[工程学习指南](docs/career-agent-learning-guide.zh-CN.md)。想看「问题 → 根因 → 修法 → 证据」的开发叙事，包括做错的部分，读[开发叙事与问题记录](docs/career-agent-interview-narrative.zh-CN.md)。
 
 ---

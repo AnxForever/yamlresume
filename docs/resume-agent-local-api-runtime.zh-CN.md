@@ -11,7 +11,7 @@
 
 ## 2. 当前证据与修正
 
-- 浏览器使用确定性测试 Provider 已走通“创建 Run → 主动提问 → 回答 → 完成 → 预览 → 下载”。这证明 HTTP/UI 契约可组合，不证明真实模型质量。
+- 浏览器使用确定性测试 Provider 已走通“创建 Run → 主动提问 → 回答 → 完成 → 预览 → 下载”。这证明 HTTP/UI 契约可组合，不证明真实模型质量。2026-09-22 起该 Provider 进入源码：`RESUME_AGENT_LLM_PROVIDER=offline` 选择 `packages/resume-agent/src/llm/offline.ts` 的离线启发式客户端（不调用模型、不改写文本、找不到姓名时提 blocking 问题而不是猜），`scripts/demo.sh` 用它一条命令起 API 与工作台。在此之前，这句话描述的 Provider 只存在于测试文件的内联 fake 中。
 - `SqliteRunStore`、事务任务、租约续租、fenced Run 写入和 `recoverPendingTasks()` 已有真实 SQLite 测试，但 API 启动入口仍默认 `InMemoryRunStore`，也没有调用恢复或负责关闭 Store。
 - `createDefaultAgent()` 在缺少 `OPENAI_API_KEY` 时直接抛错，导致 `/healthz` 和 `/v1/capabilities` 也无法使用。
 - 当前可用 Provider 配置均返回 401/400；因此本切片只能打通运行基础设施，不能把真实模型质量写成已验证。
