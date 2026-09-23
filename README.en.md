@@ -43,7 +43,7 @@ untrusted component rather than an oracle.
   a prompt, a model or a runtime can be compared on reliability rather than on
   impressions.
 
-### Project status (2026-09-22)
+### Project status (2026-09-23)
 
 **The delivered scope is one line: RP-001, "job description + candidate
 material → an evidence-backed tailored resume".** The other product lines in
@@ -62,10 +62,11 @@ Enabled / Operational`; see the
 
 | Number | Value | Source |
 | --- | ---: | --- |
-| Source in the three agent packages (MIT headers excluded) | 23.8K lines / 80 files | `node scripts/project-metrics.mjs` |
-| Tests | 673 cases / 48 files / 18.1K lines | `pnpm test` and the same script |
-| Design and evidence docs | 28 files / 7.4K lines | the same script |
+| Source in the three agent packages (MIT headers excluded) | 25.9K lines / 88 files | `node scripts/project-metrics.mjs` |
+| Tests | 711 cases / 54 files / 19.1K lines | `pnpm test` and the same script |
+| Design and evidence docs | 30 files / 8.1K lines | the same script |
 | Real DeepSeek campaign | pass 0/3 → 1/3 → 4/6, requirement coverage 0.37 → 0.57 | [public-job evaluation §9](docs/resume-agent-public-job-evaluation.zh-CN.md#9-2026-09-16-真实运行证据) |
+| Semantic evidence retrieval (RA-018) | paraphrase gold-set recall 0.06 → 0.50 at precision 0.82; downstream campaign 5×3: 11/15 with either matcher, no difference | [semantic retrieval §12](docs/resume-agent-semantic-evidence-retrieval.zh-CN.md#12-校准与-campaign-结果2026-09-23) |
 
 The campaign sample is 3 synthetic cases with at most 2 repeats (Wilson 95%
 interval [0.30, 0.90]). It is a diagnostic baseline, not a claim of quality.

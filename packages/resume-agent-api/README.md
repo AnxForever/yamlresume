@@ -101,3 +101,17 @@ rendered artifacts for retrieval, but never include the source request,
 checkpoint, raw answer values, or raw model output. File controls currently
 accept references to previously uploaded files only; the binary upload and
 re-normalization loop is deferred.
+
+## Optional runtime switches
+
+- `RESUME_AGENT_LLM_PROVIDER=offline` answers every model call with the
+  deterministic heuristic provider (no key, no network). It exists for the
+  local demo (`scripts/demo.sh`) and browser smoke runs; it does not rewrite
+  resume text.
+- `RESUME_AGENT_SEMANTIC_MATCHING=transformers` adds embedding-based evidence
+  retrieval for the requirements the keyword matcher leaves missing, running
+  `Xenova/multilingual-e5-small` in this process (the first call downloads
+  about 130 MB; set `NODE_OPTIONS=--use-env-proxy` behind a proxy). `hash`
+  selects the deterministic n-gram embedding for tests. Unset keeps matching
+  keyword-only, which is also what the evaluation judge uses. When on, the
+  value appears in `GET /v1/capabilities` as `runtime.semanticMatching`.

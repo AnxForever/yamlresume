@@ -314,6 +314,22 @@ Provider message 和异常正文均未写入报告或文档。
 `execution_failed` 更可能是 Provider/网络瞬态，而非稳定的业务代码回归；仍需更长序列、重试
 分布和运行监控后才能把该结论提升为 Operational 证据。
 
+### 2026-09-23 RA-018 对照 campaign：词法 vs 混合匹配
+
+同一 prompt 主干、同一模型（`deepseek-chat`）、同一裁判（词法 coverage + 金标关键词），
+5 案例（本文 3 例 + 2 个改写密集合成案例）× 3 轮，命令为
+`pnpm --filter @yamlresume/resume-agent exec tsx scripts/campaign.ts`：
+
+- 词法匹配器：`passed = 11/15`，`passRate = 0.7333`，Wilson [0.4805, 0.891]，`scored = 13`，
+  平均需求覆盖 0.6015，必备覆盖 0.6623，`assertion_failed = 2`、`execution_failed = 2`；
+- 混合匹配器：`passed = 11/15`，`passRate = 0.7333`，Wilson [0.4805, 0.891]，`scored = 14`，
+  平均需求覆盖 0.6093，必备覆盖 0.6614，`assertion_failed = 3`、`execution_failed = 1`。
+
+没有可测差异；逐案例与解释见
+[`resume-agent-semantic-evidence-retrieval.zh-CN.md`](./resume-agent-semantic-evidence-retrieval.zh-CN.md)
+§12.2。这次 campaign 首次通过可提交的命令重跑，报告里的 `runtimeRevision` 记录的是运行时
+HEAD（`00d855c`），RA-018 代码当时尚未提交，随后提交为 13479eb / b7b3490 / ac3aed2。
+
 ## 10. 验收门禁
 
 ```text

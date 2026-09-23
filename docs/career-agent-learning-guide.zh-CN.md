@@ -81,6 +81,7 @@
 | 产物边界 | `packages/resume-agent/src/rendering/` | 让确定性渲染器生成多种格式，而不是让模型直接写 PDF 或 HTML |
 | 身份与 secrets 边界 | `packages/resume-agent-api/src/auth.ts` | 区分密码单向 hash、可撤销 session、Run 授权关系和可轮换 Provider secret；学习 fail-closed、AEAD 与跨用户对抗测试 |
 | 可替换测试 | 相邻的 `*.test.ts` | 用 fake LLM 稳定复现成功、畸形输出、Repair 和拒绝路径 |
+| 语义检索与校准 | `packages/resume-agent/src/retrieval/hybrid.ts` | 词法优先、只补缺口；固定余弦阈值的语言偏置与背景差值校准；裁判分离让「没有差异」成为可信结论（RA-018） |
 
 当前工作流的主要数据流可以简化为：
 
