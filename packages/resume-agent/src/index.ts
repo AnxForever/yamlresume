@@ -124,6 +124,7 @@ export {
   EvalExecutionResultSchema,
   EvalExpectationsSchema,
 } from './evaluation/contracts'
+export { paraphraseHeavyDevelopmentCases } from './evaluation/fixtures/paraphrase-heavy'
 export { publicJobDerivedDevelopmentCases } from './evaluation/fixtures/public-job-derived'
 export { retrievalParaphraseCases } from './evaluation/fixtures/retrieval-paraphrase'
 export type {
