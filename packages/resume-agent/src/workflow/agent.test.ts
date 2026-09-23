@@ -30,6 +30,7 @@ import type {
 } from '@/contracts'
 import { StructuredOutputValidationError } from '@/llm/structured-output'
 import { renderOdtDocument } from '@/rendering/odt'
+import type { EmbeddingClient } from '@/retrieval/embeddings'
 import { ResumeTailoringAgent } from '@/workflow/agent'
 
 const candidate = {
@@ -149,6 +150,181 @@ describe('ResumeTailoringAgent', () => {
       'render_resume',
       'render_resume',
     ])
+  })
+
+  it('adds semantic evidence to the gaps, hints the draft, and keeps the lexical judge', async () => {
+    const jobSpec = {
+      targetTitle: 'Platform Engineer',
+      seniority: 'mid',
+      summary: 'Runs clusters',
+      requirements: [
+        {
+          id: 'typescript',
+          text: 'TypeScript experience',
+          keywords: ['TypeScript'],
+          importance: 'must-have',
+          category: 'technical',
+        },
+        {
+          id: 'compilers',
+          text: 'Build language tooling',
+          keywords: ['language tooling'],
+          importance: 'must-have',
+          category: 'technical',
+        },
+      ],
+      keywords: ['TypeScript', 'language tooling'],
+    }
+    const requests: JsonCompletionRequest[] = []
+    const llm: LlmClient = {
+      async completeJson(request) {
+        requests.push(request)
+        const data =
+          request.schemaName === 'JobSpec'
+            ? jobSpec
+            : {
+                resume: candidate,
+                selectedEvidenceIds: [],
+                questions: [],
+                notes: [],
+              }
+        return {
+          data,
+          metadata: {
+            provider: 'fake',
+            model: 'fake',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const embeddings: EmbeddingClient = {
+      id: 'scripted-e5',
+      async embed(texts, kind) {
+        return texts.map((text) => {
+          if (kind === 'query') return [1, 0, 0]
+          if (text === '- Built a TypeScript compiler service')
+            return [0.98, 0.2, 0]
+          return [0.5, 0.5, 0.7]
+        })
+      },
+    }
+    const request = {
+      jobDescription:
+        'We need a Platform Engineer who builds language tooling.',
+      candidate: { resume: candidate },
+    }
+    const lexical = await new ResumeTailoringAgent(llm).run(request)
+    const hybrid = await new ResumeTailoringAgent(llm, {
+      retrieval: {
+        embeddings,
+        acceptance: {
+          kind: 'background-margin',
+          margin: 0.1,
+          background: ['neutral'],
+        },
+      },
+    }).run(request)
+
+    const compilers = hybrid.matchReport.matchedRequirements.find(
+      (match) => match.requirementId === 'compilers'
+    )
+    expect(compilers?.status).toBe('partial')
+    expect(compilers?.evidenceIds).toEqual([
+      'candidate.content.projects[0].summary',
+    ])
+    expect(compilers?.rationale).toMatch(/Semantic match/)
+    expect(hybrid.matchReport.score).toBe(1)
+    expect(lexical.matchReport.score).toBe(0.5)
+
+    const draftPrompt = requests.at(-1)?.user ?? ''
+    expect(draftPrompt).toContain('REQUIREMENT EVIDENCE HINTS')
+    expect(draftPrompt).toContain(
+      'typescript | matched | candidate.content.projects[0].summary, candidate.content.projects[0].keywords[0]'
+    )
+    expect(draftPrompt).toContain(
+      'compilers | partial (semantic) | candidate.content.projects[0].summary'
+    )
+    expect(requests[1]?.user).not.toContain('REQUIREMENT EVIDENCE HINTS')
+
+    const matchTrace = hybrid.trace.find(
+      (event) => event.name === 'match_evidence' && event.status === 'completed'
+    )
+    expect(matchTrace?.metadata).toMatchObject({
+      matcher: 'hybrid',
+      embeddingModel: 'scripted-e5',
+      semanticMatches: 1,
+    })
+    // Judge separation: the quality report is computed by the lexical
+    // matcher on the final resume, so it is identical with and without
+    // retrieval when the draft did not change.
+    expect(hybrid.quality).toEqual(lexical.quality)
+    expect(hybrid.quality.requirementCoverage).toBe(0.5)
+  })
+
+  it('falls back to keyword matching with a warning when embeddings fail', async () => {
+    const llm: LlmClient = {
+      async completeJson(request) {
+        const data =
+          request.schemaName === 'JobSpec'
+            ? {
+                targetTitle: 'Engineer',
+                seniority: 'unknown',
+                summary: 'Builds things',
+                requirements: [
+                  {
+                    id: 'tooling',
+                    text: 'Build language tooling',
+                    keywords: ['language tooling'],
+                    importance: 'must-have',
+                    category: 'technical',
+                  },
+                ],
+                keywords: ['language tooling'],
+              }
+            : {
+                resume: candidate,
+                selectedEvidenceIds: [],
+                questions: [],
+                notes: [],
+              }
+        return {
+          data,
+          metadata: {
+            provider: 'fake',
+            model: 'fake',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const result = await new ResumeTailoringAgent(llm, {
+      retrieval: {
+        embeddings: {
+          id: 'absent-model',
+          async embed() {
+            throw new Error('model not downloaded')
+          },
+        },
+      },
+    }).run({
+      jobDescription: 'We need an engineer who builds language tooling.',
+      candidate: { resume: candidate },
+    })
+    expect(result.status).toBe('completed')
+    expect(result.matchReport.score).toBe(0)
+    expect(result.warnings).toContain(
+      'Semantic evidence matching was unavailable; requirement matching used keywords only.'
+    )
+    const matchTrace = result.trace.find(
+      (event) => event.name === 'match_evidence' && event.status === 'completed'
+    )
+    expect(matchTrace?.metadata).toMatchObject({
+      matcher: 'hybrid',
+      semanticFallback: 'embedding_failed',
+    })
   })
 
   it('ingests ODT candidate and job files through the complete workflow', async () => {

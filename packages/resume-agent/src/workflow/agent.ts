@@ -32,6 +32,7 @@ import type {
   InputFile,
   JobSpec,
   LlmClient,
+  MatchReport,
   ResumeTailoringCheckpoint,
   StructuredOutputTelemetry,
   TailorResumeRequest,
@@ -46,6 +47,7 @@ import { extractArtifacts } from '@/input/artifacts'
 import { artifactEvidence, normalizeCandidateInput } from '@/input/candidate'
 import { completeStructuredOutput } from '@/llm/structured-output'
 import { buildMatchReport } from '@/matching/match'
+import type { RequirementEvidenceHint } from '@/prompts'
 import {
   buildDraftPrompt,
   buildJobAnalysisPrompt,
@@ -57,6 +59,11 @@ import {
   getStylePreset,
   resolveStyleIDs,
 } from '@/rendering/styles'
+import {
+  buildHybridMatchReport,
+  type HybridMatchOptions,
+  type SemanticMatchSummary,
+} from '@/retrieval/hybrid'
 import { buildResumeDiff } from '@/transparency/diff'
 import { buildQualityReport } from '@/transparency/quality'
 import { buildEvidenceIndex } from '@/validation/evidence'
@@ -254,8 +261,22 @@ function normalizeJobSpec(value: unknown): unknown {
   }
 }
 
+export interface ResumeTailoringAgentOptions {
+  /**
+   * Semantic evidence retrieval (RA-018). When set, requirement matching
+   * adds embedding similarity for the gaps the keyword matcher leaves, and
+   * the draft prompt receives a per-requirement evidence hint block. The
+   * quality report and its coverage numbers keep the keyword matcher as
+   * their judge, so runs with and without retrieval stay comparable.
+   */
+  retrieval?: HybridMatchOptions
+}
+
 export class ResumeTailoringAgent {
-  constructor(private readonly llm: LlmClient) {}
+  constructor(
+    private readonly llm: LlmClient,
+    private readonly agentOptions: ResumeTailoringAgentOptions = {}
+  ) {}
 
   async chat(
     request: ChatRequest,
@@ -479,12 +500,46 @@ export class ResumeTailoringAgent {
     addTrace(trace, 'match_evidence', 'started', {
       evidence: evidence.length,
     })
-    const matchReport = buildMatchReport(jobSpec, evidence)
+    const retrieval = this.agentOptions.retrieval
+    let matchReport: MatchReport
+    let semantic: SemanticMatchSummary | undefined
+    if (retrieval) {
+      const hybrid = await buildHybridMatchReport(jobSpec, evidence, retrieval)
+      matchReport = hybrid
+      semantic = hybrid.semantic
+    } else {
+      matchReport = buildMatchReport(jobSpec, evidence)
+    }
     addTrace(trace, 'match_evidence', 'completed', {
       score: matchReport.score,
       matched: matchReport.matchedRequirements.length,
       missing: matchReport.missingRequirements.length,
+      matcher: semantic ? 'hybrid' : 'lexical',
+      ...(semantic
+        ? {
+            embeddingModel: semantic.model,
+            semanticMatches: semantic.matches.length,
+            ...(semantic.fallback
+              ? { semanticFallback: semantic.fallback }
+              : {}),
+          }
+        : {}),
     })
+    const semanticRequirementIds = new Set(
+      (semantic?.matches ?? []).map((match) => match.requirementId)
+    )
+    const hints: RequirementEvidenceHint[] = retrieval
+      ? [
+          ...matchReport.matchedRequirements,
+          ...matchReport.missingRequirements,
+        ].map((match) => ({
+          requirementId: match.requirementId,
+          requirement: match.requirement,
+          status: match.status,
+          evidenceIds: match.evidenceIds,
+          semantic: semanticRequirementIds.has(match.requirementId),
+        }))
+      : []
 
     const evidenceIds = new Set(evidence.map((item) => item.id))
 
@@ -501,7 +556,8 @@ export class ResumeTailoringAgent {
             candidate,
             evidence,
             preferences,
-            candidateArtifacts
+            candidateArtifacts,
+            hints
           ),
           images: candidateArtifacts
             .filter((artifact) => artifact.imageDataUrl)
@@ -605,6 +661,11 @@ export class ResumeTailoringAgent {
       questions: [...checkpoint.questions, ...draftResponse.questions],
       warnings: [
         ...checkpoint.warnings,
+        ...(semantic?.fallback
+          ? [
+              'Semantic evidence matching was unavailable; requirement matching used keywords only.',
+            ]
+          : []),
         ...draftResponse.notes,
         ...renderedVariants.flatMap((variant) =>
           variant.failures.map((failure) => failure.message)

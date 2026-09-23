@@ -125,6 +125,7 @@ export {
   EvalExpectationsSchema,
 } from './evaluation/contracts'
 export { publicJobDerivedDevelopmentCases } from './evaluation/fixtures/public-job-derived'
+export { retrievalParaphraseCases } from './evaluation/fixtures/retrieval-paraphrase'
 export type {
   ResumeHumanReview,
   ResumeHumanReviewAgreementMetric,
@@ -150,6 +151,21 @@ export {
   resumeHumanReviewRubricV1,
   summarizeResumeHumanReviews,
 } from './evaluation/human-review'
+export type {
+  RetrievalCase,
+  RetrievalCaseData,
+  RetrievalCaseResult,
+  RetrievalMatcher,
+  RetrievalMetrics,
+  RetrievalReport,
+} from './evaluation/retrieval'
+export {
+  evaluateRetrieval,
+  hybridRetrievalMatcher,
+  lexicalRetrievalMatcher,
+  RetrievalCaseSchema,
+  RetrievalDatasetSchema,
+} from './evaluation/retrieval'
 export { runEvaluation } from './evaluation/runner'
 export type { ArtifactInputErrorCode } from './input/artifacts'
 export {
@@ -175,6 +191,7 @@ export {
   completeStructuredOutput,
   StructuredOutputValidationError,
 } from './llm/structured-output'
+export type { RequirementEvidenceHint } from './prompts'
 export {
   DefaultPdfCompiler,
   renderResumeVariant,
@@ -186,6 +203,37 @@ export {
   resolveStyleIDs,
   STYLE_PRESETS,
 } from './rendering/styles'
+export type {
+  EmbeddingClient,
+  HashEmbeddingOptions,
+} from './retrieval/embeddings'
+export {
+  cosineSimilarity,
+  createHashEmbeddingClient,
+} from './retrieval/embeddings'
+export type {
+  HybridMatchOptions,
+  HybridMatchReport,
+  SemanticAcceptance,
+  SemanticAcceptanceSummary,
+  SemanticMatch,
+  SemanticMatchSummary,
+} from './retrieval/hybrid'
+export {
+  buildHybridMatchReport,
+  DEFAULT_BACKGROUND_SENTENCES,
+  DEFAULT_SEMANTIC_ACCEPTANCE,
+  DEFAULT_SEMANTIC_MARGIN,
+  DEFAULT_SEMANTIC_TOP_K,
+} from './retrieval/hybrid'
+export type { Passage, PassageOptions } from './retrieval/passages'
+export { buildPassages } from './retrieval/passages'
+export type { TransformersEmbeddingOptions } from './retrieval/transformers-embeddings'
+export {
+  createTransformersEmbeddingClient,
+  DEFAULT_TRANSFORMERS_EMBEDDING_MODEL,
+  EmbeddingModelUnavailableError,
+} from './retrieval/transformers-embeddings'
 export { buildResumeDiff } from './transparency/diff'
 export { buildQualityReport } from './transparency/quality'
 export { buildEvidenceIndex } from './validation/evidence'
@@ -197,7 +245,10 @@ export {
   prepareDraftResume,
   validateNormalizationFacts,
 } from './validation/resume'
-export type { ResumeTailoringRunOptions } from './workflow/agent'
+export type {
+  ResumeTailoringAgentOptions,
+  ResumeTailoringRunOptions,
+} from './workflow/agent'
 export { ResumeTailoringAgent } from './workflow/agent'
 export {
   applyInteractionAnswer,
