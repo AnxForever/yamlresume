@@ -36,8 +36,10 @@ import {
   ArtifactInputError,
   CandidateValidationError,
   ChatRequestSchema,
+  createHashEmbeddingClient,
   createOfflineLlmClient,
   createOpenAICompatibleClientFromEnv,
+  createTransformersEmbeddingClient,
   DraftValidationError,
   InMemoryRunStore,
   type InputFile,
@@ -47,6 +49,7 @@ import {
   LlmRequestError,
   ResumeAgentRunService,
   ResumeTailoringAgent,
+  type ResumeTailoringAgentOptions,
   RunAnswerError,
   type RunStore,
   SqliteRunStore,
@@ -546,6 +549,8 @@ interface AgentApiRuntimeCapabilities {
    * — the frontend hard-codes neither.
    */
   profile?: { materials: number }
+  /** Present only when semantic evidence retrieval is switched on. */
+  semanticMatching?: string
 }
 
 function capabilities(runtime: AgentApiRuntimeCapabilities) {
@@ -715,6 +720,12 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
     registration:
       options.runtime?.registration ??
       (inviteCodes.length > 0 ? 'invite' : 'open'),
+    ...((options.runtime?.semanticMatching ?? defaultAgent?.semanticMatching)
+      ? {
+          semanticMatching:
+            options.runtime?.semanticMatching ?? defaultAgent?.semanticMatching,
+        }
+      : {}),
   }
 
   return createServer(async (request, response) => {
@@ -1433,17 +1444,64 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
  * the API still starts but every model call fails with a stable
  * configuration error, so health and capabilities stay reachable.
  */
+/**
+ * Semantic evidence retrieval (RA-018) is opt-in per process:
+ * `RESUME_AGENT_SEMANTIC_MATCHING=transformers` runs multilingual-e5-small
+ * in-process (first call downloads about 130 MB), `hash` uses the
+ * deterministic n-gram embedding (tests and demos only; it cannot see
+ * paraphrase), anything else or unset leaves matching keyword-only, which is
+ * also what the evaluation judge always uses.
+ */
+function semanticMatchingFromEnv(env: NodeJS.ProcessEnv): {
+  options: ResumeTailoringAgentOptions
+  label?: string
+} {
+  const requested = env.RESUME_AGENT_SEMANTIC_MATCHING?.trim() || 'off'
+  if (requested === 'off') return { options: {} }
+  if (requested === 'transformers') {
+    return {
+      options: {
+        retrieval: { embeddings: createTransformersEmbeddingClient() },
+      },
+      label: 'transformers',
+    }
+  }
+  if (requested === 'hash') {
+    return {
+      options: { retrieval: { embeddings: createHashEmbeddingClient() } },
+      label: 'hash',
+    }
+  }
+  throw new AgentApiRuntimeError('invalid_configuration')
+}
+
+/**
+ * Pick the model provider from the environment.
+ *
+ * `RESUME_AGENT_LLM_PROVIDER=offline` selects the heuristic client that calls
+ * no model at all, for the local demo and browser smoke runs; it counts as a
+ * configured provider because every workflow stage can complete. Otherwise an
+ * OpenAI-compatible client is built from `OPENAI_*`, and when that is absent
+ * the API still starts but every model call fails with a stable
+ * configuration error, so health and capabilities stay reachable.
+ */
 function createDefaultAgent(env: NodeJS.ProcessEnv = process.env): {
   agent: ResumeTailoringAgent
   providerConfigured: boolean
   provider: 'offline' | 'openai-compatible' | 'none'
+  semanticMatching?: string
 } {
   const requested = env.RESUME_AGENT_LLM_PROVIDER?.trim() || 'openai-compatible'
+  const semantic = semanticMatchingFromEnv(env)
   if (requested === 'offline') {
     return {
-      agent: new ResumeTailoringAgent(createOfflineLlmClient()),
+      agent: new ResumeTailoringAgent(
+        createOfflineLlmClient(),
+        semantic.options
+      ),
       providerConfigured: true,
       provider: 'offline',
+      semanticMatching: semantic.label,
     }
   }
   if (requested !== 'openai-compatible') {
@@ -1452,9 +1510,10 @@ function createDefaultAgent(env: NodeJS.ProcessEnv = process.env): {
   const client = createOpenAICompatibleClientFromEnv(env)
   if (client) {
     return {
-      agent: new ResumeTailoringAgent(client),
+      agent: new ResumeTailoringAgent(client, semantic.options),
       providerConfigured: true,
       provider: 'openai-compatible',
+      semanticMatching: semantic.label,
     }
   }
   const unavailableClient: LlmClient = {
@@ -1463,9 +1522,10 @@ function createDefaultAgent(env: NodeJS.ProcessEnv = process.env): {
     },
   }
   return {
-    agent: new ResumeTailoringAgent(unavailableClient),
+    agent: new ResumeTailoringAgent(unavailableClient, semantic.options),
     providerConfigured: false,
     provider: 'none',
+    semanticMatching: semantic.label,
   }
 }
 
@@ -1703,7 +1763,13 @@ export async function startAgentApiServer(
       agent,
       runService,
       auth,
-      runtime: { providerConfigured, runStore },
+      runtime: {
+        providerConfigured,
+        runStore,
+        ...(defaultAgent?.semanticMatching
+          ? { semanticMatching: defaultAgent.semanticMatching }
+          : {}),
+      },
     })
     await listen(server, port, host)
     // Keep polling after startup recovery so released tasks and tasks created
@@ -1715,7 +1781,7 @@ export async function startAgentApiServer(
     }
     const url = `http://${host}:${address.port}`
     options.logger?.(
-      `YAMLResume agent API listening on ${url} (${runStore} RunStore, auth ${auth ? 'enabled' : 'disabled'}, provider ${defaultAgent?.provider ?? 'injected'})`
+      `YAMLResume agent API listening on ${url} (${runStore} RunStore, auth ${auth ? 'enabled' : 'disabled'}, provider ${defaultAgent?.provider ?? 'injected'}${defaultAgent?.semanticMatching ? `, semantic matching ${defaultAgent.semanticMatching}` : ''})`
     )
 
     let closing: Promise<void> | undefined

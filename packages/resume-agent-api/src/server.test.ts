@@ -276,6 +276,37 @@ describe('agent API', () => {
     }
   })
 
+  it('announces semantic evidence matching only when it is switched on', async () => {
+    async function runtimeOf(env: NodeJS.ProcessEnv) {
+      const server = createAgentApiServer({ env })
+      await new Promise<void>((resolve) => server.listen(0, resolve))
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        throw new Error('Server did not start')
+      }
+      try {
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/v1/capabilities`
+        )
+        const payload = (await response.json()) as {
+          data?: { runtime?: Record<string, unknown> }
+        }
+        return payload.data?.runtime ?? {}
+      } finally {
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve()))
+        )
+      }
+    }
+    expect(await runtimeOf({})).not.toHaveProperty('semanticMatching')
+    expect(
+      await runtimeOf({ RESUME_AGENT_SEMANTIC_MATCHING: 'hash' })
+    ).toMatchObject({ semanticMatching: 'hash' })
+    expect(() =>
+      createAgentApiServer({ env: { RESUME_AGENT_SEMANTIC_MATCHING: 'nope' } })
+    ).toThrow()
+  })
+
   it('stays discoverable without provider credentials and fails work safely', async () => {
     const server = createAgentApiServer({ env: {} })
     await new Promise<void>((resolve) => server.listen(0, resolve))
