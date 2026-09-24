@@ -25,7 +25,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   CandidateValidationError,
-  DraftValidationError,
   parseCandidateResume,
   prepareDraftResume,
 } from '@/validation/resume'
@@ -78,6 +77,52 @@ describe('prepareDraftResume', () => {
     expect(prepareDraftResume(draft, candidate).content.education).toEqual([])
   })
 
+  it('classifies a generated schema error with its field path', () => {
+    expect(() =>
+      prepareDraftResume(
+        {
+          ...candidate,
+          content: {
+            ...candidate.content,
+            basics: {
+              ...candidate.content.basics,
+              email: 'not-an-email',
+            },
+          },
+        },
+        candidate
+      )
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'draft_schema_invalid',
+        path: 'content.basics.email',
+      })
+    )
+  })
+
+  it('classifies a changed immutable fact with its field path', () => {
+    expect(() =>
+      prepareDraftResume(
+        {
+          ...candidate,
+          content: {
+            ...candidate.content,
+            basics: {
+              ...candidate.content.basics,
+              email: 'changed@example.com',
+            },
+          },
+        },
+        candidate
+      )
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'draft_immutable_fact_changed',
+        path: 'content.basics.email',
+      })
+    )
+  })
+
   it('rejects generated entries that have no candidate source', () => {
     expect(() =>
       prepareDraftResume(
@@ -90,14 +135,19 @@ describe('prepareDraftResume', () => {
               {
                 name: 'Invented project',
                 startDate: '2025',
-                endDate: '',
-                summary: 'No evidence',
+                endDate: '2025',
+                summary: 'No supporting evidence exists.',
               },
             ],
           },
         },
         candidate
       )
-    ).toThrow(DraftValidationError)
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'draft_unsupported_entry',
+        path: 'content.projects',
+      })
+    )
   })
 })

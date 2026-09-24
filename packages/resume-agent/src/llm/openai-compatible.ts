@@ -25,6 +25,7 @@
 import type {
   JsonCompletionRequest,
   LlmCallMetadata,
+  LlmCallOptions,
   LlmClient,
   LlmCompletion,
 } from '@/contracts'
@@ -51,6 +52,14 @@ interface ResolvedConfig {
   temperature?: number
 }
 
+const MAX_RETRY_AFTER_MS = 30_000
+const IMF_FIXDATE_PATTERN =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/
+const RFC850_DATE_PATTERN =
+  /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/
+const ASCTIME_DATE_PATTERN =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?: [1-9]|[12]\d|3[01]) (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d \d{4}$/
+
 export class LlmConfigurationError extends Error {
   constructor(message: string) {
     super(message)
@@ -60,6 +69,7 @@ export class LlmConfigurationError extends Error {
 
 export type LlmRequestErrorReason =
   | 'request_failed'
+  | 'cancelled'
   | 'timeout'
   | 'network_error'
   | 'http_status'
@@ -71,6 +81,7 @@ export class LlmRequestError extends Error {
   readonly reason: LlmRequestErrorReason
   readonly retryable: boolean
   readonly status?: number
+  readonly retryAfterMs?: number
 
   constructor(
     message: string,
@@ -78,6 +89,7 @@ export class LlmRequestError extends Error {
       reason?: LlmRequestErrorReason
       retryable?: boolean
       status?: number
+      retryAfterMs?: number
     } = {}
   ) {
     super(message)
@@ -85,6 +97,7 @@ export class LlmRequestError extends Error {
     this.reason = options.reason ?? 'request_failed'
     this.retryable = options.retryable ?? false
     this.status = options.status
+    this.retryAfterMs = normalizeRetryAfterMs(options.retryAfterMs)
   }
 
   toJSON(): {
@@ -93,6 +106,7 @@ export class LlmRequestError extends Error {
     reason: LlmRequestErrorReason
     retryable: boolean
     status?: number
+    retryAfterMs?: number
   } {
     return {
       name: this.name,
@@ -100,8 +114,40 @@ export class LlmRequestError extends Error {
       reason: this.reason,
       retryable: this.retryable,
       ...(this.status === undefined ? {} : { status: this.status }),
+      ...(this.retryAfterMs === undefined
+        ? {}
+        : { retryAfterMs: this.retryAfterMs }),
     }
   }
+}
+
+function normalizeRetryAfterMs(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
+    return undefined
+  }
+  return Math.min(Math.ceil(value), MAX_RETRY_AFTER_MS)
+}
+
+function retryAfterMs(response: Response): number | undefined {
+  const value = response.headers.get('Retry-After')?.trim()
+  if (!value) return undefined
+  if (/^\d+$/.test(value)) {
+    const seconds = Number(value)
+    return normalizeRetryAfterMs(
+      Number.isFinite(seconds) ? seconds * 1_000 : MAX_RETRY_AFTER_MS
+    )
+  }
+  if (
+    !IMF_FIXDATE_PATTERN.test(value) &&
+    !RFC850_DATE_PATTERN.test(value) &&
+    !ASCTIME_DATE_PATTERN.test(value)
+  ) {
+    return undefined
+  }
+  const retryAt = Date.parse(value)
+  return Number.isFinite(retryAt)
+    ? normalizeRetryAfterMs(Math.max(0, retryAt - Date.now()))
+    : undefined
 }
 
 function stripJsonFence(content: string): string {
@@ -134,9 +180,29 @@ function getContent(payload: unknown): string {
   return content
 }
 
-function sleep(milliseconds: number): Promise<void> {
+function cancelledRequestError(): LlmRequestError {
+  return new LlmRequestError('LLM request was cancelled', {
+    reason: 'cancelled',
+    retryable: false,
+  })
+}
+
+function sleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(cancelledRequestError())
   if (milliseconds === 0) return Promise.resolve()
-  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+  return new Promise((resolve, reject) => {
+    const finish = (): void => {
+      signal?.removeEventListener('abort', cancel)
+      resolve()
+    }
+    const cancel = (): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', cancel)
+      reject(cancelledRequestError())
+    }
+    const timer = setTimeout(finish, milliseconds)
+    signal?.addEventListener('abort', cancel, { once: true })
+  })
 }
 
 function optionalTokenCount(
@@ -226,7 +292,8 @@ export class OpenAICompatibleClient implements LlmClient {
   }
 
   async completeJson<T>(
-    request: JsonCompletionRequest
+    request: JsonCompletionRequest,
+    options: LlmCallOptions = {}
   ): Promise<LlmCompletion<T>> {
     let lastError: LlmRequestError | undefined
     const attempts = this.config.maxRetries + 1
@@ -234,7 +301,12 @@ export class OpenAICompatibleClient implements LlmClient {
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       const startedAt = Date.now()
       try {
-        const result = await this.requestOnce<T>(request, attempt, startedAt)
+        const result = await this.requestOnce<T>(
+          request,
+          attempt,
+          startedAt,
+          options.signal
+        )
         return result
       } catch (error) {
         const normalized =
@@ -248,7 +320,13 @@ export class OpenAICompatibleClient implements LlmClient {
         if (!normalized.retryable || attempt === attempts) {
           throw normalized
         }
-        await sleep(this.config.retryDelayMs * 2 ** (attempt - 1))
+        await sleep(
+          Math.max(
+            this.config.retryDelayMs * 2 ** (attempt - 1),
+            normalized.retryAfterMs ?? 0
+          ),
+          options.signal
+        )
       }
     }
 
@@ -261,12 +339,21 @@ export class OpenAICompatibleClient implements LlmClient {
   private async requestOnce<T>(
     request: JsonCompletionRequest,
     attempt: number,
-    startedAt: number
+    startedAt: number,
+    callerSignal?: AbortSignal
   ): Promise<LlmCompletion<T>> {
     const controller = new AbortController()
-    let didTimeout = false
+    let abortSource: 'caller' | 'timeout' | undefined
+    const abortFromCaller = (): void => {
+      if (abortSource) return
+      abortSource = 'caller'
+      controller.abort()
+    }
+    callerSignal?.addEventListener('abort', abortFromCaller, { once: true })
+    if (callerSignal?.aborted) abortFromCaller()
     const timeout = setTimeout(() => {
-      didTimeout = true
+      if (abortSource) return
+      abortSource = 'timeout'
       controller.abort()
     }, this.config.timeoutMs)
     const requestBody = {
@@ -304,14 +391,19 @@ export class OpenAICompatibleClient implements LlmClient {
       })
 
       const responseBody = await response.text()
+      const retryableStatus = isRetryableStatus(response.status)
+      const responseRetryAfterMs = retryableStatus
+        ? retryAfterMs(response)
+        : undefined
       let payload: unknown
       try {
         payload = JSON.parse(responseBody) as unknown
       } catch {
         throw new LlmRequestError('LLM response body was not valid JSON', {
           reason: 'response_body_invalid_json',
-          retryable: isRetryableStatus(response.status),
+          retryable: retryableStatus,
           status: response.status,
+          retryAfterMs: responseRetryAfterMs,
         })
       }
 
@@ -320,8 +412,9 @@ export class OpenAICompatibleClient implements LlmClient {
           `LLM request failed with HTTP status ${response.status}`,
           {
             reason: 'http_status',
-            retryable: isRetryableStatus(response.status),
+            retryable: retryableStatus,
             status: response.status,
+            retryAfterMs: responseRetryAfterMs,
           }
         )
       }
@@ -351,7 +444,10 @@ export class OpenAICompatibleClient implements LlmClient {
       return { data, metadata }
     } catch (error) {
       if (error instanceof LlmRequestError) throw error
-      if (didTimeout) {
+      if (abortSource === 'caller') {
+        throw cancelledRequestError()
+      }
+      if (abortSource === 'timeout') {
         throw new LlmRequestError('LLM request timed out', {
           reason: 'timeout',
           retryable: true,
@@ -363,6 +459,7 @@ export class OpenAICompatibleClient implements LlmClient {
       })
     } finally {
       clearTimeout(timeout)
+      callerSignal?.removeEventListener('abort', abortFromCaller)
     }
   }
 }

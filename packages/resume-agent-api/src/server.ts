@@ -23,7 +23,7 @@
  */
 
 import { randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { chmod, mkdir } from 'node:fs/promises'
 import {
   createServer,
   type IncomingMessage,
@@ -48,6 +48,7 @@ import {
   LlmConfigurationError,
   LlmRequestError,
   ResumeAgentRunService,
+  type ResumeAgentRunServiceOptions,
   ResumeTailoringAgent,
   type ResumeTailoringAgentOptions,
   RunAnswerError,
@@ -64,6 +65,7 @@ import {
   AuthService,
   type AuthSession,
   type AuthUser,
+  type WorkRateLimitPolicy,
 } from './auth'
 import { createSmtpEmailPort, readSmtpConfig } from './email'
 import {
@@ -85,6 +87,11 @@ const DEFAULT_RECOVERY_LIMIT = 100
 const DEFAULT_DATABASE_PATH = '.data/resume-agent/runs.sqlite'
 const DEFAULT_AUTH_DATABASE_PATH = '.data/resume-agent/auth.sqlite'
 const DEFAULT_ALLOWED_ORIGIN = 'http://localhost:5173'
+const DEFAULT_WORK_RATE_LIMIT = 10
+const DEFAULT_WORK_RATE_WINDOW_MS = 15 * 60 * 1_000
+const DEFAULT_TASK_LEASE_MS = 60_000
+const DEFAULT_TASK_POLL_MS = 1_000
+const DEFAULT_TASK_RETRY_ELAPSED_MS = 15 * 60 * 1_000
 const JSON_BODY_BYTES = 1_000_000
 const API_VERSION = 'v1'
 
@@ -346,7 +353,10 @@ function allowCors(
     'Access-Control-Allow-Methods',
     'GET, POST, PUT, DELETE, OPTIONS'
   )
-  response.setHeader('Access-Control-Expose-Headers', 'X-Request-Id')
+  response.setHeader(
+    'Access-Control-Expose-Headers',
+    'X-Request-Id, Retry-After'
+  )
   return !auth || !origin || origin === auth.allowedOrigin
 }
 
@@ -418,6 +428,31 @@ async function requireAuthenticatedRequest(
   } catch (authError) {
     authErrorResponse(response, authError, requestId)
     return undefined
+  }
+}
+
+async function admitModelWork(
+  response: ServerResponse,
+  auth: AgentApiAuthOptions,
+  user: AuthUser,
+  policy: WorkRateLimitPolicy,
+  requestId: string
+): Promise<boolean> {
+  try {
+    const decision = await auth.service.consumeWorkQuota(user.id, policy)
+    if (decision.allowed) return true
+    response.setHeader('Retry-After', String(decision.retryAfterSeconds))
+    error(
+      response,
+      429,
+      'work_rate_limited',
+      'Too many model-backed requests; try again later.',
+      requestId
+    )
+    return false
+  } catch (authError) {
+    authErrorResponse(response, authError, requestId)
+    return false
   }
 }
 
@@ -551,6 +586,8 @@ interface AgentApiRuntimeCapabilities {
   profile?: { materials: number }
   /** Present only when semantic evidence retrieval is switched on. */
   semanticMatching?: string
+  /** Shared account quota for requests that start new model-backed work. */
+  workRateLimit?: { limit: number; windowSeconds: number }
 }
 
 function capabilities(runtime: AgentApiRuntimeCapabilities) {
@@ -638,6 +675,7 @@ export interface AgentApiOptions {
   auth?: AgentApiAuthOptions
   env?: NodeJS.ProcessEnv
   runtime?: Partial<AgentApiRuntimeCapabilities>
+  workRateLimit?: WorkRateLimitPolicy
 }
 
 function validateAuthHttpOptions(auth: AgentApiAuthOptions): void {
@@ -694,16 +732,18 @@ export interface StartedAgentApiServer {
 
 export function createAgentApiServer(options: AgentApiOptions = {}): Server {
   if (options.auth) validateAuthHttpOptions(options.auth)
-  const defaultAgent = options.agent
-    ? undefined
-    : createDefaultAgent(options.env)
+  const env = options.env ?? process.env
+  const defaultAgent = options.agent ? undefined : createDefaultAgent(env)
   const agent = options.agent ?? defaultAgent?.agent
   if (!agent) throw new Error('Agent API initialization failed')
   const runService = options.runService ?? new ResumeAgentRunService(agent)
   // Registration policy is deployment configuration, not an account rule, so
   // it is read here where both the capabilities payload and the register
   // handler can see it.
-  const inviteCodes = readInviteCodes(options.env ?? process.env)
+  const inviteCodes = readInviteCodes(env)
+  const workRateLimit = options.auth
+    ? readWorkRateLimitPolicy(options.workRateLimit, env)
+    : undefined
 
   const runtime: AgentApiRuntimeCapabilities = {
     providerConfigured:
@@ -720,6 +760,14 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
     registration:
       options.runtime?.registration ??
       (inviteCodes.length > 0 ? 'invite' : 'open'),
+    ...(workRateLimit
+      ? {
+          workRateLimit: {
+            limit: workRateLimit.limit,
+            windowSeconds: workRateLimit.windowMs / 1_000,
+          },
+        }
+      : {}),
     ...((options.runtime?.semanticMatching ?? defaultAgent?.semanticMatching)
       ? {
           semanticMatching:
@@ -1313,6 +1361,20 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
           )
           return
         }
+        if (
+          options.auth &&
+          identity &&
+          workRateLimit &&
+          !(await admitModelWork(
+            response,
+            options.auth,
+            identity.user,
+            workRateLimit,
+            requestId
+          ))
+        ) {
+          return
+        }
         try {
           success(response, 200, await agent.chat(parsed.data), requestId)
         } catch (chatError) {
@@ -1372,6 +1434,21 @@ export function createAgentApiServer(options: AgentApiOptions = {}): Server {
         requestId,
         validationDetails(parsed.error.issues)
       )
+      return
+    }
+
+    if (
+      options.auth &&
+      identity &&
+      workRateLimit &&
+      !(await admitModelWork(
+        response,
+        options.auth,
+        identity.user,
+        workRateLimit,
+        requestId
+      ))
+    ) {
       return
     }
 
@@ -1546,6 +1623,26 @@ function configuredInteger(
   return resolved
 }
 
+function readWorkRateLimitPolicy(
+  policy: WorkRateLimitPolicy | undefined,
+  env: NodeJS.ProcessEnv
+): WorkRateLimitPolicy {
+  return {
+    limit: configuredInteger(
+      policy?.limit ?? env.RESUME_AGENT_WORK_RATE_LIMIT,
+      DEFAULT_WORK_RATE_LIMIT,
+      1,
+      1_000
+    ),
+    windowMs: configuredInteger(
+      policy?.windowMs ?? env.RESUME_AGENT_WORK_RATE_WINDOW_MS,
+      DEFAULT_WORK_RATE_WINDOW_MS,
+      1_000,
+      24 * 60 * 60 * 1_000
+    ),
+  }
+}
+
 async function createRuntimeStore(
   env: NodeJS.ProcessEnv
 ): Promise<{ kind: 'memory' | 'sqlite'; store: RunStore; close?: () => void }> {
@@ -1563,11 +1660,30 @@ async function createRuntimeStore(
     throw new AgentApiRuntimeError('invalid_configuration')
   }
   const databasePath = resolve(configuredPath)
+  let store: SqliteRunStore | undefined
   try {
     await mkdir(dirname(databasePath), { recursive: true, mode: 0o700 })
-    const store = await SqliteRunStore.open(databasePath)
+    store = await SqliteRunStore.open(databasePath)
+    for (const path of [
+      databasePath,
+      `${databasePath}-wal`,
+      `${databasePath}-shm`,
+    ]) {
+      try {
+        await chmod(path, 0o600)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') {
+          throw error
+        }
+      }
+    }
     return { kind, store, close: () => store.close() }
   } catch {
+    try {
+      store?.close()
+    } catch {
+      // Preserve the stable runtime error.
+    }
     throw new AgentApiRuntimeError('store_open_failed')
   }
 }
@@ -1612,6 +1728,34 @@ function configuredBoolean(
   if (value === 'true') return true
   if (value === 'false') return false
   throw new AgentApiRuntimeError('invalid_configuration')
+}
+
+function readRunWorkerOptions(
+  env: NodeJS.ProcessEnv
+): Pick<
+  ResumeAgentRunServiceOptions,
+  'taskLeaseMs' | 'taskPollMs' | 'maxTaskRetryElapsedMs'
+> {
+  return {
+    taskLeaseMs: configuredInteger(
+      env.RESUME_AGENT_TASK_LEASE_MS,
+      DEFAULT_TASK_LEASE_MS,
+      100,
+      24 * 60 * 60 * 1_000
+    ),
+    taskPollMs: configuredInteger(
+      env.RESUME_AGENT_TASK_POLL_MS,
+      DEFAULT_TASK_POLL_MS,
+      10,
+      60_000
+    ),
+    maxTaskRetryElapsedMs: configuredInteger(
+      env.RESUME_AGENT_TASK_RETRY_ELAPSED_MS,
+      DEFAULT_TASK_RETRY_ELAPSED_MS,
+      1_000,
+      24 * 60 * 60 * 1_000
+    ),
+  }
 }
 
 async function createRuntimeAuth(
@@ -1745,9 +1889,13 @@ export async function startAgentApiServer(
   if (runService) {
     runStore = options.runtime?.runStore ?? 'memory'
   } else {
+    const workerOptions = readRunWorkerOptions(env)
     ownedStore = await createRuntimeStore(env)
     runStore = ownedStore.kind
-    runService = new ResumeAgentRunService(agent, { store: ownedStore.store })
+    runService = new ResumeAgentRunService(agent, {
+      store: ownedStore.store,
+      ...workerOptions,
+    })
   }
 
   let auth = options.auth
@@ -1763,6 +1911,8 @@ export async function startAgentApiServer(
       agent,
       runService,
       auth,
+      env,
+      workRateLimit: options.workRateLimit,
       runtime: {
         providerConfigured,
         runStore,
@@ -1840,11 +1990,15 @@ if (
         shuttingDown = true
         void runtime.close().then(
           () => {
-            process.exitCode = 0
+            // Runtime close asks active durable Run Provider requests to abort
+            // before releasing their heartbeats. Explicit exit remains the
+            // executable's final convergence guard for injected LlmClient
+            // implementations that ignore AbortSignal.
+            process.exit(0)
           },
           () => {
             console.error('Agent API failed to shut down cleanly.')
-            process.exitCode = 1
+            process.exit(1)
           }
         )
       }

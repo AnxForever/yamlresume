@@ -68,10 +68,11 @@ issue code 与调用计数等安全摘要，不返回 JD、候选人资料、图
 | GET | `/v1/runs/{id}` | 查询 Run 的当前阶段、完成结果或安全失败 |
 | POST | `/v1/runs/{id}/answers` | 回答当前结构化交互，并继续暂停或恢复 Run |
 
-本地 runtime 默认使用 SQLite RunStore，并在显式启动 drain 中恢复已提交任务；
-认证启用时，Run owner 也在独立 auth schema 中持久化。它们只提供单机开发级
-耐久性，多主机 worker、自动 poller、取消和保留策略仍未实现，不能把当前协议
-当作生产级任务队列。
+本地 runtime 默认使用 SQLite RunStore，通过单机自动 poller 恢复和执行已提交
+任务；认证启用时，Run owner 也在独立 auth schema 中持久化。内置 adapter 的
+durable Run 会在 close、失租或 retry deadline 时取消本地 Provider transport。
+多主机 worker、同步 HTTP 断连取消、Provider exactly-once/idempotency 与保留
+策略仍未实现，不能把当前协议当作通用生产级任务队列。
 
 处于 `needs_input` 的公开 Run 快照一次只暴露一个 `interactions` 项。客户端应
 提交该项的 `id`、稳定的客户端幂等键和控件值。相同幂等键与相同回答可安全

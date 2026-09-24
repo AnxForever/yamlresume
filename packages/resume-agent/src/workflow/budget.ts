@@ -25,6 +25,7 @@
 import type {
   JsonCompletionRequest,
   LlmCallMetadata,
+  LlmCallOptions,
   LlmClient,
   LlmCompletion,
 } from '@/contracts'
@@ -33,10 +34,10 @@ import type {
  * Ceilings for a single run.
  *
  * The agent is phase based rather than an open ReAct loop, but each phase can
- * still call the provider more than once: `completeStructuredOutput` retries
- * a malformed response, and the transport retries 408/409/429/5xx. Without a
- * ceiling a single request can therefore issue an unbounded number of billable
- * calls. These limits are the stop condition.
+ * still complete more than once when `completeStructuredOutput` repairs a
+ * malformed response. Transport retries happen inside the Provider adapter and
+ * are separately bounded; they are not individually visible to this meter.
+ * These limits are therefore workflow ceilings, not exact billing controls.
  */
 export const DEFAULT_RUN_BUDGET_LIMITS = Object.freeze({
   maxModelCalls: 8,
@@ -44,7 +45,7 @@ export const DEFAULT_RUN_BUDGET_LIMITS = Object.freeze({
 })
 
 export interface RunBudgetLimits {
-  /** Provider calls allowed per run, retries included. Defaults to 8. */
+  /** Successful logical completions allowed per run; Repair calls included. */
   maxModelCalls?: number
   /** Input + output tokens allowed per run. Defaults to 200000. */
   maxTotalTokens?: number
@@ -103,7 +104,7 @@ function resolveLimit(value: number | undefined, fallback: number): number {
 }
 
 /**
- * Meters the provider calls made during one run.
+ * Meters successful logical completions made during one in-memory run.
  *
  * Limits are enforced on both sides of a call: before it is issued (so a run
  * that is already at its ceiling stops) and after its usage is recorded (so a
@@ -175,12 +176,12 @@ export class RunBudget {
 }
 
 /**
- * Wraps a client so that every call is metered, retries included.
+ * Wraps a client so that each successful `completeJson` call is metered.
  *
  * The wrapper sits below `completeStructuredOutput`, which means the repair
- * and transport retries it performs are counted individually rather than as
- * one logical request. That is the honest accounting: each attempt is a
- * separate provider round trip.
+ * call is counted separately from the first logical completion. Transport
+ * attempts remain inside the wrapped adapter and failed calls return no usage
+ * metadata, so neither is individually counted here.
  */
 export function budgetedLlmClient(
   llm: LlmClient,
@@ -188,10 +189,11 @@ export function budgetedLlmClient(
 ): LlmClient {
   return {
     async completeJson<T>(
-      request: JsonCompletionRequest
+      request: JsonCompletionRequest,
+      options?: LlmCallOptions
     ): Promise<LlmCompletion<T>> {
       budget.assertCanCall()
-      const completion = await llm.completeJson<T>(request)
+      const completion = await llm.completeJson<T>(request, options)
       // A call that failed below this point never recorded its metadata, so it
       // is counted once, here, on the success path and not twice.
       budget.record(completion.metadata)

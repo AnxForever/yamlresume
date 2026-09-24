@@ -429,6 +429,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/AuthenticationRequired'
+        '429':
+          $ref: '#/components/responses/WorkRateLimited'
         '502':
           $ref: '#/components/responses/LlmRequestFailed'
         '503':
@@ -480,6 +482,8 @@ paths:
           $ref: '#/components/responses/UnsupportedMediaType'
         '422':
           $ref: '#/components/responses/AgentValidationFailed'
+        '429':
+          $ref: '#/components/responses/WorkRateLimited'
         '502':
           $ref: '#/components/responses/LlmRequestFailed'
         '503':
@@ -525,6 +529,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/WorkRateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
   /v1/runs/{id}:
@@ -686,6 +692,18 @@ components:
             $ref: '#/components/schemas/ErrorEnvelope'
     LlmNotConfigured:
       description: Server model credentials are missing or invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    WorkRateLimited:
+      description: The authenticated account has exhausted its shared model-work allowance
+      headers:
+        Retry-After:
+          description: Integer seconds until the account's current fixed window resets
+          schema:
+            type: integer
+            minimum: 1
       content:
         application/json:
           schema:
@@ -928,6 +946,7 @@ components:
                 - profile_unavailable
                 - authentication_disabled
                 - authentication_failed
+                - work_rate_limited
                 - origin_not_allowed
                 - invalid_answer
                 - not_found
@@ -1528,3 +1547,10 @@ components:
             providerConfigured: { type: boolean }
             runStore: { type: string, enum: [memory, sqlite] }
             authentication: { type: string, enum: [enabled, disabled] }
+            workRateLimit:
+              description: Present only when authentication and the shared account quota are enabled
+              type: object
+              required: [limit, windowSeconds]
+              properties:
+                limit: { type: integer, minimum: 1, maximum: 1000 }
+                windowSeconds: { type: number, minimum: 1, maximum: 86400 }

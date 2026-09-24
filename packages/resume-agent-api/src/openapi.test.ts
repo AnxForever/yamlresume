@@ -150,4 +150,47 @@ describe('OpenAPI contract', () => {
         ?.writeOnly
     ).toBe(true)
   })
+
+  it('documents account work-limit responses and discovery metadata', async () => {
+    const path = join(process.cwd(), '../../docs/api/resume-agent.openapi.yaml')
+    const document = parse(await readFile(path, 'utf8')) as {
+      paths?: Record<string, { post?: { responses?: Record<string, unknown> } }>
+      components?: {
+        responses?: {
+          WorkRateLimited?: { headers?: Record<string, unknown> }
+        }
+        schemas?: {
+          ErrorEnvelope?: {
+            properties?: {
+              error?: {
+                properties?: { code?: { enum?: string[] } }
+              }
+            }
+          }
+          Capabilities?: {
+            properties?: {
+              runtime?: {
+                properties?: { workRateLimit?: unknown }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    for (const route of ['/v1/chat', '/v1/tailor-resume', '/v1/runs']) {
+      expect(document.paths?.[route]?.post?.responses?.['429']).toBeDefined()
+    }
+    expect(
+      document.components?.responses?.WorkRateLimited?.headers?.['Retry-After']
+    ).toBeDefined()
+    expect(
+      document.components?.schemas?.ErrorEnvelope?.properties?.error?.properties
+        ?.code?.enum
+    ).toContain('work_rate_limited')
+    expect(
+      document.components?.schemas?.Capabilities?.properties?.runtime
+        ?.properties?.workRateLimit
+    ).toBeDefined()
+  })
 })

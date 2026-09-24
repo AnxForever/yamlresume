@@ -22,13 +22,14 @@
  * IN THE SOFTWARE.
  */
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { LlmClient } from '@yamlresume/resume-agent'
 import {
   CandidateValidationError,
+  createOfflineLlmClient,
   ResumeAgentRunService,
   ResumeTailoringAgent,
   renderResumeVariant,
@@ -273,6 +274,115 @@ describe('agent API', () => {
       await firstRuntime?.close()
       await secondRuntime?.close()
       await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('repairs permissive SQLite artifacts when the local runtime reopens', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'resume-agent-private-db-'))
+    const databasePath = join(directory, 'private', 'runs.sqlite')
+    const artifacts = [
+      databasePath,
+      `${databasePath}-wal`,
+      `${databasePath}-shm`,
+    ]
+    let firstRuntime:
+      | Awaited<ReturnType<typeof startAgentApiServer>>
+      | undefined
+    let secondRuntime:
+      | Awaited<ReturnType<typeof startAgentApiServer>>
+      | undefined
+
+    try {
+      const env = {
+        RESUME_AGENT_AUTH_MODE: 'disabled',
+        RESUME_AGENT_RUN_DB_PATH: databasePath,
+      }
+      firstRuntime = await startAgentApiServer({
+        agent: fakeAgent(),
+        env,
+        port: 0,
+        logger: () => undefined,
+      })
+      const response = await fetch(`${firstRuntime.url}/v1/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobDescription: 'Synthetic local permission check.',
+          candidate: { resume: candidate },
+        }),
+      })
+      expect(response.status).toBe(202)
+      await Promise.all(artifacts.map((path) => chmod(path, 0o644)))
+      await firstRuntime.close()
+      firstRuntime = undefined
+
+      secondRuntime = await startAgentApiServer({
+        agent: fakeAgent(),
+        env,
+        port: 0,
+        logger: () => undefined,
+      })
+
+      await expect(
+        Promise.all(
+          artifacts.map(async (path) => (await stat(path)).mode & 0o777)
+        )
+      ).resolves.toEqual([0o600, 0o600, 0o600])
+      expect((await stat(join(directory, 'private'))).mode & 0o777).toBe(0o700)
+    } finally {
+      await firstRuntime?.close()
+      await secondRuntime?.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects invalid durable worker timing configuration before listening', async () => {
+    let runtime: Awaited<ReturnType<typeof startAgentApiServer>> | undefined
+    try {
+      const outcome = await startAgentApiServer({
+        agent: fakeAgent(),
+        env: {
+          RESUME_AGENT_AUTH_MODE: 'disabled',
+          RESUME_AGENT_RUN_STORE: 'memory',
+          RESUME_AGENT_TASK_LEASE_MS: 'not-a-number',
+        },
+        port: 0,
+      }).then(
+        (started) => {
+          runtime = started
+          return started
+        },
+        (error: unknown) => error
+      )
+
+      expect(outcome).toMatchObject({ code: 'invalid_configuration' })
+    } finally {
+      await runtime?.close()
+    }
+  })
+
+  it('rejects an invalid task retry elapsed limit before listening', async () => {
+    let runtime: Awaited<ReturnType<typeof startAgentApiServer>> | undefined
+    try {
+      const outcome = await startAgentApiServer({
+        agent: fakeAgent(),
+        env: {
+          RESUME_AGENT_AUTH_MODE: 'disabled',
+          RESUME_AGENT_RUN_STORE: 'memory',
+          RESUME_AGENT_TASK_RETRY_ELAPSED_MS: '999',
+        },
+        port: 0,
+      }).then(
+        (started) => {
+          runtime = started
+          return started
+        },
+        (error: unknown) => error
+      )
+
+      expect(outcome).toMatchObject({ code: 'invalid_configuration' })
+    } finally {
+      await runtime?.close()
     }
   })
 
@@ -1119,6 +1229,78 @@ describe('agent API', () => {
       expect(response.status).toBe(200)
       expect(payload.data?.status).toBe('completed')
     })
+  })
+
+  it('preserves a valid YAMLResume uploaded as a candidate file', async () => {
+    const offlineAgent = new ResumeTailoringAgent(createOfflineLlmClient())
+
+    await withServer(async (baseUrl) => {
+      const form = new FormData()
+      form.set(
+        'jobDescription',
+        'We need a TypeScript Engineer to build reliable API systems.'
+      )
+      form.set('preferences', JSON.stringify({ formats: ['yaml'] }))
+      form.append(
+        'candidateFiles',
+        new Blob(
+          [
+            [
+              'content:',
+              '  basics:',
+              '    name: Ada Lovelace',
+              '    email: ada@example.com',
+              '  education: []',
+              'layouts:',
+              '  - engine: html',
+              '    template: calm',
+            ].join('\n'),
+          ],
+          { type: 'application/yaml' }
+        ),
+        'resume.yml'
+      )
+
+      const response = await fetch(`${baseUrl}/v1/tailor-resume`, {
+        method: 'POST',
+        body: form,
+      })
+      const payload = (await response.json()) as {
+        data?: { resume?: { content?: { basics?: { name?: string } } } }
+      }
+
+      expect(response.status).toBe(200)
+      expect(payload.data?.resume?.content?.basics?.name).toBe('Ada Lovelace')
+    }, offlineAgent)
+  })
+
+  it('preserves a valid JSON YAMLResume uploaded as a candidate file', async () => {
+    const offlineAgent = new ResumeTailoringAgent(createOfflineLlmClient())
+
+    await withServer(async (baseUrl) => {
+      const form = new FormData()
+      form.set(
+        'jobDescription',
+        'We need a TypeScript Engineer to build reliable API systems.'
+      )
+      form.set('preferences', JSON.stringify({ formats: ['yaml'] }))
+      form.append(
+        'candidateFiles',
+        new Blob([JSON.stringify(candidate)], { type: 'application/json' }),
+        'resume.json'
+      )
+
+      const response = await fetch(`${baseUrl}/v1/tailor-resume`, {
+        method: 'POST',
+        body: form,
+      })
+      const payload = (await response.json()) as {
+        data?: { resume?: { content?: { basics?: { name?: string } } } }
+      }
+
+      expect(response.status).toBe(200)
+      expect(payload.data?.resume?.content?.basics?.name).toBe('Ada Lovelace')
+    }, offlineAgent)
   })
 
   it('accepts a real legacy Word document through the multipart contract', async () => {

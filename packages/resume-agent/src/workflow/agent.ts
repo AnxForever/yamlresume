@@ -149,6 +149,7 @@ type ActiveAgentRunStatus = Exclude<
 
 export interface ResumeTailoringRunOptions {
   onStatus?: (status: ActiveAgentRunStatus) => Promise<void> | void
+  signal?: AbortSignal
   /**
    * Call and token ceilings for this run.
    *
@@ -355,7 +356,8 @@ export class ResumeTailoringAgent {
     const normalizedCandidate = await normalizeCandidateInput(
       llm,
       request.candidate,
-      candidateArtifacts
+      candidateArtifacts,
+      options.signal
     )
     const candidate = normalizedCandidate.resume
     addTrace(trace, 'normalize_candidate', 'completed', {
@@ -423,7 +425,8 @@ export class ResumeTailoringAgent {
     const normalizedCandidate = await normalizeCandidateInput(
       llm,
       reingestInput,
-      candidateArtifacts
+      candidateArtifacts,
+      options.signal
     )
     addTrace(trace, 'normalize_candidate', 'completed', {
       questions: normalizedCandidate.questions.length,
@@ -485,6 +488,7 @@ export class ResumeTailoringAgent {
         schema: JobSpecSchema,
         expectedShape: JOB_SPEC_EXPECTED_SHAPE,
         normalize: normalizeJobSpec,
+        signal: options.signal,
       })
       jobSpec = jobCompletion.data
       addTrace(trace, 'analyze_job', 'completed', {
@@ -569,6 +573,7 @@ export class ResumeTailoringAgent {
         },
         schema: DraftResponseSchema,
         expectedShape: DRAFT_RESPONSE_EXPECTED_SHAPE,
+        signal: options.signal,
       })
       draftResponse = draftCompletion.data
       const invalidEvidenceId = draftResponse.selectedEvidenceIds.find(

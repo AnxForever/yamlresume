@@ -44,13 +44,34 @@
 
 campaign 的样本只有 3 个合成案例、至多 2 轮重复（Wilson 95% 区间 [0.30, 0.90]），它是诊断用的基线，不是效果宣称。
 
-本地一键 demo（不需要模型密钥、账号或数据库）：
+本地单用户 Web 应用（不需要模型密钥或账号）：
 
 ```
-pnpm install && ./scripts/demo.sh
+pnpm install && pnpm local-app
 ```
 
-它用 `RESUME_AGENT_LLM_PROVIDER=offline` 起 API：一个不调用模型的启发式 Provider 回答全部三个 LLM 边界，真实流水线（匹配、校验、Diff、质量报告、渲染、HITL 提问）原样跑通。它不改写简历文本，岗位分析只是按行切分加关键词词典；要看真实模型质量，配置 `OPENAI_*` 后直接启动 API。
+没有 `.env.local-app` 时，它使用不调用模型的离线启发式 Provider 跑通真实流水线（匹配、校验、Diff、质量报告、渲染、HITL 提问）；配置该私密文件后，同一个命令可改用 OpenAI 兼容 Provider。Run 默认保存在 `.data/resume-agent/local-app.sqlite`，停止后再次执行同一命令仍可读取。离线模式不改写简历文本，岗位分析只是按行切分加关键词词典，不能代表真实模型质量。
+
+本地 runtime 会把 SQLite 主文件、WAL 和 SHM 收紧为仅当前用户可读写的 0600；这些文件仍是未加密的
+个人数据，不能上传或提交。
+
+启动前可运行 `pnpm local-app:doctor`。它不会启动应用或调用模型，只读检查默认 Run 数据库的
+SQLite 完整性和 schema 兼容性；应用正在运行或存在非空 WAL 时会要求先停止应用。可用
+`pnpm local-app:doctor-smoke` 在临时合成损坏库上复验安全失败路径，不会读取真实简历或 Provider 凭证。
+
+不启动界面、也不调用真实模型的本地主链路验收：`pnpm local-app:smoke`。它使用临时 SQLite，完成一次异步 Run，并在新 API 进程中确认同一结果仍可读取。
+
+进程崩溃恢复演练：`pnpm local-app:crash-smoke`。它只用本地 mock Provider 和合成数据，在模型请求
+进行中强制终止 API，再确认新进程会接管原任务并生成 YAML；不会读取本地 Provider 密钥。
+受控关闭演练：`pnpm local-app:shutdown-smoke` 在同一故障点发送 SIGTERM，要求首进程及时以 code 0
+退出，并确认新进程完成原 Run。
+Provider 瞬态失败演练：`pnpm local-app:provider-retry-smoke` 用本地 mock 连续返回 3 次 503，验证真实
+HTTP adapter 耗尽 transport retry 后，transport 与 SQLite delivery 两层都遵守有界的 2 秒
+`Retry-After`，再完成同一 Run；不会读取或调用真实 Provider 凭证。
+
+本地数据保护：`pnpm local-app:backup` 创建一致备份；停止本地应用后，用
+`pnpm local-app:restore -- <backup.sqlite>` 恢复。`pnpm local-app:data-smoke` 会在临时目录完成一次
+“创建 Run → 备份 → 模拟原库丢失 → 恢复 → HTTP 读回”的无费用演练。
 
 从哪里读起：[产品路线图](docs/resume-agent-product-roadmap.zh-CN.md) → [后端设计与证据台账](docs/resume-agent-backend.md) → [结构化输出可靠性](docs/resume-agent-structured-output-reliability.zh-CN.md) → [评估框架](docs/resume-agent-evaluation-harness.zh-CN.md)。想按学习路径读，看[工程学习指南](docs/career-agent-learning-guide.zh-CN.md)。想看「问题 → 根因 → 修法 → 证据」的开发叙事，包括做错的部分，读[开发叙事与问题记录](docs/career-agent-interview-narrative.zh-CN.md)。
 

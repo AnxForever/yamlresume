@@ -28,7 +28,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { LlmClient } from '@yamlresume/resume-agent'
-import { ResumeTailoringAgent } from '@yamlresume/resume-agent'
+import {
+  ResumeAgentRunService,
+  ResumeTailoringAgent,
+} from '@yamlresume/resume-agent'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { AuthService } from './auth'
@@ -47,9 +50,33 @@ function fakeAgent(): ResumeTailoringAgent {
   return new ResumeTailoringAgent(llm)
 }
 
+function answeringChatAgent(
+  onModelCall: () => void = () => undefined
+): ResumeTailoringAgent {
+  return new ResumeTailoringAgent({
+    async completeJson() {
+      onModelCall()
+      return {
+        data: { reply: 'Ready.', readyToGenerate: false },
+        metadata: {
+          provider: 'fake',
+          model: 'fake-model',
+          durationMs: 1,
+          attempt: 1,
+        },
+      }
+    },
+  })
+}
+
 async function withAuthServer<T>(
   callback: (baseUrl: string) => Promise<T>,
-  options: { oauthProviders?: OAuthProviderDescriptor[] } = {}
+  options: {
+    oauthProviders?: OAuthProviderDescriptor[]
+    agent?: ResumeTailoringAgent
+    runService?: ResumeAgentRunService
+    workRateLimit?: { limit: number; windowMs: number }
+  } = {}
 ): Promise<T> {
   const auth = await AuthService.open({
     databasePath: ':memory:',
@@ -67,12 +94,14 @@ async function withAuthServer<T>(
   })
   services.push(auth)
   const server = createAgentApiServer({
-    agent: fakeAgent(),
+    agent: options.agent ?? fakeAgent(),
+    runService: options.runService,
     auth: {
       service: auth,
       allowedOrigin: 'http://localhost:5173',
       secureCookies: false,
     },
+    workRateLimit: options.workRateLimit,
   })
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, resolve))
@@ -338,6 +367,307 @@ describe('authenticated agent API', () => {
     })
   })
 
+  it('shares one persistent work limit across model-backed endpoints', async () => {
+    let modelCalls = 0
+    const agent = answeringChatAgent(() => {
+      modelCalls += 1
+    })
+
+    await withAuthServer(
+      async (baseUrl) => {
+        const cookie = await registerUser(baseUrl, 'limited@example.com')
+        const resumeRequest = {
+          jobDescription:
+            'We need a TypeScript Engineer to build reliable systems.',
+          candidate: {
+            resume: {
+              content: {
+                basics: { name: 'Ada Lovelace' },
+                education: [],
+              },
+              layouts: [{ engine: 'html', template: 'calm' }],
+            },
+          },
+        }
+        const chat = await fetch(`${baseUrl}/v1/chat`, {
+          method: 'POST',
+          headers: {
+            Cookie: cookie,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ message: 'Help with my resume.' }),
+        })
+        expect(chat.status).toBe(200)
+
+        const synchronous = await fetch(`${baseUrl}/v1/tailor-resume`, {
+          method: 'POST',
+          headers: {
+            Cookie: cookie,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(resumeRequest),
+        })
+        expect(synchronous.status).toBe(429)
+
+        const run = await fetch(`${baseUrl}/v1/runs`, {
+          method: 'POST',
+          headers: {
+            Cookie: cookie,
+            'Content-Type': 'application/json',
+            Origin: 'http://localhost:5173',
+          },
+          body: JSON.stringify(resumeRequest),
+        })
+        expect(run.status).toBe(429)
+        expect(Number(run.headers.get('retry-after'))).toBeGreaterThan(0)
+        expect(run.headers.get('access-control-expose-headers')).toContain(
+          'Retry-After'
+        )
+        expect(await run.json()).toMatchObject({
+          error: { code: 'work_rate_limited' },
+        })
+        expect(modelCalls).toBe(1)
+      },
+      { agent, workRateLimit: { limit: 1, windowMs: 60_000 } }
+    )
+  })
+
+  it('does not charge invalid model-work requests against the account limit', async () => {
+    const agent = answeringChatAgent()
+
+    await withAuthServer(
+      async (baseUrl) => {
+        const cookie = await registerUser(baseUrl, 'validation@example.com')
+        const headers = {
+          Cookie: cookie,
+          'Content-Type': 'application/json',
+        }
+        const invalid = await fetch(`${baseUrl}/v1/chat`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({}),
+        })
+        expect(invalid.status).toBe(400)
+
+        const accepted = await fetch(`${baseUrl}/v1/chat`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ message: 'Help with my resume.' }),
+        })
+        expect(accepted.status).toBe(200)
+
+        const limited = await fetch(`${baseUrl}/v1/chat`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ message: 'Try once more.' }),
+        })
+        expect(limited.status).toBe(429)
+      },
+      { agent, workRateLimit: { limit: 1, windowMs: 60_000 } }
+    )
+  })
+
+  it('keeps model-work limits independent between accounts', async () => {
+    const agent = answeringChatAgent()
+
+    await withAuthServer(
+      async (baseUrl) => {
+        const firstCookie = await registerUser(
+          baseUrl,
+          'first-limit@example.com'
+        )
+        const secondCookie = await registerUser(
+          baseUrl,
+          'second-limit@example.com',
+          'another correct horse battery staple'
+        )
+        const chat = (cookie: string, message: string) =>
+          fetch(`${baseUrl}/v1/chat`, {
+            method: 'POST',
+            headers: {
+              Cookie: cookie,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ message }),
+          })
+
+        expect(await chat(firstCookie, 'First account request.')).toMatchObject(
+          {
+            status: 200,
+          }
+        )
+        expect(await chat(firstCookie, 'First account retry.')).toMatchObject({
+          status: 429,
+        })
+        expect(
+          await chat(secondCookie, 'Second account request.')
+        ).toMatchObject({ status: 200 })
+      },
+      { agent, workRateLimit: { limit: 1, windowMs: 60_000 } }
+    )
+  })
+
+  it('does not charge run reads against the model-work limit', async () => {
+    const agent = answeringChatAgent()
+    await withAuthServer(
+      async (baseUrl) => {
+        const cookie = await registerUser(baseUrl, 'run-reader@example.com')
+        const headers = {
+          Cookie: cookie,
+          'Content-Type': 'application/json',
+        }
+        const create = await fetch(`${baseUrl}/v1/runs`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            jobDescription:
+              'We need a TypeScript Engineer to build reliable systems.',
+            candidate: {
+              resume: {
+                content: {
+                  basics: { name: 'Ada Lovelace' },
+                  education: [],
+                },
+                layouts: [{ engine: 'html', template: 'calm' }],
+              },
+            },
+          }),
+        })
+        expect(create.status).toBe(202)
+        const created = (await create.json()) as { data: { id: string } }
+
+        const read = await fetch(`${baseUrl}/v1/runs/${created.data.id}`, {
+          headers: { Cookie: cookie },
+        })
+        expect(read.status).toBe(200)
+
+        const accepted = await fetch(`${baseUrl}/v1/chat`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ message: 'Use the remaining slot.' }),
+        })
+        expect(accepted.status).toBe(200)
+        const limited = await fetch(`${baseUrl}/v1/chat`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ message: 'No slots remain.' }),
+        })
+        expect(limited.status).toBe(429)
+      },
+      { agent, workRateLimit: { limit: 2, windowMs: 60_000 } }
+    )
+  })
+
+  it('does not charge answers that continue an admitted run', async () => {
+    const tasks: Array<() => Promise<void>> = []
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        return {
+          data: {
+            resume: {
+              content: {
+                basics: { name: 'Ada Lovelace' },
+                education: [],
+              },
+              layouts: [{ engine: 'html', template: 'calm' }],
+            },
+            sourceArtifactIds: ['candidate-source'],
+            questions: [
+              {
+                field: 'content.basics.name',
+                question: 'What is your full name?',
+                reason: 'The source did not contain a reliable name.',
+                severity: 'blocking',
+              },
+            ],
+            warnings: [],
+          } as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const agent = new ResumeTailoringAgent(llm)
+    const runService = new ResumeAgentRunService(agent, {
+      idFactory: () => 'rate-limited-answer-run',
+      schedule: (task) => tasks.push(task),
+    })
+
+    await withAuthServer(
+      async (baseUrl) => {
+        const cookie = await registerUser(baseUrl, 'answer-limit@example.com')
+        const create = await fetch(`${baseUrl}/v1/runs`, {
+          method: 'POST',
+          headers: {
+            Cookie: cookie,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            jobDescription:
+              'We need a TypeScript Engineer to build reliable systems.',
+            candidate: {
+              resume: {
+                content: {
+                  basics: {
+                    name: 'Ada Lovelace',
+                    email: 'ada@example.com',
+                  },
+                  education: [],
+                },
+                layouts: [
+                  { engine: 'latex', template: 'jake' },
+                  { engine: 'html', template: 'calm' },
+                ],
+              },
+              files: [
+                {
+                  id: 'candidate-source',
+                  filename: 'candidate.txt',
+                  text: 'Candidate profile.',
+                },
+              ],
+            },
+          }),
+        })
+        expect(create.status).toBe(202)
+        await tasks[0]?.()
+        const paused = await fetch(
+          `${baseUrl}/v1/runs/rate-limited-answer-run`,
+          { headers: { Cookie: cookie } }
+        )
+        expect(await paused.json()).toMatchObject({
+          data: { status: 'needs_input' },
+        })
+
+        const answer = await fetch(
+          `${baseUrl}/v1/runs/rate-limited-answer-run/answers`,
+          {
+            method: 'POST',
+            headers: {
+              Cookie: cookie,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              interactionId: 'candidate-normalization:1',
+              idempotencyKey: 'rate-limit-answer-1',
+              value: 'Ada Lovelace',
+            }),
+          }
+        )
+        expect(answer.status).toBe(202)
+      },
+      {
+        agent,
+        runService,
+        workRateLimit: { limit: 1, windowMs: 60_000 },
+      }
+    )
+  })
+
   it('fails closed without an encryption key and persists login in an enabled runtime', async () => {
     await expect(
       startAgentApiServer({
@@ -396,6 +726,72 @@ describe('authenticated agent API', () => {
       } finally {
         await second.close()
       }
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('announces the configured account work limit in runtime capabilities', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'yamlresume-work-limit-'))
+    const env = {
+      RESUME_AGENT_RUN_STORE: 'memory',
+      RESUME_AGENT_AUTH_MODE: 'enabled',
+      RESUME_AGENT_AUTH_DB_PATH: join(directory, 'auth.sqlite'),
+      RESUME_AGENT_CREDENTIAL_KEYS: JSON.stringify({
+        'local-v1': Buffer.alloc(32, 0x7b).toString('base64'),
+      }),
+      RESUME_AGENT_CREDENTIAL_ACTIVE_KEY_ID: 'local-v1',
+      RESUME_AGENT_ALLOWED_ORIGIN: 'http://localhost:5173',
+      RESUME_AGENT_SECURE_COOKIES: 'false',
+      RESUME_AGENT_WORK_RATE_LIMIT: '3',
+      RESUME_AGENT_WORK_RATE_WINDOW_MS: '60000',
+    }
+    try {
+      const runtime = await startAgentApiServer({
+        agent: fakeAgent(),
+        env,
+        port: 0,
+      })
+      try {
+        const response = await fetch(`${runtime.url}/v1/capabilities`)
+        expect(response.status).toBe(200)
+        expect(await response.json()).toMatchObject({
+          data: {
+            runtime: {
+              authentication: 'enabled',
+              workRateLimit: { limit: 3, windowSeconds: 60 },
+            },
+          },
+        })
+      } finally {
+        await runtime.close()
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed when the configured account work limit is unsafe', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'yamlresume-bad-limit-'))
+    try {
+      await expect(
+        startAgentApiServer({
+          agent: fakeAgent(),
+          env: {
+            RESUME_AGENT_RUN_STORE: 'memory',
+            RESUME_AGENT_AUTH_MODE: 'enabled',
+            RESUME_AGENT_AUTH_DB_PATH: join(directory, 'auth.sqlite'),
+            RESUME_AGENT_CREDENTIAL_KEYS: JSON.stringify({
+              'local-v1': Buffer.alloc(32, 0x7b).toString('base64'),
+            }),
+            RESUME_AGENT_CREDENTIAL_ACTIVE_KEY_ID: 'local-v1',
+            RESUME_AGENT_ALLOWED_ORIGIN: 'http://localhost:5173',
+            RESUME_AGENT_SECURE_COOKIES: 'false',
+            RESUME_AGENT_WORK_RATE_LIMIT: '0',
+          },
+          port: 0,
+        })
+      ).rejects.toMatchObject({ code: 'invalid_configuration' })
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

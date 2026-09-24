@@ -52,12 +52,28 @@ export class CandidateValidationError extends Error {
   }
 }
 
+export type DraftValidationErrorCode =
+  | 'draft_validation_failed'
+  | 'draft_content_invalid'
+  | 'draft_schema_invalid'
+  | 'draft_immutable_fact_changed'
+  | 'draft_unsupported_entry'
+
+export interface DraftValidationErrorOptions {
+  code?: DraftValidationErrorCode
+  path?: string
+}
+
 export class DraftValidationError extends Error {
   readonly stage = 'draft_validation' as const
+  readonly code: DraftValidationErrorCode
+  readonly path?: string
 
-  constructor(message: string) {
+  constructor(message: string, options: DraftValidationErrorOptions = {}) {
     super(message)
     this.name = 'DraftValidationError'
+    this.code = options.code ?? 'draft_validation_failed'
+    this.path = options.path
   }
 }
 
@@ -100,7 +116,10 @@ function assertImmutableFacts(source: Resume, draft: Resume): void {
   const sourceContent = asRecord(source.content)
   const draftContent = asRecord(draft.content)
   if (!sourceContent || !draftContent) {
-    throw new DraftValidationError('Resume content must be an object')
+    throw new DraftValidationError('Resume content must be an object', {
+      code: 'draft_content_invalid',
+      path: 'content',
+    })
   }
 
   const sourceBasics = asRecord(sourceContent.basics)
@@ -114,7 +133,11 @@ function assertImmutableFacts(source: Resume, draft: Resume): void {
       sourceValue !== draftValue
     ) {
       throw new DraftValidationError(
-        `Generated resume changed candidate basics.${key}`
+        `Generated resume changed candidate basics.${key}`,
+        {
+          code: 'draft_immutable_fact_changed',
+          path: `content.basics.${key}`,
+        }
       )
     }
   }
@@ -130,7 +153,11 @@ function assertImmutableFacts(source: Resume, draft: Resume): void {
       sourceValue !== draftValue
     ) {
       throw new DraftValidationError(
-        `Generated resume changed candidate location.${key}`
+        `Generated resume changed candidate location.${key}`,
+        {
+          code: 'draft_immutable_fact_changed',
+          path: `content.location.${key}`,
+        }
       )
     }
   }
@@ -156,7 +183,11 @@ function assertImmutableFacts(source: Resume, draft: Resume): void {
         : undefined
       if (!original) {
         throw new DraftValidationError(
-          `Generated resume added an unsupported ${section} entry`
+          `Generated resume added an unsupported ${section} entry`,
+          {
+            code: 'draft_unsupported_entry',
+            path: `content.${section}`,
+          }
         )
       }
 
@@ -169,7 +200,11 @@ function assertImmutableFacts(source: Resume, draft: Resume): void {
           generatedValue !== originalValue
         ) {
           throw new DraftValidationError(
-            `Generated resume changed candidate ${section}.${key}`
+            `Generated resume changed candidate ${section}.${key}`,
+            {
+              code: 'draft_immutable_fact_changed',
+              path: `content.${section}.${key}`,
+            }
           )
         }
       }
@@ -206,7 +241,11 @@ export function validateNormalizationFacts(
       before !== after
     ) {
       throw new DraftValidationError(
-        `Candidate normalization changed basics.${key}`
+        `Candidate normalization changed basics.${key}`,
+        {
+          code: 'draft_immutable_fact_changed',
+          path: `content.basics.${key}`,
+        }
       )
     }
   }
@@ -237,7 +276,11 @@ export function validateNormalizationFacts(
           before !== after
         ) {
           throw new DraftValidationError(
-            `Candidate normalization changed ${section}.${key}`
+            `Candidate normalization changed ${section}.${key}`,
+            {
+              code: 'draft_immutable_fact_changed',
+              path: `content.${section}.${key}`,
+            }
           )
         }
       }
@@ -296,9 +339,14 @@ export function prepareDraftResume(
   }
   if (!result.success) {
     const issue = result.error.issues[0]
-    const path = issue?.path.length ? ` (${issue.path.join('.')})` : ''
+    const issuePath = issue?.path.length ? issue.path.join('.') : undefined
+    const path = issuePath ? ` (${issuePath})` : ''
     throw new DraftValidationError(
-      `Generated resume does not match YAMLResume schema${path}: ${issue?.message ?? 'unknown validation error'}`
+      `Generated resume does not match YAMLResume schema${path}: ${issue?.message ?? 'unknown validation error'}`,
+      {
+        code: 'draft_schema_invalid',
+        ...(issuePath ? { path: issuePath } : {}),
+      }
     )
   }
 

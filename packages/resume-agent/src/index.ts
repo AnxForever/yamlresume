@@ -57,6 +57,7 @@ export type {
   JobRequirement,
   JobSpec,
   JsonCompletionRequest,
+  LlmCallOptions,
   LlmClient,
   LlmImageAttachment,
   MatchReport,
@@ -112,6 +113,7 @@ export type {
   EvalCaseResult,
   EvalDataset,
   EvalExecute,
+  EvalExecutionDiagnostic,
   EvalExecutionResult,
   EvalExpectations,
   EvalFailureCode,
@@ -238,7 +240,11 @@ export {
 export { buildResumeDiff } from './transparency/diff'
 export { buildQualityReport } from './transparency/quality'
 export { buildEvidenceIndex } from './validation/evidence'
-export type { AgentValidationStage } from './validation/resume'
+export type {
+  AgentValidationStage,
+  DraftValidationErrorCode,
+  DraftValidationErrorOptions,
+} from './validation/resume'
 export {
   CandidateValidationError,
   DraftValidationError,
@@ -279,5 +285,6 @@ export type {
 } from './workflow/sqlite-run-store'
 export {
   RunStoreError,
+  SQLITE_RUN_STORE_SCHEMA_VERSION,
   SqliteRunStore,
 } from './workflow/sqlite-run-store'

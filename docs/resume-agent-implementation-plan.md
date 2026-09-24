@@ -211,8 +211,9 @@ Known limits:
 
 - in-memory runs do not survive restarts and are not shared across instances;
 - the opt-in SQLite adapter persists checkpoints and task rows and supports
-  explicit restart drain plus execution-time heartbeat/fencing, but there is
-  no automatic worker, claim-ahead lifecycle, cancellation or retention policy;
+  explicit restart drain plus execution-time heartbeat/fencing. Later Units
+  RA-015F and RA-015K supply an automatic same-host worker and durable Run
+  cancellation; claim-ahead lifecycle and retention policy remain absent;
 - these limits must be addressed before calling the protocol operational.
 
 ### Unit 7B — Structured human-in-the-loop interaction
@@ -416,7 +417,8 @@ Verified tests:
 Known limits:
 
 - fencing protects task acknowledgement, not an already-running Provider call
-  or other external side effect;
+  or other external side effect by itself; RA-015K later adds local transport
+  cancellation without claiming remote effect rollback;
 - Unit 7G subsequently prevents a healthy long call from passively expiring and
   rejects stale Run writes, but cannot make Provider calls exactly-once;
 - exhausted tasks are acknowledged after a safe Run failure; there is no
@@ -462,19 +464,29 @@ Verified tests:
 
 Known limits:
 
-- Provider requests already sent may complete or repeat; delivery remains
-  at-least-once and no exactly-once claim is made;
+- Provider requests already accepted remotely may complete or repeat; RA-015K
+  later adds local durable Run cancellation, while delivery remains at-least-once
+  and no exactly-once claim is made;
 - `recoverPendingTasks(limit)` still claims a batch before schedule callbacks
   execute. The callback-start renewal prevents a stale callback from entering
   Provider work, but does not fix early lease consumption, fairness or
   backpressure; that lifecycle is RA-015F;
-- no automatic poller, DLQ/redrive, backoff/jitter, production metrics/runbook,
-  multi-host adapter or clock-skew tolerance;
+- RA-015F now supplies the automatic poller, RA-015G supplies persisted release
+  backoff, and RA-015H routes only explicitly retryable Provider failures into
+  that delivery policy; RA-015K supplies durable Run cancellation. Provider
+  idempotency, synchronous-request disconnect binding, DLQ/redrive, jitter,
+  production metrics/runbook, multi-host adapter and clock-skew tolerance remain
+  absent;
 - `node:sqlite` remains synchronous, same-host and Stability 1.1.
 
 Research, interface/state decisions, RED → GREEN evidence and exact verification
 results are in
 [`resume-agent-run-lease-heartbeat.zh-CN.md`](./resume-agent-run-lease-heartbeat.zh-CN.md).
+The classified Provider delivery policy and its compound transport/delivery
+budget are recorded in
+[`resume-agent-provider-durable-retry.zh-CN.md`](./resume-agent-provider-durable-retry.zh-CN.md).
+Durable Run close/lease-loss/deadline cancellation is recorded in
+[`resume-agent-provider-cancellation.zh-CN.md`](./resume-agent-provider-cancellation.zh-CN.md).
 
 ### Unit 8 — Backend documentation and completion audit
 
@@ -505,9 +517,10 @@ pnpm check:ci
 - authentication and multi-user tenancy;
 - production database and encrypted object storage;
 - production-grade OCR for image-only PDFs;
-- RA-015F automatic durable worker/claim-ahead lifecycle, cancellation and
-  operational restart recovery; Provider exactly-once remains explicitly
-  rejected rather than deferred as a heartbeat outcome;
+- claim-ahead/backpressure and operational restart recovery beyond the
+  RA-015F same-host worker; RA-015K now covers durable Run cancellation, while
+  Provider exactly-once remains explicitly rejected rather than inferred from
+  heartbeat or abort;
 - binary file answers and candidate re-normalization after upload;
 - automated web browsing or job application;
 - PDF compilation sandbox and page-count optimization;

@@ -25,6 +25,7 @@
 import { z } from 'zod'
 
 import { TailorResumeRequestSchema } from '@/contracts'
+import type { DraftValidationErrorCode } from '@/validation/resume'
 
 const StableCodeSchema = z
   .string()
@@ -195,12 +196,19 @@ export type EvalFailureCode =
   | 'execution_failed'
   | 'invalid_execution_result'
 
+export interface EvalExecutionDiagnostic {
+  stage: 'draft_validation'
+  code: DraftValidationErrorCode
+  path?: string
+}
+
 export interface EvalCaseResult {
   caseId: string
   passed: boolean
   assertions: EvalAssertionResult[]
   durationMs: number
   failureCode: EvalFailureCode | null
+  diagnostic?: EvalExecutionDiagnostic
 }
 
 export interface EvalReport {

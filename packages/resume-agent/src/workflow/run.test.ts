@@ -29,6 +29,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { LlmClient } from '@/contracts'
+import { LlmRequestError } from '@/llm/openai-compatible'
 import { renderOdtDocument } from '@/rendering/odt'
 import { ResumeTailoringAgent } from '@/workflow/agent'
 import {
@@ -331,11 +332,14 @@ describe('ResumeAgentRunService', () => {
     expect(completed?.result?.jobSpec.targetTitle).toBe('TypeScript Engineer')
   })
 
-  it('stores a safe failure without leaking the underlying error', async () => {
+  it('stores a safe failure when durable provider retry is unavailable', async () => {
     const tasks: Array<() => Promise<void>> = []
     const llm: LlmClient = {
       async completeJson() {
-        throw new Error('Secret Company and private resume content')
+        throw new LlmRequestError('Secret Company and private resume content', {
+          reason: 'network_error',
+          retryable: true,
+        })
       },
     }
     const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {

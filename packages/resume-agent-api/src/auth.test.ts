@@ -167,6 +167,83 @@ describe('AuthService', () => {
     ).rejects.toMatchObject({ code: 'invalid_credentials' })
   })
 
+  it('admits model work only up to the account window limit', async () => {
+    const now = new Date('2026-09-24T12:00:00.000Z')
+    const service = await openAuthService({ now: () => now })
+    const session = await service.register({
+      email: 'limited@example.com',
+      password: 'correct horse battery staple',
+    })
+    const policy = { limit: 2, windowMs: 60_000 }
+
+    await expect(
+      service.consumeWorkQuota(session.user.id, policy)
+    ).resolves.toMatchObject({
+      allowed: true,
+      remaining: 1,
+      retryAfterSeconds: 0,
+    })
+    await expect(
+      service.consumeWorkQuota(session.user.id, policy)
+    ).resolves.toMatchObject({
+      allowed: true,
+      remaining: 0,
+      retryAfterSeconds: 0,
+    })
+    await expect(
+      service.consumeWorkQuota(session.user.id, policy)
+    ).resolves.toMatchObject({
+      allowed: false,
+      remaining: 0,
+      retryAfterSeconds: 60,
+    })
+  })
+
+  it('persists model-work usage across restart and resets expired windows', async () => {
+    let now = new Date('2026-09-24T12:00:00.000Z')
+    const databasePath = await temporaryDatabasePath()
+    let service = await openAuthService({ databasePath, now: () => now })
+    const session = await service.register({
+      email: 'persistent-limit@example.com',
+      password: 'correct horse battery staple',
+    })
+    const policy = { limit: 1, windowMs: 60_000 }
+
+    await expect(
+      service.consumeWorkQuota(session.user.id, policy)
+    ).resolves.toMatchObject({ allowed: true, remaining: 0 })
+    service.close()
+    service = await openAuthService({ databasePath, now: () => now })
+    await expect(
+      service.consumeWorkQuota(session.user.id, policy)
+    ).resolves.toMatchObject({ allowed: false, retryAfterSeconds: 60 })
+
+    now = new Date('2026-09-24T12:01:00.000Z')
+    await expect(
+      service.consumeWorkQuota(session.user.id, policy)
+    ).resolves.toMatchObject({ allowed: true, remaining: 0 })
+  })
+
+  it('shares the last model-work slot across SQLite connections', async () => {
+    const now = new Date('2026-09-24T12:00:00.000Z')
+    const databasePath = await temporaryDatabasePath()
+    const first = await openAuthService({ databasePath, now: () => now })
+    const session = await first.register({
+      email: 'connections@example.com',
+      password: 'correct horse battery staple',
+    })
+    const second = await openAuthService({ databasePath, now: () => now })
+    const policy = { limit: 1, windowMs: 60_000 }
+
+    const decisions = await Promise.all([
+      first.consumeWorkQuota(session.user.id, policy),
+      second.consumeWorkQuota(session.user.id, policy),
+    ])
+
+    expect(decisions.filter(({ allowed }) => allowed)).toHaveLength(1)
+    expect(decisions.filter(({ allowed }) => !allowed)).toHaveLength(1)
+  })
+
   it('uses the same public error for unknown users and wrong passwords', async () => {
     const service = await openAuthService()
     await service.register({

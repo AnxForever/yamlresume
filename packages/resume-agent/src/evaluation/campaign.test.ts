@@ -25,7 +25,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { EvalExecutionResult } from '@/evaluation/contracts'
-import { EvalCaseSchema, runEvaluationCampaign } from '@/index'
+import {
+  DraftValidationError,
+  EvalCaseSchema,
+  runEvaluationCampaign,
+} from '@/index'
 
 const campaignCase = EvalCaseSchema.parse({
   version: 1,
@@ -454,6 +458,34 @@ describe('runEvaluationCampaign', () => {
     expect(serializedReport).not.toContain(sensitiveRequest)
     expect(serializedReport).not.toContain(sensitiveException)
     expect(serializedReport).not.toContain('Example Candidate')
+  })
+
+  it('preserves a safe draft diagnostic without its exception message', async () => {
+    const sensitiveException = 'PRIVATE_DRAFT_EXCEPTION_61503'
+    const report = await runEvaluationCampaign(
+      [campaignCase],
+      async () => {
+        throw new DraftValidationError(sensitiveException, {
+          code: 'draft_immutable_fact_changed',
+          path: 'content.basics.email',
+        })
+      },
+      {
+        campaignId: 'ra-010c-draft-diagnostic',
+        provider: 'example-provider',
+        model: 'example-model',
+        promptRevision: 'prompt-v1',
+        runtimeRevision: 'runtime-v1',
+        repetitions: 1,
+      }
+    )
+
+    expect(report.runs[0]?.results[0]?.diagnostic).toEqual({
+      stage: 'draft_validation',
+      code: 'draft_immutable_fact_changed',
+      path: 'content.basics.email',
+    })
+    expect(JSON.stringify(report)).not.toContain(sensitiveException)
   })
 
   it.each([

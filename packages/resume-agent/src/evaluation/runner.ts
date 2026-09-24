@@ -33,6 +33,20 @@ import {
   EvalExecutionResultSchema,
   type EvalReport,
 } from '@/evaluation/contracts'
+import {
+  DraftValidationError,
+  type DraftValidationErrorCode,
+} from '@/validation/resume'
+
+const SAFE_DRAFT_VALIDATION_CODES = new Set<DraftValidationErrorCode>([
+  'draft_validation_failed',
+  'draft_content_invalid',
+  'draft_schema_invalid',
+  'draft_immutable_fact_changed',
+  'draft_unsupported_entry',
+])
+const SAFE_DRAFT_PATH =
+  /^(?:content|layouts)(?:\.(?:[A-Za-z][A-Za-z0-9]*|\d+)){0,8}$/
 
 function roundMetric(value: number): number {
   return Math.round(value * 10_000) / 10_000
@@ -48,6 +62,27 @@ function parseExecutionResult(value: unknown): EvalExecutionResult | null {
     return result.success ? result.data : null
   } catch {
     return null
+  }
+}
+
+function draftValidationDiagnostic(
+  error: unknown
+): EvalCaseResult['diagnostic'] {
+  if (
+    !(error instanceof DraftValidationError) ||
+    !SAFE_DRAFT_VALIDATION_CODES.has(error.code)
+  ) {
+    return undefined
+  }
+
+  const path =
+    error.path && error.path.length <= 200 && SAFE_DRAFT_PATH.test(error.path)
+      ? error.path
+      : undefined
+  return {
+    stage: 'draft_validation',
+    code: error.code,
+    ...(path ? { path } : {}),
   }
 }
 
@@ -130,13 +165,15 @@ export async function runEvaluation(
     let rawExecution: unknown
     try {
       rawExecution = await execute(evalCase.request)
-    } catch {
+    } catch (error) {
+      const diagnostic = draftValidationDiagnostic(error)
       results.push({
         caseId: evalCase.id,
         passed: false,
         assertions: [],
         durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
         failureCode: 'execution_failed',
+        ...(diagnostic ? { diagnostic } : {}),
       })
       continue
     }

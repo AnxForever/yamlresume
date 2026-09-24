@@ -59,6 +59,20 @@ calls, Repair calls, transport attempts, duration, and returned token usage.
 Neither trace metadata nor `StructuredOutputValidationError` contains prompts,
 candidate data, image Data URLs, or raw model responses.
 
+For retryable HTTP responses, the OpenAI-compatible adapter accepts strict
+`Retry-After` seconds or HTTP dates, normalizes the value to a safe maximum of
+30 seconds, and waits for the longer of that hint and its local transport
+backoff. If transport attempts are exhausted, a durable Run uses the same safe
+hint when choosing its persisted delivery time. Raw headers and Provider bodies
+are never persisted. Durable tasks also have a 15-minute retry window derived
+from their persisted creation time: the first delivery is allowed, but no later
+delivery starts at or beyond that deadline. Durable Runs pass one cancellation
+signal through normalization, Repair, JobSpec and Draft. The built-in
+OpenAI-compatible adapter aborts an active fetch, response-body read or retry
+wait when the service closes, its lease is lost or a retry deadline arrives.
+Synchronous request disconnect binding, remote billing guarantees and exact
+transport-attempt cost accounting are not implemented.
+
 ## Human-in-the-loop development slice
 
 `ResumeAgentRunService` separates trusted store records from public Run
@@ -67,10 +81,17 @@ applies answers only to existing `content.*` paths, records answer fingerprints
 for idempotency, and resumes at JD analysis without repeating extraction or
 normalization.
 
-The default store is in-memory. Restart recovery, multi-instance coordination,
-transactional answer locking, authentication, retention, binary file answers,
-and later-stage interrupts are not implemented. Date controls currently use
-day-precision `YYYY-MM-DD`; year/month precision requires a future control
-contract. Completed public Runs include the tailored resume and rendered
-artifacts, but never expose source requests, checkpoints, raw answers, or raw
-model completions.
+The core service still defaults to the in-memory store. The SQLite adapter adds
+single-host development persistence, compare-and-set revisions, a transactional
+task outbox, bounded leases, heartbeats, polling, persisted exponential
+retry backoff for infrastructure and explicitly transient Provider failures,
+bounded Provider `Retry-After` waits, a persisted retry deadline, and restart
+recovery; the API runtime uses it by default. Multipart binary
+answers are accepted by the API and re-ingested by the workflow. Multi-host
+coordination, production operations, authentication inside this package,
+Provider request idempotency, cancellation outside durable Runs, DLQ/redrive,
+jitter, retention, and later-stage interrupts are not implemented. Date
+controls currently use day-precision
+`YYYY-MM-DD`; year/month precision requires a future control contract. Completed
+public Runs include the tailored resume and rendered artifacts, but never expose
+source requests, checkpoints, raw answers, or raw model completions.

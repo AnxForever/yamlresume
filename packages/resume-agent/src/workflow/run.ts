@@ -37,7 +37,7 @@ import type {
   TailorResumeResult,
 } from '@/contracts'
 import { ArtifactInputError } from '@/input/errors'
-import { LlmConfigurationError } from '@/llm/openai-compatible'
+import { LlmConfigurationError, LlmRequestError } from '@/llm/openai-compatible'
 import type { ResumeTailoringAgent } from '@/workflow/agent'
 import {
   applyInteractionAnswer,
@@ -174,7 +174,9 @@ export interface DurableRunStore extends RunStore {
   releaseTask(
     taskId: string,
     leaseOwner: string,
-    attempt: number
+    attempt: number,
+    /** Earliest next claim time; omitted for an immediate maintenance release. */
+    availableAt?: Date
   ): Promise<boolean>
 }
 
@@ -210,10 +212,18 @@ const DEFAULT_TASK_LEASE_MS = 60_000
 const MAX_TIMER_DELAY_MS = 2_147_483_647
 const DEFAULT_MAX_TASK_ATTEMPTS = 3
 const DEFAULT_RECOVERY_LIMIT = 100
+const DEFAULT_TASK_RETRY_BACKOFF_MS = 1_000
+const MAX_TASK_RETRY_BACKOFF_MS = 30_000
+const DEFAULT_TASK_RETRY_ELAPSED_MS = 15 * 60 * 1_000
+const MAX_TASK_RETRY_ELAPSED_MS = 24 * 60 * 60 * 1_000
 const DEFAULT_TASK_POLL_MS = 1_000
 const TASK_ATTEMPTS_EXHAUSTED: AgentRunFailure = {
   code: 'agent_task_attempts_exhausted',
   message: 'The resume tailoring task exceeded its retry limit.',
+}
+const TASK_RETRY_DEADLINE_EXCEEDED: AgentRunFailure = {
+  code: 'agent_task_retry_deadline_exceeded',
+  message: 'The resume tailoring task exceeded its retry deadline.',
 }
 
 const NEXT_STATUS: Record<AgentRunStatus, AgentRunStatus[]> = {
@@ -252,6 +262,8 @@ export interface ResumeAgentRunServiceOptions {
   /** Interval for the durable worker to look for released or newly queued tasks. */
   taskPollMs?: number
   maxTaskAttempts?: number
+  /** Elapsed time after task creation in which a retry may begin. */
+  maxTaskRetryElapsedMs?: number
 }
 
 function isDurableRunStore(store: RunStore): store is DurableRunStore {
@@ -281,6 +293,30 @@ function createRunTask(
   }
 }
 
+function taskRetryAvailableAt(
+  now: Date,
+  attempt: number,
+  providerRetryAfterMs?: number
+): Date {
+  const exponent = Math.max(0, Math.min(attempt - 1, 30))
+  const delayMs = Math.max(
+    Math.min(
+      DEFAULT_TASK_RETRY_BACKOFF_MS * 2 ** exponent,
+      MAX_TASK_RETRY_BACKOFF_MS
+    ),
+    providerRetryAfterMs ?? 0
+  )
+  return new Date(now.getTime() + delayMs)
+}
+
+function taskRetryDeadlineAt(createdAt: string, maxElapsedMs: number): number {
+  const createdAtMs = Date.parse(createdAt)
+  const deadlineAt = createdAtMs + maxElapsedMs
+  return Number.isSafeInteger(createdAtMs) && Number.isSafeInteger(deadlineAt)
+    ? deadlineAt
+    : Number.NEGATIVE_INFINITY
+}
+
 function defaultSchedule(task: ScheduledTask): void {
   queueMicrotask(() => {
     void task()
@@ -299,7 +335,8 @@ class RunTaskLeaseHeartbeat {
     private readonly task: ClaimedRunTask,
     private readonly now: () => Date,
     private readonly leaseDurationMs: number,
-    private readonly intervalMs: number
+    private readonly intervalMs: number,
+    private readonly onLeaseLost?: () => void
   ) {}
 
   async start(): Promise<boolean> {
@@ -372,9 +409,11 @@ class RunTaskLeaseHeartbeat {
   }
 
   private markLeaseLost(): void {
+    if (this.leaseLost) return
     this.leaseLost = true
     this.active = false
     this.clearTimer()
+    this.onLeaseLost?.()
   }
 
   private clearTimer(): void {
@@ -433,7 +472,9 @@ export class ResumeAgentRunService {
   private readonly taskHeartbeatMs: number
   private readonly taskPollMs: number
   private readonly maxTaskAttempts: number
+  private readonly maxTaskRetryElapsedMs: number
   private readonly activeHeartbeats = new Set<RunTaskLeaseHeartbeat>()
+  private readonly activeTaskControllers = new Set<AbortController>()
   private pollTimer: ReturnType<typeof setTimeout> | undefined
   private pollInFlight = false
   private closed = false
@@ -453,6 +494,8 @@ export class ResumeAgentRunService {
       options.taskHeartbeatMs ?? Math.max(1, Math.floor(this.taskLeaseMs / 3))
     this.taskPollMs = options.taskPollMs ?? DEFAULT_TASK_POLL_MS
     this.maxTaskAttempts = options.maxTaskAttempts ?? DEFAULT_MAX_TASK_ATTEMPTS
+    this.maxTaskRetryElapsedMs =
+      options.maxTaskRetryElapsedMs ?? DEFAULT_TASK_RETRY_ELAPSED_MS
     if (
       !this.workerId.trim() ||
       !Number.isSafeInteger(this.taskLeaseMs) ||
@@ -466,7 +509,10 @@ export class ResumeAgentRunService {
       this.taskPollMs > MAX_TIMER_DELAY_MS ||
       !Number.isSafeInteger(this.maxTaskAttempts) ||
       this.maxTaskAttempts <= 0 ||
-      this.maxTaskAttempts > 1_000
+      this.maxTaskAttempts > 1_000 ||
+      !Number.isSafeInteger(this.maxTaskRetryElapsedMs) ||
+      this.maxTaskRetryElapsedMs < 1_000 ||
+      this.maxTaskRetryElapsedMs > MAX_TASK_RETRY_ELAPSED_MS
     ) {
       throw new Error('Run task worker configuration is invalid')
     }
@@ -521,6 +567,7 @@ export class ResumeAgentRunService {
       clearTimeout(this.pollTimer)
       this.pollTimer = undefined
     }
+    for (const controller of this.activeTaskControllers) controller.abort()
     await Promise.all(
       [...this.activeHeartbeats].map((heartbeat) => heartbeat.abandon())
     )
@@ -584,12 +631,21 @@ export class ResumeAgentRunService {
 
   private async executeClaimedTask(task: ClaimedRunTask): Promise<void> {
     if (!this.durableStore || this.closed) return
+    const controller = new AbortController()
+    this.activeTaskControllers.add(controller)
+    let retryDeadlineReached = false
+    let retryDeadlineTimer: ReturnType<typeof setTimeout> | undefined
+    const retryDeadlineAt = taskRetryDeadlineAt(
+      task.createdAt,
+      this.maxTaskRetryElapsedMs
+    )
     const heartbeat = new RunTaskLeaseHeartbeat(
       this.durableStore,
       task,
       this.now,
       this.taskLeaseMs,
-      this.taskHeartbeatMs
+      this.taskHeartbeatMs,
+      () => controller.abort()
     )
     this.activeHeartbeats.add(heartbeat)
     try {
@@ -604,10 +660,21 @@ export class ResumeAgentRunService {
         ) {
           await this.fail(task.runId, TASK_ATTEMPTS_EXHAUSTED, heartbeat)
         }
-      } else if (task.kind === 'prepare') {
-        await this.execute(task.runId, heartbeat)
+      } else if (task.attempt > 1 && this.now().getTime() >= retryDeadlineAt) {
+        await this.fail(task.runId, TASK_RETRY_DEADLINE_EXCEEDED, heartbeat)
       } else {
-        await this.executeCompletion(task.runId, heartbeat)
+        if (task.attempt > 1) {
+          retryDeadlineTimer = setTimeout(() => {
+            retryDeadlineReached = true
+            controller.abort()
+          }, retryDeadlineAt - this.now().getTime())
+          retryDeadlineTimer.unref()
+        }
+        if (task.kind === 'prepare') {
+          await this.execute(task.runId, heartbeat, controller.signal)
+        } else {
+          await this.executeCompletion(task.runId, heartbeat, controller.signal)
+        }
       }
       if (await heartbeat.stop()) {
         await this.durableStore.acknowledgeTask(
@@ -616,19 +683,42 @@ export class ResumeAgentRunService {
           task.attempt
         )
       }
-    } catch {
+    } catch (error) {
+      const availableAt = taskRetryAvailableAt(
+        this.now(),
+        task.attempt,
+        error instanceof LlmRequestError ? error.retryAfterMs : undefined
+      )
+      if (retryDeadlineReached || availableAt.getTime() >= retryDeadlineAt) {
+        try {
+          await this.fail(task.runId, TASK_RETRY_DEADLINE_EXCEEDED, heartbeat)
+          if (await heartbeat.stop()) {
+            await this.durableStore.acknowledgeTask(
+              task.id,
+              task.leaseOwner,
+              task.attempt
+            )
+          }
+        } catch {
+          // A later lease expiry can retry the fenced terminal transition.
+        }
+        return
+      }
       if (await heartbeat.stop()) {
         try {
           await this.durableStore.releaseTask(
             task.id,
             task.leaseOwner,
-            task.attempt
+            task.attempt,
+            availableAt
           )
         } catch {
           // A later lease expiry can make the task recoverable again.
         }
       }
     } finally {
+      if (retryDeadlineTimer) clearTimeout(retryDeadlineTimer)
+      this.activeTaskControllers.delete(controller)
       this.activeHeartbeats.delete(heartbeat)
       await heartbeat.stop()
     }
@@ -636,7 +726,8 @@ export class ResumeAgentRunService {
 
   private async execute(
     id: string,
-    heartbeat?: RunTaskLeaseHeartbeat
+    heartbeat?: RunTaskLeaseHeartbeat,
+    signal?: AbortSignal
   ): Promise<void> {
     try {
       const stored = await this.store.get(id)
@@ -652,6 +743,7 @@ export class ResumeAgentRunService {
       if (!checkpoint) {
         checkpoint = await this.agent.prepare(stored.request, {
           onStatus: (status) => this.transition(id, status, heartbeat),
+          signal,
         })
         const interactions = createInteractionRequests(
           checkpoint.questions
@@ -664,10 +756,18 @@ export class ResumeAgentRunService {
       }
       const result = await this.agent.complete(checkpoint, {
         onStatus: (status) => this.transition(id, status, heartbeat),
+        signal,
       })
       await this.finish(id, result, heartbeat)
     } catch (error) {
       if (error instanceof RunTaskLeaseLostError) throw error
+      if (
+        heartbeat &&
+        error instanceof LlmRequestError &&
+        (error.retryable || error.reason === 'cancelled')
+      ) {
+        throw error
+      }
       await this.fail(id, publicRunFailure(error), heartbeat)
     }
   }
@@ -967,7 +1067,8 @@ export class ResumeAgentRunService {
 
   private async executeCompletion(
     id: string,
-    heartbeat?: RunTaskLeaseHeartbeat
+    heartbeat?: RunTaskLeaseHeartbeat,
+    signal?: AbortSignal
   ): Promise<void> {
     try {
       const stored = await this.store.get(id)
@@ -980,10 +1081,18 @@ export class ResumeAgentRunService {
       }
       const result = await this.agent.complete(stored.checkpoint, {
         onStatus: (status) => this.transition(id, status, heartbeat),
+        signal,
       })
       await this.finish(id, result, heartbeat)
     } catch (error) {
       if (error instanceof RunTaskLeaseLostError) throw error
+      if (
+        heartbeat &&
+        error instanceof LlmRequestError &&
+        (error.retryable || error.reason === 'cancelled')
+      ) {
+        throw error
+      }
       await this.fail(id, publicRunFailure(error), heartbeat)
     }
   }

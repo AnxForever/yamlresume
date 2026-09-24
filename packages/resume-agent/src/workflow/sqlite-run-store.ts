@@ -35,7 +35,7 @@ import type {
   TaskFencedRunUpdateResult,
 } from '@/workflow/run'
 
-const SCHEMA_VERSION = 2
+export const SQLITE_RUN_STORE_SCHEMA_VERSION = 2
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000
 
 export type RunStoreErrorCode =
@@ -224,10 +224,10 @@ function readSchemaVersion(database: DatabaseSync): number {
 
 function migrate(database: DatabaseSync): void {
   const version = readSchemaVersion(database)
-  if (version > SCHEMA_VERSION) {
+  if (version > SQLITE_RUN_STORE_SCHEMA_VERSION) {
     throw new RunStoreError('unsupported_schema')
   }
-  if (version === SCHEMA_VERSION) return
+  if (version === SQLITE_RUN_STORE_SCHEMA_VERSION) return
 
   try {
     database.exec(`
@@ -259,7 +259,7 @@ function migrate(database: DatabaseSync): void {
         created_at,
         id
       );
-      PRAGMA user_version = ${SCHEMA_VERSION};
+      PRAGMA user_version = ${SQLITE_RUN_STORE_SCHEMA_VERSION};
       COMMIT;
     `)
   } catch {
@@ -662,14 +662,17 @@ export class SqliteRunStore implements DurableRunStore {
   async releaseTask(
     taskId: string,
     leaseOwner: string,
-    attempt: number
+    attempt: number,
+    availableAt?: Date
   ): Promise<boolean> {
     this.ensureOpen()
+    const availableAtMs = availableAt?.getTime()
     if (
       !taskId.trim() ||
       !leaseOwner.trim() ||
       !Number.isSafeInteger(attempt) ||
-      attempt < 1
+      attempt < 1 ||
+      (availableAtMs !== undefined && !Number.isSafeInteger(availableAtMs))
     ) {
       throw new RunStoreError('invalid_task')
     }
@@ -677,10 +680,12 @@ export class SqliteRunStore implements DurableRunStore {
       const result = this.database
         .prepare(
           `UPDATE resume_agent_tasks
-           SET lease_owner = NULL, lease_expires_at = NULL
+           SET lease_owner = NULL,
+               lease_expires_at = NULL,
+               available_at = COALESCE(?, available_at)
            WHERE id = ? AND lease_owner = ? AND attempts = ?`
         )
-        .run(taskId, leaseOwner, attempt)
+        .run(availableAtMs ?? null, taskId, leaseOwner, attempt)
       return Number(result.changes) === 1
     } catch {
       throw new RunStoreError('storage_failed')

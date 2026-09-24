@@ -3,7 +3,7 @@
 > Feature ID：RA-015D
 > 状态：Implemented for development（同主机故障注入；不是 Enabled 或 Operational）
 > 最后审阅：2026-09-16
-> 范围：在 RA-015C 同主机 SQLite outbox 上补强 claim generation、多 worker 竞争、lease 接管与故障注入；RA-015D 本身未实现 heartbeat，后续 RA-015E 已补上；自动 poller、跨主机队列与生产运维仍未实现。
+> 范围：在 RA-015C 同主机 SQLite outbox 上补强 claim generation、多 worker 竞争、lease 接管与故障注入；RA-015D 本身未实现 heartbeat，后续 RA-015E 已补上，自动 poller 也由 RA-015F 补齐；跨主机队列与生产运维仍未实现。
 
 ## 1. 问题与用户结果
 
@@ -126,7 +126,7 @@ claim(attempt > maxTaskAttempts)
 | crash-before-execution takeover | Implemented | visibility timeout guidance；service close/fake-clock takeover test | Covered for local process model | None | OS kill/power loss 未注入 |
 | bounded recovery/config | Implemented | limit 与 worker/lease/attempt boundary tests | Covered | Inherited-unassessed → Backfilled | 无自动 polling/backpressure |
 | privacy/cleanup | Implemented | task-row/public/error marker test；afterEach close/rm | Covered for tests | None | 静态加密/retention 未实现 |
-| poison delivery bound | Implemented | SQS maxReceiveCount guidance；active/stale attempt tests | Partial | None | 无 DLQ、redrive、backoff 或 operator alert |
+| poison delivery bound | Implemented | SQS maxReceiveCount guidance；active/stale attempt tests；RA-015G persisted release backoff | Partial | None | 无 DLQ、redrive、jitter 或 operator alert |
 | long-task safety | Implemented for development by RA-015E | 官方建议 extend visibility；本地 renewal、deferred Provider、takeover 与 fenced-CAS tests | Partial | RA-015D 明确延期，RA-015E backfilled | Provider side-effect idempotency 与 RA-015F lifecycle |
 | operational multi-host worker | Deferred | 无部署、队列、指标或 runbook | Gap | None | production adapter and operations |
 
@@ -139,7 +139,7 @@ claim(attempt > maxTaskAttempts)
 
 ## 10. 明确不在本切片
 
-- heartbeat/lease extension 已由 RA-015E 交付开发级证据；自动 poller、RA-015F claim-ahead lifecycle、backoff/jitter、DLQ/redrive仍不在 RA-015D/RA-015E；
+- heartbeat/lease extension 已由 RA-015E 交付开发级证据；自动 poller 已由 RA-015F 交付，release backoff 已由 RA-015G 交付；claim-ahead lifecycle、jitter、DLQ/redrive 仍未覆盖；
 - 跨主机/多区域部署、clock-skew 容忍和 leader election；
 - exactly-once Provider 调用或 workflow side effect；
 - 生产 metrics、alerts、容量/延迟压测与 runbook。

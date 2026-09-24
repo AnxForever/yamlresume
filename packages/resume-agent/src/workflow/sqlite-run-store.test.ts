@@ -29,6 +29,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { LlmClient } from '@/contracts'
+import { LlmRequestError } from '@/llm/openai-compatible'
 import { renderOdtDocument } from '@/rendering/odt'
 import { ResumeTailoringAgent } from '@/workflow/agent'
 import {
@@ -105,7 +106,10 @@ const completeCandidate = {
   ],
 }
 
-function completingAgent(name = 'Ada Lovelace'): ResumeTailoringAgent {
+function completingAgent(
+  name = 'Ada Lovelace',
+  calls?: { count: number }
+): ResumeTailoringAgent {
   const completedCandidate = {
     ...completeCandidate,
     content: {
@@ -130,6 +134,7 @@ function completingAgent(name = 'Ada Lovelace'): ResumeTailoringAgent {
   ]
   const llm: LlmClient = {
     async completeJson() {
+      if (calls) calls.count += 1
       return {
         data: responses.shift(),
         metadata: {
@@ -236,17 +241,21 @@ class LostAcknowledgementStore implements DurableRunStore {
   }
 
   releaseTask(
-    taskId: string,
-    leaseOwner: string,
-    attempt: number
-  ): Promise<boolean> {
-    return this.delegate.releaseTask(taskId, leaseOwner, attempt)
+    ...args: Parameters<DurableRunStore['releaseTask']>
+  ): ReturnType<DurableRunStore['releaseTask']> {
+    return this.delegate.releaseTask(...args)
   }
 
   renewTaskLease(
     options: Parameters<DurableRunStore['renewTaskLease']>[0]
   ): ReturnType<DurableRunStore['renewTaskLease']> {
     return this.delegate.renewTaskLease(options)
+  }
+}
+
+class FailedAcknowledgementStore extends LostAcknowledgementStore {
+  override acknowledgeTask(): Promise<boolean> {
+    return Promise.reject(new Error('Synthetic acknowledgement failure'))
   }
 }
 
@@ -851,6 +860,59 @@ describe('SqliteRunStore', () => {
         leaseDurationMs: 30_000,
       })
     ).toBeUndefined()
+  })
+
+  it('persists a delayed release and honors its exact availability time', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const store = await openStore(databasePath)
+    const run = storedRun('run-delayed-release')
+    const claimedAt = new Date('2026-09-24T12:00:00.000Z')
+    const availableAt = new Date('2026-09-24T12:00:01.000Z')
+    await store.createWithTask(run, runTask(run.snapshot.id))
+    const firstClaim = await store.claimNextTask({
+      workerId: 'worker-before-backoff',
+      now: claimedAt,
+      leaseDurationMs: 30_000,
+    })
+    if (!firstClaim) throw new Error('Expected claimed task')
+
+    await expect(
+      store.releaseTask(
+        firstClaim.id,
+        firstClaim.leaseOwner,
+        firstClaim.attempt,
+        new Date(Number.NaN)
+      )
+    ).rejects.toMatchObject({ code: 'invalid_task' })
+    expect(
+      await store.releaseTask(
+        firstClaim.id,
+        firstClaim.leaseOwner,
+        firstClaim.attempt,
+        availableAt
+      )
+    ).toBe(true)
+    await expect(
+      store.claimNextTask({
+        workerId: 'worker-too-early',
+        now: new Date('2026-09-24T12:00:00.999Z'),
+        leaseDurationMs: 30_000,
+      })
+    ).resolves.toBeUndefined()
+
+    store.close()
+    const reopened = await openStore(databasePath)
+    await expect(
+      reopened.claimNextTask({
+        workerId: 'worker-at-boundary',
+        now: availableAt,
+        leaseDurationMs: 30_000,
+      })
+    ).resolves.toMatchObject({
+      id: firstClaim.id,
+      attempt: 2,
+      leaseOwner: 'worker-at-boundary',
+    })
   })
 
   it('persists a run across closing and reopening the database', async () => {
@@ -1501,6 +1563,8 @@ describe('SqliteRunStore', () => {
     vi.setSystemTime(new Date('2026-09-16T12:00:00.000Z'))
     let resolveJobAnalysis: ((value: unknown) => void) | undefined
     let markProviderStarted: (() => void) | undefined
+    let providerSignal: AbortSignal | undefined
+    let providerCancelled = false
     const providerStarted = new Promise<void>((resolve) => {
       markProviderStarted = resolve
     })
@@ -1508,7 +1572,15 @@ describe('SqliteRunStore', () => {
       resolveJobAnalysis = resolve
     })
     const llm: LlmClient = {
-      async completeJson<T>() {
+      async completeJson<T>(_request, options) {
+        providerSignal = options?.signal
+        providerSignal?.addEventListener(
+          'abort',
+          () => {
+            providerCancelled = true
+          },
+          { once: true }
+        )
         markProviderStarted?.()
         return {
           data: (await pendingJobAnalysis) as T,
@@ -1546,6 +1618,8 @@ describe('SqliteRunStore', () => {
 
       await vi.advanceTimersByTimeAsync(300)
       expect(heartbeatStore.renewalCalls).toBe(2)
+      expect(providerSignal?.aborted).toBe(true)
+      expect(providerCancelled).toBe(true)
       await vi.advanceTimersByTimeAsync(600)
       const takeover = await competingStore.claimNextTask({
         workerId: 'takeover-worker',
@@ -1671,6 +1745,8 @@ describe('SqliteRunStore', () => {
     vi.setSystemTime(new Date('2026-09-16T12:00:00.000Z'))
     let resolveJobAnalysis: ((value: unknown) => void) | undefined
     let markProviderStarted: (() => void) | undefined
+    let providerSignal: AbortSignal | undefined
+    let providerCancelled = false
     const providerStarted = new Promise<void>((resolve) => {
       markProviderStarted = resolve
     })
@@ -1678,7 +1754,15 @@ describe('SqliteRunStore', () => {
       resolveJobAnalysis = resolve
     })
     const llm: LlmClient = {
-      async completeJson<T>() {
+      async completeJson<T>(_request, options) {
+        providerSignal = options?.signal
+        providerSignal?.addEventListener(
+          'abort',
+          () => {
+            providerCancelled = true
+          },
+          { once: true }
+        )
         markProviderStarted?.()
         return {
           data: (await pendingJobAnalysis) as T,
@@ -1713,9 +1797,12 @@ describe('SqliteRunStore', () => {
       execution = scheduled[0]?.()
       await providerStarted
       expect(vi.getTimerCount()).toBe(1)
+      expect(providerSignal?.aborted).toBe(false)
 
       await service.close()
       expect(vi.getTimerCount()).toBe(0)
+      expect(providerSignal?.aborted).toBe(true)
+      expect(providerCancelled).toBe(true)
       await vi.advanceTimersByTimeAsync(900)
       const takeover = await competingStore.claimNextTask({
         workerId: 'worker-after-close',
@@ -1843,7 +1930,11 @@ describe('SqliteRunStore', () => {
     const privateErrorMarker = 'PRIVATE_PROVIDER_HEARTBEAT_ERROR_MARKER'
     const llm: LlmClient = {
       async completeJson() {
-        throw new Error(privateErrorMarker)
+        throw new LlmRequestError(privateErrorMarker, {
+          reason: 'http_status',
+          retryable: false,
+          status: 400,
+        })
       },
     }
     const store = await openStore(await temporaryDatabasePath())
@@ -1878,6 +1969,606 @@ describe('SqliteRunStore', () => {
       await service.close()
       vi.useRealTimers()
     }
+  })
+
+  it('resumes a retryable provider failure from persisted backoff after restart', async () => {
+    const privateErrorMarker = 'PRIVATE_RETRYABLE_PROVIDER_ERROR_MARKER'
+    const databasePath = await temporaryDatabasePath()
+    const firstStore = await openStore(databasePath)
+    const firstTasks: Array<() => Promise<void>> = []
+    const responses = [
+      {
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      },
+      {
+        resume: completeCandidate,
+        selectedEvidenceIds: [],
+        questions: [],
+        notes: [],
+      },
+    ]
+    let modelCalls = 0
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          throw new LlmRequestError(privateErrorMarker, {
+            reason: 'network_error',
+            retryable: true,
+            retryAfterMs: 500,
+          })
+        }
+        return {
+          data: responses.shift() as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    let now = new Date('2026-09-24T12:00:00.000Z')
+    const firstService = new ResumeAgentRunService(
+      new ResumeTailoringAgent(llm),
+      {
+        store: firstStore,
+        idFactory: () => 'run-retryable-provider-restart',
+        workerId: 'provider-worker-before-restart',
+        taskLeaseMs: 10_000,
+        now: () => now,
+        schedule: (task) => firstTasks.push(task),
+      }
+    )
+
+    await firstService.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    await firstTasks.shift()?.()
+
+    const retrying = await firstService.get('run-retryable-provider-restart')
+    expect(retrying?.status).toBe('analyzing_jd')
+    expect(JSON.stringify(retrying)).not.toContain(privateErrorMarker)
+    now = new Date('2026-09-24T12:00:00.999Z')
+    expect(await firstService.recoverPendingTasks()).toBe(0)
+    await firstService.close()
+    firstStore.close()
+
+    now = new Date('2026-09-24T12:00:01.000Z')
+    const reopenedStore = await openStore(databasePath)
+    const resumedTasks: Array<() => Promise<void>> = []
+    const resumedService = new ResumeAgentRunService(
+      new ResumeTailoringAgent(llm),
+      {
+        store: reopenedStore,
+        workerId: 'provider-worker-after-restart',
+        taskLeaseMs: 10_000,
+        now: () => now,
+        schedule: (task) => resumedTasks.push(task),
+      }
+    )
+    expect(await resumedService.recoverPendingTasks()).toBe(1)
+    await resumedTasks.shift()?.()
+
+    expect(
+      await resumedService.get('run-retryable-provider-restart')
+    ).toMatchObject({ status: 'completed' })
+    expect(modelCalls).toBe(3)
+    expect(await resumedService.recoverPendingTasks()).toBe(0)
+    await resumedService.close()
+  })
+
+  it('stops retrying when the next delivery would reach its elapsed deadline', async () => {
+    const privateErrorMarker = 'PRIVATE_RETRY_DEADLINE_PROVIDER_MARKER'
+    const store = await openStore(await temporaryDatabasePath())
+    const scheduled: Array<() => Promise<void>> = []
+    let modelCalls = 0
+    const llm: LlmClient = {
+      async completeJson() {
+        modelCalls += 1
+        throw new LlmRequestError(privateErrorMarker, {
+          reason: 'http_status',
+          retryable: true,
+          status: 429,
+          retryAfterMs: 5_000,
+        })
+      },
+    }
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store,
+      idFactory: () => 'run-retry-deadline-next-delivery',
+      workerId: 'retry-deadline-worker',
+      taskLeaseMs: 10_000,
+      maxTaskRetryElapsedMs: 5_000,
+      now: () => new Date('2026-09-24T12:00:00.000Z'),
+      schedule: (task) => scheduled.push(task),
+    })
+    await service.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    await scheduled.shift()?.()
+
+    const failed = await service.get('run-retry-deadline-next-delivery')
+    expect(failed).toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'agent_task_retry_deadline_exceeded',
+        message: 'The resume tailoring task exceeded its retry deadline.',
+      },
+    })
+    expect(JSON.stringify(failed)).not.toContain(privateErrorMarker)
+    expect(modelCalls).toBe(1)
+    expect(await service.recoverPendingTasks()).toBe(0)
+    await service.close()
+  })
+
+  it('keeps the retry deadline across restart and stops before another model call', async () => {
+    const privateErrorMarker = 'PRIVATE_RESTARTED_RETRY_DEADLINE_MARKER'
+    const databasePath = await temporaryDatabasePath()
+    const firstStore = await openStore(databasePath)
+    const firstTasks: Array<() => Promise<void>> = []
+    let modelCalls = 0
+    const llm: LlmClient = {
+      async completeJson() {
+        modelCalls += 1
+        throw new LlmRequestError(privateErrorMarker, {
+          reason: 'network_error',
+          retryable: true,
+        })
+      },
+    }
+    let now = new Date('2026-09-24T12:00:00.000Z')
+    const firstService = new ResumeAgentRunService(
+      new ResumeTailoringAgent(llm),
+      {
+        store: firstStore,
+        idFactory: () => 'run-retry-deadline-restart',
+        workerId: 'retry-deadline-before-restart',
+        taskLeaseMs: 10_000,
+        maxTaskRetryElapsedMs: 5_000,
+        now: () => now,
+        schedule: (task) => firstTasks.push(task),
+      }
+    )
+    await firstService.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    await firstTasks.shift()?.()
+    expect((await firstService.get('run-retry-deadline-restart'))?.status).toBe(
+      'analyzing_jd'
+    )
+    expect(modelCalls).toBe(1)
+    await firstService.close()
+    firstStore.close()
+
+    now = new Date('2026-09-24T12:00:05.000Z')
+    const reopenedStore = await openStore(databasePath)
+    const resumedTasks: Array<() => Promise<void>> = []
+    const resumedService = new ResumeAgentRunService(
+      new ResumeTailoringAgent(llm),
+      {
+        store: reopenedStore,
+        workerId: 'retry-deadline-after-restart',
+        taskLeaseMs: 10_000,
+        maxTaskRetryElapsedMs: 5_000,
+        now: () => now,
+        schedule: (task) => resumedTasks.push(task),
+      }
+    )
+    expect(await resumedService.recoverPendingTasks()).toBe(1)
+    await resumedTasks.shift()?.()
+
+    const failed = await resumedService.get('run-retry-deadline-restart')
+    expect(failed).toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'agent_task_retry_deadline_exceeded',
+        message: 'The resume tailoring task exceeded its retry deadline.',
+      },
+    })
+    expect(JSON.stringify(failed)).not.toContain(privateErrorMarker)
+    expect(modelCalls).toBe(1)
+    expect(await resumedService.recoverPendingTasks()).toBe(0)
+    await resumedService.close()
+  })
+
+  it('cancels an in-flight retry when its persisted deadline arrives', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-25T00:00:00.000Z'))
+    const privateAbortMarker = 'PRIVATE_IN_FLIGHT_DEADLINE_ABORT_MARKER'
+    const store = await openStore(await temporaryDatabasePath())
+    const scheduled: Array<() => Promise<void>> = []
+    let modelCalls = 0
+    let retrySignal: AbortSignal | undefined
+    let markRetryStarted: (() => void) | undefined
+    const retryStarted = new Promise<void>((resolve) => {
+      markRetryStarted = resolve
+    })
+    const llm: LlmClient = {
+      async completeJson<_T>(_request, options) {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          throw new LlmRequestError('transient failure', {
+            reason: 'network_error',
+            retryable: true,
+          })
+        }
+        retrySignal = options?.signal
+        markRetryStarted?.()
+        return new Promise<never>((_resolve, reject) => {
+          retrySignal?.addEventListener(
+            'abort',
+            () =>
+              reject(
+                new LlmRequestError(privateAbortMarker, {
+                  reason: 'cancelled',
+                  retryable: false,
+                })
+              ),
+            { once: true }
+          )
+        })
+      },
+    }
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store,
+      idFactory: () => 'run-in-flight-retry-deadline',
+      workerId: 'in-flight-retry-deadline-worker',
+      taskLeaseMs: 10_000,
+      maxTaskRetryElapsedMs: 1_500,
+      now: () => new Date(),
+      schedule: (task) => scheduled.push(task),
+    })
+    let retryExecution: Promise<void> | undefined
+    try {
+      await service.start({
+        jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+        candidate: { resume: completeCandidate },
+      })
+      await scheduled.shift()?.()
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(await service.recoverPendingTasks()).toBe(1)
+      retryExecution = scheduled.shift()?.()
+      await retryStarted
+      expect(retrySignal?.aborted).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(499)
+      expect(retrySignal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await retryExecution
+
+      const failed = await service.get('run-in-flight-retry-deadline')
+      expect(failed).toMatchObject({
+        status: 'failed',
+        error: {
+          code: 'agent_task_retry_deadline_exceeded',
+          message: 'The resume tailoring task exceeded its retry deadline.',
+        },
+      })
+      expect(JSON.stringify(failed)).not.toContain(privateAbortMarker)
+      expect(retrySignal?.aborted).toBe(true)
+      expect(modelCalls).toBe(2)
+      expect(await service.recoverPendingTasks()).toBe(0)
+    } finally {
+      await service.close()
+      await retryExecution
+      vi.useRealTimers()
+    }
+  })
+
+  it('allows one delivery for a task first claimed after its retry window', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const run = storedRun('run-old-first-delivery')
+    if (!run.request) throw new Error('Expected stored request')
+    run.request.candidate = { resume: completeCandidate }
+    await expect(
+      store.createWithTask(run, runTask(run.snapshot.id))
+    ).resolves.toBe(true)
+    const scheduled: Array<() => Promise<void>> = []
+    const modelCalls = { count: 0 }
+    const service = new ResumeAgentRunService(
+      completingAgent('Ada Lovelace', modelCalls),
+      {
+        store,
+        workerId: 'old-first-delivery-worker',
+        maxTaskRetryElapsedMs: 1_000,
+        now: () => new Date('2026-09-24T12:00:00.000Z'),
+        schedule: (task) => scheduled.push(task),
+      }
+    )
+
+    expect(await service.recoverPendingTasks()).toBe(1)
+    await scheduled.shift()?.()
+
+    expect(await service.get(run.snapshot.id)).toMatchObject({
+      status: 'completed',
+    })
+    expect(modelCalls.count).toBe(2)
+    expect(await service.recoverPendingTasks()).toBe(0)
+    await service.close()
+  })
+
+  it('persists the longer provider retry delay across restart', async () => {
+    const privateErrorMarker = 'PRIVATE_PROVIDER_RETRY_AFTER_MARKER'
+    const databasePath = await temporaryDatabasePath()
+    const firstStore = await openStore(databasePath)
+    const firstTasks: Array<() => Promise<void>> = []
+    const responses = [
+      {
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      },
+      {
+        resume: completeCandidate,
+        selectedEvidenceIds: [],
+        questions: [],
+        notes: [],
+      },
+    ]
+    let modelCalls = 0
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          throw new LlmRequestError(privateErrorMarker, {
+            reason: 'http_status',
+            retryable: true,
+            status: 429,
+            retryAfterMs: 5_000,
+          })
+        }
+        return {
+          data: responses.shift() as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    let now = new Date('2026-09-24T12:00:00.000Z')
+    const firstService = new ResumeAgentRunService(
+      new ResumeTailoringAgent(llm),
+      {
+        store: firstStore,
+        idFactory: () => 'run-provider-retry-after-restart',
+        workerId: 'retry-after-worker-before-restart',
+        taskLeaseMs: 10_000,
+        maxTaskRetryElapsedMs: 5_001,
+        now: () => now,
+        schedule: (task) => firstTasks.push(task),
+      }
+    )
+    await firstService.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    await firstTasks.shift()?.()
+
+    const waiting = await firstService.get('run-provider-retry-after-restart')
+    expect(waiting?.status).toBe('analyzing_jd')
+    expect(JSON.stringify(waiting)).not.toContain(privateErrorMarker)
+    now = new Date('2026-09-24T12:00:04.999Z')
+    expect(await firstService.recoverPendingTasks()).toBe(0)
+    await firstService.close()
+    firstStore.close()
+
+    now = new Date('2026-09-24T12:00:05.000Z')
+    const reopenedStore = await openStore(databasePath)
+    const resumedTasks: Array<() => Promise<void>> = []
+    const resumedService = new ResumeAgentRunService(
+      new ResumeTailoringAgent(llm),
+      {
+        store: reopenedStore,
+        workerId: 'retry-after-worker-after-restart',
+        taskLeaseMs: 10_000,
+        maxTaskRetryElapsedMs: 5_001,
+        now: () => now,
+        schedule: (task) => resumedTasks.push(task),
+      }
+    )
+    expect(await resumedService.recoverPendingTasks()).toBe(1)
+    await resumedTasks.shift()?.()
+
+    expect(
+      await resumedService.get('run-provider-retry-after-restart')
+    ).toMatchObject({ status: 'completed' })
+    expect(modelCalls).toBe(3)
+    expect(await resumedService.recoverPendingTasks()).toBe(0)
+    await resumedService.close()
+  })
+
+  it('retries a transient provider failure after a durable interaction resumes', async () => {
+    const privateErrorMarker = 'PRIVATE_COMPLETION_PROVIDER_ERROR_MARKER'
+    const databasePath = await temporaryDatabasePath()
+    const originalStore = await openStore(databasePath)
+    const originalTasks: Array<() => Promise<void>> = []
+    const originalService = new ResumeAgentRunService(questionAgent(), {
+      store: originalStore,
+      idFactory: () => 'run-retryable-completion',
+      workerId: 'interaction-worker',
+      now: () => new Date('2026-09-24T12:00:00.000Z'),
+      schedule: (task) => originalTasks.push(task),
+    })
+    await originalService.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: {
+        resume: completeCandidate,
+        files: [
+          {
+            id: 'candidate-source',
+            filename: 'candidate.txt',
+            text: 'Candidate profile whose name must be confirmed.',
+          },
+        ],
+      },
+    })
+    await originalTasks.shift()?.()
+    expect(
+      (await originalService.get('run-retryable-completion'))?.status
+    ).toBe('needs_input')
+    await originalService.answer('run-retryable-completion', {
+      interactionId: 'candidate-normalization:1',
+      idempotencyKey: 'retryable-completion-answer',
+      value: 'Grace Hopper',
+    })
+    await originalService.close()
+    originalStore.close()
+
+    const completedCandidate = {
+      ...completeCandidate,
+      content: {
+        ...completeCandidate.content,
+        basics: { ...completeCandidate.content.basics, name: 'Grace Hopper' },
+      },
+    }
+    const responses = [
+      {
+        targetTitle: 'TypeScript Engineer',
+        seniority: 'junior',
+        summary: 'TypeScript engineer',
+        requirements: [],
+        keywords: [],
+      },
+      {
+        resume: completedCandidate,
+        selectedEvidenceIds: [],
+        questions: [],
+        notes: [],
+      },
+    ]
+    let modelCalls = 0
+    const llm: LlmClient = {
+      async completeJson<T>() {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          throw new LlmRequestError(privateErrorMarker, {
+            reason: 'timeout',
+            retryable: true,
+          })
+        }
+        return {
+          data: responses.shift() as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    let now = new Date('2026-09-24T12:00:00.000Z')
+    const completionStore = await openStore(databasePath)
+    const completionTasks: Array<() => Promise<void>> = []
+    const completionService = new ResumeAgentRunService(
+      new ResumeTailoringAgent(llm),
+      {
+        store: completionStore,
+        workerId: 'completion-worker',
+        taskLeaseMs: 10_000,
+        now: () => now,
+        schedule: (task) => completionTasks.push(task),
+      }
+    )
+    expect(await completionService.recoverPendingTasks()).toBe(1)
+    await completionTasks.shift()?.()
+
+    const retrying = await completionService.get('run-retryable-completion')
+    expect(retrying?.status).toBe('analyzing_jd')
+    expect(JSON.stringify(retrying)).not.toContain(privateErrorMarker)
+    now = new Date('2026-09-24T12:00:00.999Z')
+    expect(await completionService.recoverPendingTasks()).toBe(0)
+    now = new Date('2026-09-24T12:00:01.000Z')
+    expect(await completionService.recoverPendingTasks()).toBe(1)
+    await completionTasks.shift()?.()
+
+    expect(
+      await completionService.get('run-retryable-completion')
+    ).toMatchObject({ status: 'completed' })
+    expect(modelCalls).toBe(3)
+    expect(await completionService.recoverPendingTasks()).toBe(0)
+    await completionService.close()
+  })
+
+  it('bounds durable deliveries for a persistently transient provider failure', async () => {
+    const privateErrorMarker = 'PRIVATE_EXHAUSTED_PROVIDER_ERROR_MARKER'
+    const store = await openStore(await temporaryDatabasePath())
+    const scheduled: Array<() => Promise<void>> = []
+    let modelCalls = 0
+    const llm: LlmClient = {
+      async completeJson() {
+        modelCalls += 1
+        throw new LlmRequestError(privateErrorMarker, {
+          reason: 'http_status',
+          retryable: true,
+          status: 503,
+        })
+      },
+    }
+    let now = new Date('2026-09-24T12:00:00.000Z')
+    const service = new ResumeAgentRunService(new ResumeTailoringAgent(llm), {
+      store,
+      idFactory: () => 'run-exhausted-provider-retries',
+      workerId: 'provider-exhaustion-worker',
+      taskLeaseMs: 10_000,
+      maxTaskAttempts: 3,
+      now: () => now,
+      schedule: (task) => scheduled.push(task),
+    })
+    await service.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    await scheduled.shift()?.()
+
+    for (const availableAt of [
+      '2026-09-24T12:00:01.000Z',
+      '2026-09-24T12:00:03.000Z',
+    ]) {
+      now = new Date(new Date(availableAt).getTime() - 1)
+      expect(await service.recoverPendingTasks()).toBe(0)
+      now = new Date(availableAt)
+      expect(await service.recoverPendingTasks()).toBe(1)
+      await scheduled.shift()?.()
+    }
+
+    expect(modelCalls).toBe(3)
+    expect((await service.get('run-exhausted-provider-retries'))?.status).toBe(
+      'analyzing_jd'
+    )
+    now = new Date('2026-09-24T12:00:06.999Z')
+    expect(await service.recoverPendingTasks()).toBe(0)
+    now = new Date('2026-09-24T12:00:07.000Z')
+    expect(await service.recoverPendingTasks()).toBe(1)
+    await scheduled.shift()?.()
+
+    const exhausted = await service.get('run-exhausted-provider-retries')
+    expect(exhausted).toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'agent_task_attempts_exhausted',
+        message: 'The resume tailoring task exceeded its retry limit.',
+      },
+    })
+    expect(JSON.stringify(exhausted)).not.toContain(privateErrorMarker)
+    expect(modelCalls).toBe(3)
+    expect(await service.recoverPendingTasks()).toBe(0)
+    await service.close()
   })
 
   it('clears heartbeat before a lost acknowledgement is recovered', async () => {
@@ -1919,6 +2610,96 @@ describe('SqliteRunStore', () => {
       await service.close()
       vi.useRealTimers()
     }
+  })
+
+  it('persists exponential backoff after worker infrastructure failures', async () => {
+    const databasePath = await temporaryDatabasePath()
+    const store = await openStore(databasePath)
+    const scheduled: Array<() => Promise<void>> = []
+    const modelCalls = { count: 0 }
+    let now = new Date('2026-09-24T12:00:00.000Z')
+    const service = new ResumeAgentRunService(
+      completingAgent('Ada Lovelace', modelCalls),
+      {
+        store: new FailedAcknowledgementStore(store),
+        idFactory: () => 'run-persisted-retry-backoff',
+        workerId: 'worker-with-failed-ack',
+        taskLeaseMs: 10_000,
+        now: () => now,
+        schedule: (task) => scheduled.push(task),
+      }
+    )
+    await service.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    await scheduled.shift()?.()
+    expect(modelCalls.count).toBe(2)
+    expect((await service.get('run-persisted-retry-backoff'))?.status).toBe(
+      'completed'
+    )
+
+    now = new Date('2026-09-24T12:00:00.999Z')
+    expect(await service.recoverPendingTasks()).toBe(0)
+    now = new Date('2026-09-24T12:00:01.000Z')
+    expect(await service.recoverPendingTasks()).toBe(1)
+    await scheduled.shift()?.()
+    expect(modelCalls.count).toBe(2)
+
+    now = new Date('2026-09-24T12:00:02.999Z')
+    expect(await service.recoverPendingTasks()).toBe(0)
+    await service.close()
+    store.close()
+
+    const reopened = await openStore(databasePath)
+    await expect(
+      reopened.claimNextTask({
+        workerId: 'worker-after-reopen',
+        now: new Date('2026-09-24T12:00:03.000Z'),
+        leaseDurationMs: 10_000,
+      })
+    ).resolves.toMatchObject({
+      runId: 'run-persisted-retry-backoff',
+      attempt: 3,
+      leaseOwner: 'worker-after-reopen',
+    })
+  })
+
+  it('caps persisted infrastructure retry backoff at thirty seconds', async () => {
+    const store = await openStore(await temporaryDatabasePath())
+    const scheduled: Array<() => Promise<void>> = []
+    const modelCalls = { count: 0 }
+    let now = new Date('2026-09-24T12:00:00.000Z')
+    const service = new ResumeAgentRunService(
+      completingAgent('Ada Lovelace', modelCalls),
+      {
+        store: new FailedAcknowledgementStore(store),
+        idFactory: () => 'run-capped-retry-backoff',
+        workerId: 'worker-with-capped-backoff',
+        taskLeaseMs: 60_000,
+        now: () => now,
+        schedule: (task) => scheduled.push(task),
+      }
+    )
+    await service.start({
+      jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+      candidate: { resume: completeCandidate },
+    })
+    await scheduled.shift()?.()
+
+    for (const delayMs of [
+      1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000,
+    ]) {
+      const availableAt = now.getTime() + delayMs
+      now = new Date(availableAt - 1)
+      expect(await service.recoverPendingTasks()).toBe(0)
+      now = new Date(availableAt)
+      expect(await service.recoverPendingTasks()).toBe(1)
+      await scheduled.shift()?.()
+    }
+
+    expect(modelCalls.count).toBe(2)
+    await service.close()
   })
 
   it('claims no more than the requested recovery batch limit', async () => {
@@ -2021,6 +2802,15 @@ describe('SqliteRunStore', () => {
           maxTaskAttempts: 1_001,
         })
     ).toThrow('Run task worker configuration is invalid')
+    for (const maxTaskRetryElapsedMs of [999, 1_000.5, 86_400_001]) {
+      expect(
+        () =>
+          new ResumeAgentRunService(unusedAgent(), {
+            store,
+            maxTaskRetryElapsedMs,
+          })
+      ).toThrow('Run task worker configuration is invalid')
+    }
 
     const service = new ResumeAgentRunService(unusedAgent(), { store })
     await expect(service.recoverPendingTasks(0)).rejects.toThrow(

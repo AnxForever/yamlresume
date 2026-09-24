@@ -2,7 +2,7 @@
 
 > Feature ID：RA-009C
 > 状态：Enabled for personal private beta；one-host Operational evidence
-> 最后审阅：2026-09-16
+> 最后审阅：2026-09-24
 > 目标环境：`chat.baxfor.fun` / Ubuntu 24.04 / Nginx / systemd / Node.js 24
 
 ## 用户结果
@@ -15,14 +15,16 @@
 - 旧服务还包含 `deeix-memory-mcp.service`、两个 Docker volume 和约 28MB 数据；必须作为一个生命周期整体处理。
 - 服务器已有有效 TLS 证书、Node.js 24、systemd 和 12GB 可用磁盘。
 - DeepSeek 最小 OpenAI-compatible 调用成功；使用合成简历的完整同步 Agent 调用也已返回 `completed` 和 YAML artifact。一次旧进程环境优先级导致 401，清除继承变量并从专用环境文件启动后恢复。
-- 当前 API 尚无完成验收的应用层认证，因此不能裸露公网。
+- 当前已部署 release 显式关闭应用层认证；RA-016/RA-019 虽已在代码中实现认证、Run ownership
+  和单机账号限流基线，但尚未在该主机启用和完成部署验收，因此 API 仍不能绕过现有入口保护裸露公网。
 
 ## 部署决策
 
 - 采用模块化单体的两个 systemd 进程，而不是在当前阶段引入 Kubernetes 或微服务平台。
 - Web 监听 `127.0.0.1:3100`，API 监听 `127.0.0.1:8787`；只有 Nginx 暴露 80/443。
 - Nginx 将 `/api/` 去前缀后转发给 API，其余请求转发 Web。部署构建把 Web 默认 API 地址设置为同源 `/api`，不把 Provider key 发给浏览器。
-- 整站先使用 Nginx Basic Auth 作为部署防线；应用层用户、Run ownership 和凭证 vault 仍由 RA-016 负责。
+- 整站继续使用 Nginx Basic Auth 作为当前部署防线；应用层用户、Run ownership、凭证 vault 和账号
+  限流的代码分别由 RA-016/RA-019 提供，需独立升级并完成生产 smoke 后才可标记 Enabled。
 - Provider 凭证存放在 `/etc/yamlresume-agent/api.env`，owner root、mode 0600；SQLite 位于 `/var/lib/yamlresume-agent`，仅服务账号可写。
 - 旧服务先停机形成 SQLite 一致性备份，再删除容器、volume、镜像、memory MCP unit 和旧目录。备份保存在 root-only 目录，待新服务稳定后再按用户决定销毁。
 
@@ -45,12 +47,14 @@ Nginx 配置必须在 reload 前通过 `nginx -t`。新服务至少验收：Basi
 | RA-009C-A | artifact → systemd process | Enabled | 本地构建、远端 active/enabled、restart 与 journal | Partial | None | 自动发布与 rollback 命令尚未产品化 |
 | RA-009C-B | HTTPS same-origin Web/API | Enabled | 公网 Web/API 200、真实 Chrome、TLS/Nginx smoke | Partial | None | CSP、外部监控与证书续期演练 |
 | RA-009C-C | Provider secret boundary | Enabled | root-only env；浏览器 bundle 为同源 `/api`；真实 DeepSeek | Partial | Backfilled | 应用层 vault/KMS 仍为 RA-016 |
-| RA-009C-D | public access protection | Enabled for one user | 未认证 401、Basic Auth Chrome/curl 验收 | Partial | Backfilled | 应用 auth、ownership、rate limit 未完成 |
+| RA-009C-D | public access protection | Enabled for one user | 未认证 401、Basic Auth Chrome/curl 验收 | Partial | Backfilled | RA-016/RA-019 已实现代码基线，但当前部署仍为 auth disabled，尚未启用和验收 |
 | RA-009C-E | old service removal/rollback | Completed with recoverable backup | 一致性归档+hash；容器/volume/image/unit/path 清单复核为空 | Covered for removal action | None | 备份保留期和恢复演练未执行 |
 
 ## 不作出的声明
 
-本切片不是多租户生产平台：没有完成应用层鉴权、按用户隔离 Run、速率限制、集中日志脱敏、托管数据库、备份轮换、多主机 worker 或 Provider exactly-once。Basic Auth 适合当前个人私有部署，不替代这些能力。
+本切片不是多租户生产平台：当前部署没有启用应用层鉴权、按用户隔离 Run 和按账号速率限制，也没有
+集中日志脱敏、托管数据库、备份轮换、多主机 worker 或 Provider exactly-once。Basic Auth 适合当前
+个人私有部署，不替代已经实现但尚未部署验收的 RA-016/RA-019，也不替代其余缺失能力。
 
 ## 实际部署与验收记录
 

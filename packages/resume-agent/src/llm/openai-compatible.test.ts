@@ -47,9 +47,10 @@ function responseBody(content: string, status = 200): string {
 }
 
 type TestServerResponse =
-  | { status: number; body: string }
+  | { status: number; body: string; headers?: Record<string, string> }
   | { type: 'destroy-connection' }
   | { type: 'hang' }
+  | { type: 'hang-body' }
   | { type: 'truncate-body'; body: string }
 
 async function withServer(
@@ -74,6 +75,10 @@ async function withServer(
     const result = handler(requestCount)
     if ('type' in result) {
       if (result.type === 'destroy-connection') request.socket.destroy()
+      if (result.type === 'hang-body') {
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+        response.write('{"partial":')
+      }
       if (result.type === 'truncate-body') {
         response.statusCode = 200
         response.setHeader('Content-Type', 'application/json')
@@ -84,6 +89,9 @@ async function withServer(
     }
     response.statusCode = result.status
     response.setHeader('Content-Type', 'application/json')
+    for (const [name, value] of Object.entries(result.headers ?? {})) {
+      response.setHeader(name, value)
+    }
     response.end(result.body)
   })
   server.on('connection', (socket) => {
@@ -127,6 +135,19 @@ async function withServer(
 }
 
 describe('OpenAICompatibleClient', () => {
+  it('keeps constructed retry hints finite, non-negative, integral, and capped', () => {
+    const normalize = (retryAfterMs: number) =>
+      new LlmRequestError('safe error', { retryAfterMs }).retryAfterMs
+
+    expect([
+      normalize(-1),
+      normalize(Number.NaN),
+      normalize(Number.POSITIVE_INFINITY),
+      normalize(1_250.1),
+      normalize(40_000),
+    ]).toEqual([undefined, undefined, undefined, 1_251, 30_000])
+  })
+
   it('returns structured data and usage metadata', async () => {
     const server = await withServer(() => ({
       status: 200,
@@ -154,6 +175,124 @@ describe('OpenAICompatibleClient', () => {
         outputTokens: 6,
         reasoningTokens: 2,
       })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('cancels an in-flight request when the caller aborts', async () => {
+    let markRequestReceived: (() => void) | undefined
+    const requestReceived = new Promise<void>((resolve) => {
+      markRequestReceived = resolve
+    })
+    const server = await withServer(() => {
+      markRequestReceived?.()
+      return { type: 'hang' }
+    })
+    try {
+      const client = new OpenAICompatibleClient({
+        apiKey: 'test-key',
+        baseUrl: server.baseUrl,
+        model: 'test',
+        timeoutMs: 500,
+        maxRetries: 0,
+      })
+      const controller = new AbortController()
+      const promise = client.completeJson(
+        {
+          system: 'private system prompt',
+          user: 'private resume and job description',
+          schemaName: 'Test',
+        },
+        { signal: controller.signal }
+      )
+      await requestReceived
+
+      controller.abort('PRIVATE_CALLER_ABORT_REASON')
+
+      await expect(promise).rejects.toMatchObject({
+        name: 'LlmRequestError',
+        message: 'LLM request was cancelled',
+        reason: 'cancelled',
+        retryable: false,
+      })
+      await server.waitForDisconnects(1)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('cancels while reading a response body that never completes', async () => {
+    let markRequestReceived: (() => void) | undefined
+    const requestReceived = new Promise<void>((resolve) => {
+      markRequestReceived = resolve
+    })
+    const server = await withServer(() => {
+      markRequestReceived?.()
+      return { type: 'hang-body' }
+    })
+    try {
+      const client = new OpenAICompatibleClient({
+        apiKey: 'test-key',
+        baseUrl: server.baseUrl,
+        model: 'test',
+        timeoutMs: 500,
+        maxRetries: 0,
+      })
+      const controller = new AbortController()
+      const promise = client.completeJson(
+        { system: '', user: '', schemaName: 'Test' },
+        { signal: controller.signal }
+      )
+      await requestReceived
+      await new Promise((resolve) => setTimeout(resolve, 20))
+
+      controller.abort()
+
+      await expect(promise).rejects.toMatchObject({
+        message: 'LLM request was cancelled',
+        reason: 'cancelled',
+        retryable: false,
+      })
+      await server.waitForDisconnects(1)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('does not start a request for a pre-cancelled call or expose its reason', async () => {
+    const privateAbortReason = 'PRIVATE_PRE_CANCELLED_REASON'
+    const server = await withServer(() => ({
+      status: 200,
+      body: responseBody('{"ok":true}'),
+    }))
+    try {
+      const client = new OpenAICompatibleClient({
+        apiKey: 'test-key',
+        baseUrl: server.baseUrl,
+        model: 'test',
+        maxRetries: 2,
+      })
+      const controller = new AbortController()
+      controller.abort(privateAbortReason)
+      let thrown: unknown
+
+      try {
+        await client.completeJson(
+          { system: '', user: '', schemaName: 'Test' },
+          { signal: controller.signal }
+        )
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toMatchObject({
+        message: 'LLM request was cancelled',
+        reason: 'cancelled',
+        retryable: false,
+      })
+      expect(JSON.stringify(thrown)).not.toContain(privateAbortReason)
+      expect(server.requestCount()).toBe(0)
     } finally {
       await server.close()
     }
@@ -273,10 +412,182 @@ describe('OpenAICompatibleClient', () => {
     }
   )
 
+  it('honors Retry-After before retrying a retryable HTTP response', async () => {
+    const requestTimes: number[] = []
+    const server = await withServer((requestCount) => {
+      requestTimes.push(Date.now())
+      return requestCount === 1
+        ? {
+            status: 429,
+            body: responseBody('private rate-limit detail', 429),
+            headers: { 'Retry-After': '1' },
+          }
+        : { status: 200, body: responseBody('{"ok":true}') }
+    })
+    try {
+      const client = new OpenAICompatibleClient({
+        apiKey: 'test-key',
+        baseUrl: server.baseUrl,
+        model: 'test',
+        maxRetries: 1,
+        retryDelayMs: 0,
+      })
+
+      await expect(
+        client.completeJson<{ ok: boolean }>({
+          system: '',
+          user: '',
+          schemaName: 'Test',
+        })
+      ).resolves.toMatchObject({
+        data: { ok: true },
+        metadata: { attempt: 2 },
+      })
+      expect(server.requestCount()).toBe(2)
+      expect(
+        (requestTimes[1] ?? 0) - (requestTimes[0] ?? 0)
+      ).toBeGreaterThanOrEqual(900)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('cancels a retry wait without starting another request', async () => {
+    let markFirstRequest: (() => void) | undefined
+    const firstRequest = new Promise<void>((resolve) => {
+      markFirstRequest = resolve
+    })
+    const server = await withServer(() => {
+      markFirstRequest?.()
+      return {
+        status: 503,
+        body: responseBody('private unavailable detail', 503),
+        headers: { 'Retry-After': '1' },
+      }
+    })
+    try {
+      const client = new OpenAICompatibleClient({
+        apiKey: 'test-key',
+        baseUrl: server.baseUrl,
+        model: 'test',
+        maxRetries: 1,
+        retryDelayMs: 0,
+      })
+      const controller = new AbortController()
+      const promise = client.completeJson(
+        { system: '', user: '', schemaName: 'Test' },
+        { signal: controller.signal }
+      )
+      await firstRequest
+      await new Promise((resolve) => setTimeout(resolve, 20))
+
+      const abortedAt = Date.now()
+      controller.abort('PRIVATE_RETRY_WAIT_ABORT_REASON')
+
+      await expect(promise).rejects.toMatchObject({
+        message: 'LLM request was cancelled',
+        reason: 'cancelled',
+        retryable: false,
+      })
+      expect(Date.now() - abortedAt).toBeLessThan(250)
+      expect(server.requestCount()).toBe(1)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('normalizes an HTTP-date Retry-After on the final retryable error', async () => {
+    const retryAt = new Date(Date.now() + 5_000).toUTCString()
+    const server = await withServer(() => ({
+      status: 503,
+      body: responseBody('private unavailable detail', 503),
+      headers: { 'Retry-After': retryAt },
+    }))
+    try {
+      const client = new OpenAICompatibleClient({
+        apiKey: 'test-key',
+        baseUrl: server.baseUrl,
+        model: 'test',
+        maxRetries: 0,
+      })
+
+      let thrown: unknown
+      try {
+        await client.completeJson({ system: '', user: '', schemaName: 'Test' })
+      } catch (error) {
+        thrown = error
+      }
+      expect(thrown).toBeInstanceOf(LlmRequestError)
+      expect((thrown as LlmRequestError).retryAfterMs).toBeGreaterThanOrEqual(
+        3_500
+      )
+      expect((thrown as LlmRequestError).retryAfterMs).toBeLessThanOrEqual(
+        5_000
+      )
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('caps a large Retry-After without exposing the original header', async () => {
+    const privateHeaderMarker = '99999999999999999999999999999999999999'
+    const server = await withServer(() => ({
+      status: 429,
+      body: responseBody('private rate-limit detail', 429),
+      headers: { 'Retry-After': privateHeaderMarker },
+    }))
+    try {
+      const client = new OpenAICompatibleClient({
+        apiKey: 'test-key',
+        baseUrl: server.baseUrl,
+        model: 'test',
+        maxRetries: 0,
+      })
+
+      let thrown: unknown
+      try {
+        await client.completeJson({ system: '', user: '', schemaName: 'Test' })
+      } catch (error) {
+        thrown = error
+      }
+      expect(thrown).toBeInstanceOf(LlmRequestError)
+      expect((thrown as LlmRequestError).retryAfterMs).toBe(30_000)
+      expect(JSON.stringify(thrown)).not.toContain(privateHeaderMarker)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it.each(['-1', '1.5', 'not-a-date'])(
+    'ignores invalid Retry-After value %s',
+    async (retryAfter) => {
+      const server = await withServer(() => ({
+        status: 503,
+        body: responseBody('private unavailable detail', 503),
+        headers: { 'Retry-After': retryAfter },
+      }))
+      try {
+        const client = new OpenAICompatibleClient({
+          apiKey: 'test-key',
+          baseUrl: server.baseUrl,
+          model: 'test',
+          maxRetries: 0,
+        })
+
+        await expect(
+          client.completeJson({ system: '', user: '', schemaName: 'Test' })
+        ).rejects.toMatchObject({ retryAfterMs: undefined })
+      } finally {
+        await server.close()
+      }
+    }
+  )
+
   it('does not retry ordinary 4xx responses', async () => {
     const server = await withServer(() => ({
       status: 400,
       body: responseBody('provider validation detail', 400),
+      headers: { 'Retry-After': '30' },
     }))
     try {
       const client = new OpenAICompatibleClient({
@@ -294,6 +605,7 @@ describe('OpenAICompatibleClient', () => {
         reason: 'http_status',
         retryable: false,
         status: 400,
+        retryAfterMs: undefined,
       })
       expect(server.requestCount()).toBe(1)
     } finally {
@@ -335,6 +647,33 @@ describe('OpenAICompatibleClient', () => {
       }
     }
   )
+
+  it('preserves Retry-After when a retryable HTTP error body is not JSON', async () => {
+    const server = await withServer(() => ({
+      status: 503,
+      body: '<html>private upstream failure</html>',
+      headers: { 'Retry-After': '7' },
+    }))
+    try {
+      const client = new OpenAICompatibleClient({
+        apiKey: 'test-key',
+        baseUrl: server.baseUrl,
+        model: 'test',
+        maxRetries: 0,
+      })
+
+      await expect(
+        client.completeJson({ system: '', user: '', schemaName: 'Test' })
+      ).rejects.toMatchObject({
+        reason: 'response_body_invalid_json',
+        retryable: true,
+        status: 503,
+        retryAfterMs: 7_000,
+      })
+    } finally {
+      await server.close()
+    }
+  })
 
   it.each([
     {

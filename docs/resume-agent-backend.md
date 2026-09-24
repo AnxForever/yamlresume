@@ -122,8 +122,10 @@ across restarts, coordinates connections on one host, and transactionally
 stores workflow tasks with Run mutations, but uses Node's active-development
 synchronous SQLite API. It provides explicit bounded restart drain, a bounded
 same-host worker poller, and generation-safe heartbeat and Run mutation fencing
-while a claimed callback is executing, but not DLQ/backoff, authentication,
-retention, or a binary file-answer loop. Completed public snapshots intentionally contain
+while a claimed callback is executing, with persisted exponential backoff for
+infrastructure failures, explicitly retryable Provider failures, and bounded
+Provider `Retry-After` waits, but not DLQ, authentication, retention, or a
+binary file-answer loop. Completed public snapshots intentionally contain
 the generated resume and artifacts for the user; revisions, source requests,
 checkpoints, answer receipts, raw answers, and raw model completions remain
 private. See the
@@ -131,7 +133,13 @@ private. See the
 [`durable Store`](./resume-agent-durable-run-store.zh-CN.md), and
 [`transactional outbox`](./resume-agent-run-outbox-recovery.zh-CN.md),
 [`worker concurrency`](./resume-agent-run-worker-concurrency.zh-CN.md), and
-[`lease heartbeat`](./resume-agent-run-lease-heartbeat.zh-CN.md) briefs.
+[`lease heartbeat`](./resume-agent-run-lease-heartbeat.zh-CN.md), and
+[`retry backoff`](./resume-agent-run-retry-backoff.zh-CN.md), and
+[`Provider durable retry`](./resume-agent-provider-durable-retry.zh-CN.md), and
+[`Provider Retry-After`](./resume-agent-provider-retry-after.zh-CN.md), and
+[`task retry deadline`](./resume-agent-task-retry-deadline.zh-CN.md), and
+[`Provider cancellation`](./resume-agent-provider-cancellation.zh-CN.md)
+briefs.
 
 ## Feature evidence ledger
 
@@ -146,7 +154,7 @@ private. See the
 | RA-006 | Immutable-fact guard | Implemented | Rejects unsupported entries in tests | Partial | None | Add date/contact mutation cases and translated-name policy |
 | RA-007 | Multi-style YAML/JSON/Markdown/HTML/LaTeX/PDF/DOCX/TXT/RTF/ODT rendering | Implemented for development | Preset metadata, real renderer/DOCX, fake PDF compiler tests and TXT/RTF/ODT semantic/package/reader tests | Partial | Backfilled | Real PDF sandbox, page-count/visual checks and broader cross-reader compatibility |
 | RA-007C | Common document export expansion | Implemented for development | Shared full-section document model, safe RTF escaping, deterministic ODT package, ODF 1.3 validation and LibreOffice 24.2.7.2 round-trips | Partial | None | Word/WPS/Google Docs, browser download, performance and visual matrix |
-| RA-008 | HTTP API | Implemented | End-to-end HTTP tests | Partial | None | Authentication, rate limits, request IDs, cancellation |
+| RA-008 | HTTP API | Implemented | End-to-end HTTP tests | Partial | None | Operational auth/rate-limit evidence, request IDs, cancellation |
 | RA-009 | Asynchronous runs, persistence and resume versions | Implemented for development; durable adapter opt-in | In-memory default, SQLite Run/task persistence and explicit restart drain, stage state machine, `POST/GET /v1/runs` and package/API tests | Partial | None | Wire a production worker, cancellation, retention and operational recovery |
 | RA-010 | Agent evaluation and operational observability | Implemented for development | Deterministic runner, public-JD-derived synthetic corpus, required-keyword gold assertions, safe repeated campaign aggregation, versioned blinded human-review contract and structured-output telemetry | Partial | Backfilled | Valid Provider credentials/configuration, authorized anonymized candidate set, token/cost statistics and real human pilot/calibration |
 | RA-011 | Human-in-the-loop clarification | Implemented for development; durable adapter opt-in | Typed controls, `needs_input`, durable checkpoint/receipt/task transaction, answer endpoint and restart tests | Partial | None | Production worker, authentication, file-answer loop and later-stage interrupts |
@@ -154,12 +162,18 @@ private. See the
 | RA-012 | Structured-output validation and bounded repair | Implemented | Shared module, three-boundary workflow tests, safe API error test | Covered | Backfilled | Operational provider comparison is tracked by RA-010 |
 | RA-015A | Revision-safe RunStore and atomic answer acceptance | Implemented for development | Atomic in-memory create/CAS, deterministic concurrent answer tests, clone and privacy tests; durable realization tracked by RA-015B/C | Covered for one process | Backfilled | Operational multi-instance evidence remains RA-015D |
 | RA-015B | Durable versioned RunStore | Implemented for development; not operational | SQLite schema introduced at v1, disk reopen, SQL CAS across connections, safe failure and privacy tests; current adapter migrated to v2 | Covered for one host | None | Async production driver, encryption and retention |
-| RA-015C | Transactional Run outbox and restart recovery | Implemented for development; explicit drain plus RA-015F poller | Run + task atomic transactions, v1→v2 migration, lease/ack/release, lost-hint restart, terminal replay and runtime poller tests | Partial | None | DLQ/backoff, Provider effect fencing and operational evidence |
+| RA-015C | Transactional Run outbox and restart recovery | Implemented for development; explicit drain plus RA-015F poller | Run + task atomic transactions, v1→v2 migration, lease/ack/release, lost-hint restart, terminal replay and runtime poller tests | Partial | None | DLQ, Provider effect fencing and operational evidence; release backoff supplied by RA-015G |
 | RA-015D | Multi-worker lease takeover and fault verification | Implemented for development; same-host only | Claim-generation fencing, same-Run serialization, crash takeover, bounded batch/attempts and privacy tests | Partial | Reopened-by-change | Long-task heartbeat/fencing supplied by RA-015E; no DLQ/redrive, automatic worker or multi-host evidence |
 | RA-015E | Run task lease heartbeat and lost-lease write isolation | Implemented for development; same-host only | Exact-generation renewal, Store-side leased CAS, deferred Provider/fake-clock takeover, renewal failure, shutdown and timer cleanup tests | Partial | Reopened-by-change | At-least-once Provider calls; RA-015F concurrency/backpressure, metrics and multi-host adapter remain |
-| RA-015F | Durable Run automatic worker poller | Implemented for development; same-host only | Explicit `startWorker()` lifecycle, bounded one-task polling, unref timer, close cleanup and post-start task test | Partial | None | DLQ/backoff, Provider idempotency/cancellation, multi-host and operational evidence |
+| RA-015F | Durable Run automatic worker poller | Implemented for development; same-host only | Explicit `startWorker()` lifecycle, bounded one-task polling, unref timer, close cleanup and post-start task test | Partial | None | DLQ/jitter, Provider idempotency, multi-host and operational evidence; durable in-flight cancellation supplied by RA-015K and release backoff by RA-015G |
+| RA-015G | Persisted durable-task retry backoff | Implemented for development; same-host only | Optional Store `availableAt`; 1s/2s exact-boundary fake-clock behavior; SQLite close/reopen persistence; terminal replay does not call model | Covered for local release path | None | DLQ/redrive, jitter, metrics and operational traffic evidence; Provider classification supplied by RA-015H |
+| RA-015H | Durable retry for explicitly transient Provider failures | Implemented for development; same-host only | Typed retryable/non-retryable errors; exact boundary and SQLite reopen; prepare and post-HITL completion paths; three-delivery exhaustion; non-durable compatibility/privacy tests; executable adapter→API→SQLite 503 recovery smoke | Covered for local classified delivery path | RA-015G deliberately excluded handled Provider failures | Provider idempotency and exact cost accounting, DLQ/redrive, jitter, metrics, multi-host and operational traffic evidence; Header-aware waits/deadline/cancellation supplied by RA-015I/J/K |
+| RA-014D / RA-015I | Bounded Provider `Retry-After` across transport and durable delivery | Implemented for development; same-host only | Strict seconds/HTTP-date parsing, invalid/cap/privacy tests, transport timing, SQLite restart boundary, shorter-local-backoff regression and executable 2s compound-wait smoke | Covered for local Header-aware wait path | RA-014C explicitly deferred Header-aware waits; RA-015H used only local backoff | Exact cost accounting, real Provider evidence, jitter, metrics and multi-host coordination; delivery deadline/cancellation supplied by RA-015J/K |
+| RA-015J | Persisted durable-task retry deadline | Implemented for development; same-host only | Existing task `createdAt` derives a 15m default deadline without schema change; exact next-time and restart boundaries, old-first-delivery compatibility, privacy and runtime configuration tests; in-flight deadline timer supplied by RA-015K | Covered for local delivery admission and in-flight abort | Attempt count and per-wait cap do not bound restart-delayed elapsed time | Exact transport/cost accounting, real traffic, metrics and multi-host time source |
+| RA-015K | Durable Run Provider in-flight cancellation | Implemented for single-host production baseline; not Enabled or Operational | Caller abort and retry-wait interruption; Agent-wide signal propagation; SQLite close/lease-loss/deadline transitions; shutdown/crash mock disconnect and takeover smokes | Covered for built-in adapter and same-host durable Run | RA-015E/L fenced stale writes or exited the process without proving active transport cancellation; RA-015J only rejected new retry deliveries | Synchronous HTTP disconnect binding, adapters that ignore signals, remote billing proof, Provider exactly-once/idempotency, multi-host and operational traffic evidence |
 | RA-018 | Semantic evidence retrieval | Implemented for development; off by default (`RESUME_AGENT_SEMANTIC_MATCHING`) | Lexical-first hybrid matcher with sentence-bounded passages, background-margin acceptance calibrated on a 20-case paraphrase gold set (P 0.82 / R 0.50 versus lexical 0.50 / 0.06), draft evidence hints, judge kept lexical; DeepSeek campaign 5 cases x 3 shows no downstream difference (11/15 either way) | Partial | None | Workbench display of semantic hits; large-input campaign; diagnosis of the Chinese-case degradation |
 | RA-016 | Authentication, Run ownership and Provider credential vault | Implemented for development; backend enabled by default with explicit keyring | OWASP/Node evidence, scrypt users, digest-only opaque sessions, persistent login throttling, AES-GCM Provider vault, durable Run ownership, cookie/CORS HTTP and adversarial/restart tests | Partial | Backfilled | Frontend login, verification/reset/MFA, KMS, distributed rate limits, audit operations and Provider adapter consumption |
+| RA-019 | Authenticated model-work rate limiting | Implemented for single-host production baseline | Persistent SQLite fixed window, atomic cross-connection admission, shared three-endpoint HTTP 429/Retry-After, account isolation, non-charging validation/GET/HITL, runtime configuration and OpenAPI tests | Covered for one host | None | Operational traffic evidence, metrics/alerts, distributed quota and token/cost policy remain deferred |
 
 ### RA-001B-A1 evidence detail
 
@@ -294,7 +308,7 @@ private. See the
 | Acceptance | 20 focused SQLite tests, 18 Run tests, 149-test package suite, TypeScript, build, Biome and diff checks |
 | Coverage | Partial: covered for explicit same-host development recovery; not for long-running leases or production operation |
 | Historical gap | None; RA-015B explicitly recorded the dual-write gap before RA-015C |
-| Remaining gap | Claim-generation fencing is supplied by RA-015D and heartbeat/Run-write fencing by RA-015E; no Provider effect fencing, automatic poller, DLQ/backoff, multi-host adapter, power-loss injection, metrics or runbook |
+| Remaining gap | Claim-generation fencing is supplied by RA-015D, heartbeat/Run-write fencing by RA-015E, polling by RA-015F and release backoff by RA-015G; no Provider effect fencing, DLQ/redrive, multi-host adapter, power-loss injection, metrics or runbook |
 | Last reviewed | 2026-09-16, Node 22.21.1 `node:sqlite`, schema v2 |
 
 ### RA-015D evidence detail
@@ -327,8 +341,76 @@ private. See the
 | Acceptance | Focused Store/service and Run tests plus package TypeScript, build, Biome and diff gates; exact final results live in the Feature Brief |
 | Coverage | Partial: covered for one-host development lifecycle, not Provider exactly-once or production operation |
 | Historical gap | Reopened-by-change; RA-015C/D explicitly documented fixed-lease and mutation-fencing gaps |
-| Remaining gap | RA-015F worker polling/claim-ahead/backpressure, Provider cancellation/idempotency, DLQ/backoff, metrics, multi-host time/database and runbook |
+| Remaining gap | RA-015F supplies worker polling and RA-015G release backoff; claim-ahead/backpressure, Provider cancellation/idempotency, DLQ/redrive, jitter, metrics, multi-host time/database and runbook remain |
 | Last reviewed | 2026-09-16, Node 22.21.1 `node:sqlite`, schema v2 |
+
+### RA-015H evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | typed Provider failure → durable task release/backoff → restart/reclaim → completion or bounded exhaustion |
+| User outcome | A temporary timeout, network failure, rate limit or server failure no longer permanently kills a local SQLite-backed Run after one exhausted transport call |
+| Current state | Only `LlmRequestError.retryable === true` under a current durable claim is rethrown to the existing RA-015G release policy; non-retryable, unknown, validation and non-durable failures keep their safe terminal behavior |
+| Primary evidence | Existing OpenAI-compatible transport classification and bounded retries; RA-015G persisted `available_at`; Run task generation/lease fencing and three-delivery limit |
+| Independent evidence | Real temporary SQLite reopen and exact-boundary tests, fake Provider typed failures, post-HITL completion, in-memory compatibility, privacy markers, SIGKILL/SIGTERM process smokes, executable OpenAI-compatible 503→transport exhaustion→delivery backoff→completion smoke |
+| Decision | Reuse typed classification at the RunService seam; do not parse messages, expose Store to Provider concepts, add schema/status, or persist raw errors |
+| Edge cases | 999/1000ms boundary, restart during wait, prepare vs completion task, retryable false, no durable Store, repeated 503, fourth claim, private error message, terminal ack |
+| Acceptance | 47 SQLite tests, 24 Run tests, 332-test Agent suite (1 skipped), 1820 full-repo tests (1 skipped), crash/shutdown/provider-retry smokes, TypeScript, Biome, build and diff gates |
+| Coverage | Covered for classified local delivery with a fake Provider and same-host SQLite; not operational Provider traffic or exactly-once |
+| Historical gap | Reopened-by-change; RA-015G intentionally covered infrastructure release without changing handled Provider failures |
+| Remaining gap | Provider idempotency and exact cost accounting, DLQ/redrive, jitter, metrics/alerts, multi-host coordination and operational evidence; Retry-After/deadline/cancellation supplied by RA-014D/RA-015I/J/K |
+| Last reviewed | 2026-09-24, Node 22.21.1 `node:sqlite`, schema v2 |
+
+### RA-014D / RA-015I evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | retryable HTTP response → bounded transport wait → safe typed error → persisted delivery wait → reclaim |
+| User outcome | A 429/503 Provider wait request is honored across both retry layers without exposing the raw Header or shortening a longer local backoff |
+| Current state | OpenAI-compatible adapter accepts strict delay-seconds/HTTP-date, normalizes to 0–30,000ms and uses the larger transport delay; RunService uses the larger durable delay and SQLite persists only final `available_at` |
+| Primary evidence | RFC 9110 §10.2.3; existing typed `LlmRequestError` seam; existing durable task `available_at` and claim-generation fencing |
+| Independent evidence | Loopback HTTP timing, non-JSON/invalid/cap/privacy cases, real temporary SQLite close/reopen at 4.999/5s, and executable API→adapter→SQLite 2s timing smoke |
+| Decision | Keep Header parsing in the HTTP adapter, wait selection in each policy-owning module, and Store free of Provider concepts; do not add schema, Run state or public HTTP fields |
+| Edge cases | huge/negative/fractional/mixed Header, future and past dates, ordinary 400, non-JSON 503, local delay longer than Provider advice, final attempt, restart during delivery wait, private marker |
+| Acceptance | 37 adapter, 47 SQLite and 24 Run tests; 332-test Agent suite (1 skipped); 1820 full-repo tests (1 skipped); provider-retry/crash/shutdown smokes and repository gates |
+| Coverage | Covered for local OpenAI-compatible transport and same-host SQLite delivery; not real Provider traffic or operational multi-host behavior |
+| Historical gap | RA-014C explicitly deferred Header-aware waiting; RA-015H initially released only on local 1s/2s/4s backoff |
+| Remaining gap | Exact cost accounting, Provider-specific quota semantics, jitter, metrics/alerts, multi-host coordination and operational evidence; delivery deadline/cancellation supplied by RA-015J/K |
+| Last reviewed | 2026-09-24, Node 22.21.1 `fetch` and `node:sqlite`, schema v2 |
+
+### RA-015J evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | persisted task creation → delivery failure/backoff → restart/delayed claim → deadline admission or safe terminal failure |
+| User outcome | A stale or repeatedly failing task cannot begin another durable delivery forever, while an old task that has never run still receives one attempt |
+| Current state | RunService derives a default 15-minute retry deadline from persisted `RunTask.createdAt`; a proposed retry at/after it fails immediately, and claim attempt >1 at/after it fails before model work |
+| Primary evidence | Existing task `createdAt`, fake clock, generation-fenced Run mutation, ack/release identity and SQLite restart behavior |
+| Independent evidence | Real temporary SQLite exact-boundary tests, safe private Provider marker, old first-delivery compatibility and API runtime pre-listen configuration rejection |
+| Decision | Keep admission in RunService; do not add Store schema/port, persist Provider errors, or call this exact billing control |
+| Edge cases | next retry equals deadline, process down across deadline, retry just before deadline, first old claim, invalid duration, attempt-limit precedence, terminal/stale Run and private marker |
+| Acceptance | Focused SQLite/API tests plus Agent/API suites, provider-retry/crash/shutdown smokes, TypeScript, Biome, full repository tests/build and diff gate; final counts in Feature Brief |
+| Coverage | Covered for same-host durable delivery admission; RA-015K now aborts an already-running retry delivery at the deadline |
+| Historical gap | RA-015G/H/I bounded attempts and individual waits but had no persisted elapsed-time stop across process downtime |
+| Remaining gap | Persist/count failed HTTP attempts or cost, add metrics/alerts and validate multi-host time behavior; remaining deadline propagation is supplied by RA-015K |
+| Last reviewed | 2026-09-24, Node 22.21.1 `node:sqlite`, schema v2 |
+
+### RA-015K evidence detail
+
+| Field | Evidence |
+| --- | --- |
+| Parent / lifecycle | claimed durable delivery → Provider fetch/retry wait → close, lease loss or retry deadline → transport abort → fenced recovery/terminal transition |
+| User outcome | A worker that can no longer safely finish stops its local Provider request instead of only discarding the eventual result |
+| Current state | The optional `LlmCallOptions.signal` reaches normalization, Repair, JobSpec and Draft; the built-in adapter aborts fetch/body/retry waits, while RunService owns close, lease-loss and retry-deadline cancellation policy |
+| Primary evidence | Existing `LlmClient` seam, OpenAI timeout controller, task heartbeat generation fence, RA-015J persisted deadline and SIGTERM recovery smoke |
+| Independent evidence | 41 loopback adapter tests; 51 real temporary SQLite/fake-clock workflow tests; shutdown/crash mock disconnect and takeover smokes; provider-retry regression smoke |
+| Decision | Add one optional `AbortSignal` call option; keep cancellation cause/state policy in RunService and HTTP mechanics in the adapter; no Store or public HTTP contract change |
+| Edge cases | pre-aborted signal, abort during fetch/body/retry wait, timeout race, Repair propagation, close, renewal false/error, exact retry deadline, old first delivery, private abort reason |
+| Acceptance | 41 adapter, 51 SQLite and 16 Agent focused tests; Agent 341 passed/1 skipped; API 152 passed; full repository 1830 passed/1 skipped; shutdown/crash/provider-retry smokes, Biome, TypeScript, build and diff gates passed |
+| Coverage | Covered for the built-in OpenAI-compatible adapter and same-host durable Run; not synchronous request disconnects, arbitrary injected adapters, remote execution/billing or multi-host operation |
+| Historical gap | Heartbeat and close fence writes, while executable SIGTERM exits the process; neither proves the Provider transport was actively cancelled |
+| Remaining gap | Provider idempotency/exactly-once, remote billing proof, synchronous HTTP disconnect binding, exact cost accounting, metrics and operational traffic remain explicitly out of scope |
+| Last reviewed | 2026-09-25, Node 22.21.1 `fetch`/AbortController and `node:sqlite`, schema v2 |
 
 ## Learning roadmap
 
@@ -351,8 +433,9 @@ model-provider abstraction.
   transactional task dispatch, and explicit restart recovery on one host.
 - Claim-generation fencing, same-Run serialization and local failure injection
   are delivered by RA-015D; RA-015E adds generation-safe heartbeat and lost-lease
-  Run-write isolation. Next, design RA-015F claim-ahead/automatic worker lifecycle
-  and DLQ without overclaiming operational readiness.
+  Run-write isolation; RA-015F/G/H add polling, persisted backoff and typed
+  transient-Provider delivery retry. DLQ/redrive, jitter, Provider idempotency,
+  multi-host operation and a production runbook remain open.
 - Extend interrupts only when a separately researched later-stage use case
   requires them.
 - Keep showing source-to-draft diff and evidence links in completed results.

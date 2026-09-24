@@ -165,6 +165,19 @@ export interface StoredProfile extends ProfileSummary {
   readonly payload: string
 }
 
+export interface WorkRateLimitPolicy {
+  readonly limit: number
+  readonly windowMs: number
+}
+
+export interface WorkRateLimitDecision {
+  readonly allowed: boolean
+  readonly limit: number
+  readonly remaining: number
+  readonly resetAt: string
+  readonly retryAfterSeconds: number
+}
+
 export interface PasswordScryptParameters {
   readonly cost: number
   readonly blockSize: number
@@ -445,6 +458,12 @@ function migrate(database: DatabaseSync): void {
         auth_tag BLOB NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES resume_agent_users(id) ON DELETE CASCADE
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS resume_agent_work_rate_limits (
+        user_id TEXT PRIMARY KEY,
+        requests INTEGER NOT NULL CHECK (requests >= 1),
+        window_started_at INTEGER NOT NULL,
         FOREIGN KEY (user_id) REFERENCES resume_agent_users(id) ON DELETE CASCADE
       ) STRICT;
       COMMIT;
@@ -1579,6 +1598,93 @@ export class AuthService {
         .get(runId, userId) as { owned: number | bigint } | undefined
       return Number(row?.owned) === 1
     } catch {
+      throw new AuthError('storage_failed')
+    }
+  }
+
+  async consumeWorkQuota(
+    userId: string,
+    policy: WorkRateLimitPolicy
+  ): Promise<WorkRateLimitDecision> {
+    this.ensureOpen()
+    if (
+      !Number.isSafeInteger(policy.limit) ||
+      policy.limit < 1 ||
+      policy.limit > 1_000 ||
+      !Number.isSafeInteger(policy.windowMs) ||
+      policy.windowMs < 1_000 ||
+      policy.windowMs > 24 * 60 * 60 * 1_000
+    ) {
+      throw new AuthError('invalid_configuration')
+    }
+
+    const now = this.now().getTime()
+    let transactionOpen = false
+    try {
+      this.database.exec('BEGIN IMMEDIATE')
+      transactionOpen = true
+      const row = this.database
+        .prepare(
+          `SELECT requests, window_started_at
+           FROM resume_agent_work_rate_limits WHERE user_id = ?`
+        )
+        .get(userId) as
+        | { requests: number | bigint; window_started_at: number | bigint }
+        | undefined
+      const previousStart = Number(row?.window_started_at)
+      const expired =
+        !row ||
+        !Number.isSafeInteger(previousStart) ||
+        now - previousStart >= policy.windowMs
+      const windowStartedAt = expired ? now : previousStart
+      const previousRequests = expired ? 0 : Number(row?.requests)
+      if (!Number.isSafeInteger(previousRequests) || previousRequests < 0) {
+        throw new AuthError('storage_failed')
+      }
+
+      const allowed = previousRequests < policy.limit
+      const requests = allowed ? previousRequests + 1 : previousRequests
+      if (expired) {
+        this.database
+          .prepare(
+            `INSERT INTO resume_agent_work_rate_limits (
+               user_id, requests, window_started_at
+             ) VALUES (?, ?, ?)
+             ON CONFLICT(user_id) DO UPDATE SET
+               requests = excluded.requests,
+               window_started_at = excluded.window_started_at`
+          )
+          .run(userId, requests, windowStartedAt)
+      } else if (allowed) {
+        this.database
+          .prepare(
+            `UPDATE resume_agent_work_rate_limits
+             SET requests = ? WHERE user_id = ?`
+          )
+          .run(requests, userId)
+      }
+
+      this.database.exec('COMMIT')
+      transactionOpen = false
+      const resetAtMs = windowStartedAt + policy.windowMs
+      return {
+        allowed,
+        limit: policy.limit,
+        remaining: Math.max(0, policy.limit - requests),
+        resetAt: new Date(resetAtMs).toISOString(),
+        retryAfterSeconds: allowed
+          ? 0
+          : Math.max(1, Math.ceil((resetAtMs - now) / 1_000)),
+      }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.database.exec('ROLLBACK')
+        } catch {
+          // Preserve the stable storage/configuration error below.
+        }
+      }
+      if (error instanceof AuthError) throw error
       throw new AuthError('storage_failed')
     }
   }

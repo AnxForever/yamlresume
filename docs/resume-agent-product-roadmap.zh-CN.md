@@ -54,7 +54,7 @@ P0 已经具备可运行的后端骨架，但尚未达到“完成”状态。�
 2. 用匿名真实案例建立 Eval Harness，记录事实保真、需求覆盖、Schema 成功率、延迟、token 和费用；
 3. Human-in-the-loop 可以暂停、持久化、接收回答并从正确阶段恢复；
 4. 异步 Run API、版本存储、取消/失败恢复和聚合观测完成验收；
-5. 面向真实用户部署前补齐鉴权、限流、加密存储、删除策略和 PDF 编译隔离。
+5. 面向更广泛真实用户部署前，将已实现的鉴权、单机账号限流和加密存储完成部署验收，并补齐删除策略、PDF 编译隔离与多主机配额。
 
 这是一组阶段门禁，不要求在一个晚上完成。每次只推进一个可独立验收的 vertical slice；该单元的设计、测试和文档通过后，再开始下一个单元。
 
@@ -63,7 +63,7 @@ P0 已经具备可运行的后端骨架，但尚未达到“完成”状态。�
 | ID | 用户结果 | 交付状态 | 当前证据 | 证据覆盖 | 下一道门禁 |
 | --- | --- | --- | --- | --- | --- |
 | RP-000 | Career Agent 理解长期目标、规划任务、选择能力并维护可恢复运行 | Planned | 产品边界和目标架构已记录，尚无顶层运行时 | Gap | 独立调研 Agent runtime、能力协议、状态模型、权限和 Eval；不得以简历工作流代替 |
-| RP-001 | 简历能力针对真实 JD 生成可信、可追溯的定制简历 | Implemented，尚未 operational | 后端工作流、durable development RunStore/outbox、确定性 Eval、公开 JD 派生合成 corpus、安全 campaign、开发级 HITL、十格式渲染及 TXT/RTF/ODT 独立 reader/schema 证据 | Partial | 补齐常见二进制输入、使用有效 Provider 配置执行重复可评分模型 Eval、授权匿名候选人集和生产安全边界 |
+| RP-001 | 简历能力针对真实 JD 生成可信、可追溯的定制简历 | Implemented，尚未 operational | 后端工作流、durable development RunStore/outbox、确定性 Eval、公开 JD 派生合成 corpus、安全 campaign、开发级 HITL、十格式渲染、TXT/RTF/ODT 独立 reader/schema 证据，以及合法 YAML/JSON 简历附件事实保真 HTTP 回归 | Partial | 补齐多份/混合候选材料冲突合并契约，使用有效 Provider 配置执行重复可评分模型 Eval、授权匿名候选人集和生产安全边界 |
 | RP-002 | Agent 主动提出必要问题，并让用户通过选项或合适的输入控件回答 | Implemented for development，尚不 Operational | RA-011 后端协议与持久化测试（含 RA-011-F 文件回答 multipart 上传与重新归一化后端闭环）、RA-013 前端工作台、276 项前端测试、TypeScript 与生产构建 | Partial | 浏览器端 file 控件、真实浏览器人工验收、可访问性实测、鉴权和多实例运行 |
 | RP-003 | 根据目标岗位差距生成可执行、可动态调整的学习计划 | Idea | 用户需求和本路线图问题定义 | Gap | 调研学习闭环与衡量方法，定义能力矩阵、里程碑和 Eval |
 | RP-004 | 搜集可靠学习资料并辅导练习、项目和复盘 | Idea | 用户需求和来源/新鲜度原则 | Gap | 调研检索、引用、版权、新鲜度、难度匹配和反馈质量 |

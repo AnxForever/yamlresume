@@ -18,6 +18,17 @@
 `Implemented` 只会表示本地实现和 fake/local-server 证据；没有真实 Provider、
 生产限流或线上故障演练证据时，不得标记为 `Operational`。
 
+### 1.1 2026-09-24 本地运行观察
+
+在一个依赖小写 `https_proxy` 出网的 Node 22.21.1 环境中，`curl` 访问默认 OpenAI endpoint
+得到预期的未鉴权 401，但 Node 内建 `fetch` 直连为 `ETIMEDOUT`，API 对外稳定返回
+`502 llm_request_failed / LLM network request failed`。以
+`NODE_OPTIONS=--use-env-proxy` 重启后，网络错误消失，API 收到 Provider 的 401 并返回稳定的
+`LLM request failed with HTTP status 401`；没有产生 token。当前环境只有一个非空
+`OPENAI_API_KEY`，没有与它匹配的 `OPENAI_BASE_URL` 或 `OPENAI_MODEL` 配置，因此该证据只证明
+环境代理与安全错误路径，不证明凭据有效或真实模型运行成功。运行 README 已补充代理启动条件；
+不得通过记录 key、Provider body 或放宽 401 来“修复”配置问题。
+
 ## 2. 问题定义
 
 现有实现已经设置 `AbortController`、重试上限和状态码分类，但仍有以下风险：
@@ -75,7 +86,9 @@ HTTP 被取消。
 **采用（本切片）：** 与成熟 SDK 一致，网络错误、client timeout、408、409、429、
 全部 5xx 可重试；其他 4xx 不重试；`maxRetries` 表示首次请求后的额外尝试数，范围
 0–5，故总 attempt 永远不超过 `maxRetries + 1`。延迟使用由 `retryDelayMs` 起始的
-有界指数增长；测试使用 0，不做真实长 sleep。
+有界指数增长。RA-014D 现进一步接受 RFC 9110 的 delay-seconds 与三种 HTTP-date
+格式，把有效值归一化为 0–30 秒的安全整数毫秒；每次 transport 等待取本地退避与
+Provider 建议的较大值。总 attempt 上限保持不变。
 
 **适配：** OpenAI-compatible 服务没有统一、可信的错误 `code` 方言。为避免依赖或
 暴露 Provider 原始错误正文，本切片对所有 429 做有界重试，不读取正文来判断 quota。
@@ -134,7 +147,8 @@ body 上送给 Repair，也不能把 Schema 失败算作 transport retry。
 ### 4.5 错误安全
 
 `LlmRequestError` 只允许包含：稳定英文摘要、机器可读 `reason`、`retryable` 和可选
-HTTP `status`。其 message、stack 和 JSON 序列化不得包含：
+HTTP `status`，以及可选、非负、封顶 30 秒的整数 `retryAfterMs`。其 message、stack
+和 JSON 序列化不得包含：
 
 - API key 或 Authorization header；
 - system/user Prompt、JD、简历或图片 Data URL；
@@ -155,8 +169,9 @@ construct
 ready → attempt N → start timer + fetch
   ├─ valid 200 + valid content JSON → clear timer → success(metadata.attempt=N)
   ├─ timeout/network/retryable status（含该 status 的非 JSON body）
-  │    → clear timer → N < max attempts ? bounded backoff → attempt N+1
-  │                                      : safe LlmRequestError
+  │    → normalize Retry-After when present
+  │    → clear timer → N < max attempts ? max(local backoff, retryAfterMs) → attempt N+1
+  │                                      : safe LlmRequestError(retryAfterMs)
   └─ ordinary 4xx / 200 invalid body / missing content / invalid content JSON
        → clear timer → safe LlmRequestError（无重试）
 ```
@@ -175,7 +190,9 @@ ready → attempt N → start timer + fetch
 7. content JSON 语法错误可能包含私密片段；parser message 不进入错误；
 8. 429 可能是临时限流或永久 quota；当前统一有界重试是兼容性折中；
 9. `maxRetries=0` 只发送一次；`retryDelayMs=0` 不创建不必要的退避 timer；
-10. teardown 时 server 仍有 keep-alive socket；显式销毁，不能只依赖默认 close 行为。
+10. `Retry-After` 可能是负数、小数、混合文本、过去日期或极大数字；invalid 值忽略，过去日期为 0，
+    有效值封顶 30 秒，普通 4xx 与 200 协议错误不读取该建议；
+11. teardown 时 server 仍有 keep-alive socket；显式销毁，不能只依赖默认 close 行为。
 
 ## 7. 本切片采用、拒绝与延期
 
@@ -194,10 +211,15 @@ ready → attempt N → start timer + fetch
 - 引入 Provider SDK、retry 依赖或 Agent 框架；
 - 用长时间真实 sleep 证明退避。
 
-### 7.3 明确延期
+### 7.3 后续补齐与明确延期
 
-- **Retry-After：延期。** 需要定义秒数/HTTP-date、最大等待和总 retry budget；当前
-  固定配置接口没有总时限。本切片先保证分类与硬上限，不能声称遵守 Provider header。
+- **durable Run 在途硬截止：已由 RA-015K 补齐。** RA-014D / RA-015I 已实现 `Retry-After` 的
+  秒数/HTTP-date、30 秒封顶与 transport/durable 组合等待，RA-015J 禁止截止点后开始新的 durable
+  delivery；RA-015K 进一步让 close、失租或 retry deadline 中断内置 adapter 的 fetch/body/retry wait。
+  同步 HTTP disconnect 绑定与远端停止执行证明不在该保证内。
+- **精确费用预算：延期。** 失败 attempt 仍没有持久化费用元数据。详见
+  [`Provider Retry-After brief`](./resume-agent-provider-retry-after.zh-CN.md)与
+  [`Provider cancellation brief`](./resume-agent-provider-cancellation.zh-CN.md)。
 - **随机 jitter：延期。** 生产需要避免 herd effect，但需可注入 random/clock seam 才能
   确定性验证；本切片只实现有界指数 delay。
 - **熔断：延期。** 需要跨请求共享状态、并发语义、half-open 恢复、指标和实例范围，
@@ -235,8 +257,12 @@ ready → attempt N → start timer + fetch
    retryDelayMs 的范围和有限数约束。
 10. **脱敏与序列化 RED → GREEN：** 注入 key、私密 Prompt、原始 body 和 Provider 原始
     message；内容型断言已安全，但 RED 显示原生序列化缺少稳定 message 契约；GREEN
-    通过显式 `toJSON` 仅输出 name/message/reason/retryable/status，全部注入值在 message、
-    stack 和序列化字符串中均不可见。
+    通过显式 `toJSON` 仅输出 name/message/reason/retryable/status；RA-014D 后只再允许安全数值
+    `retryAfterMs`。全部注入值在 message、stack 和序列化字符串中均不可见。
+11. **Retry-After RED → GREEN（2026-09-24）：** 1 秒建议最初未影响 transport 间隔；未来
+    HTTP-date 和非 JSON 503 又分别暴露丢失路径，`-1`/`1.5` 暴露宽松日期解析。GREEN 将解析集中在
+    adapter，并只通过安全 `retryAfterMs` 穿过 typed error seam；37 个 adapter tests 与 2 秒本地组合
+    smoke 证明有效建议不能被较短本地退避覆盖。完整过程见独立 Feature Brief。
 
 实现中还完成两个 GREEN 后重构：0 delay 直接 resolve，非零 delay 改为 attempt 有界的
 指数增长；未知内部异常不再拼接原始 message，也不误当作可重试网络错误。所有 payload
@@ -255,6 +281,7 @@ metadata 字段改为从 `unknown` 做运行时读取，避免类型断言把损
 | timeout abort + hard cap | server observes 2 disconnects + request count 2 | Implemented |
 | network retry exhausted | socket destroy before headers/during body + counts | Implemented |
 | status retry matrix | 408/409/429/500/503 = 2；400 = 1 | Implemented |
+| bounded `Retry-After` | seconds/date/invalid/cap/privacy tests；2s executable timing smoke | Implemented for development |
 | non-JSON retry/non-retry | 503 = 2；400/200 = 1 | Implemented |
 | missing/invalid content | 200 local responses + exact count/reason | Implemented |
 | Markdown fence | local response | Implemented |
@@ -276,13 +303,19 @@ git diff --check
 - `pnpm exec biome check ...`：2 个目标文件通过，无需修复；
 - `git diff --check`：通过；目标 3 文件的 staged diff 检查也通过。
 
+2026-09-24 增量验证：adapter focused suite 37 passed；与 SQLite/Run focused suite 合计
+108 passed；`pnpm local-app:provider-retry-smoke` 观察两次 transport 和一次 durable gap 均不少于
+1.9 秒；Agent 包 332 passed、1 skipped，全仓 1820 passed、1 skipped。完整门禁与限制记录见
+[`Provider Retry-After brief`](./resume-agent-provider-retry-after.zh-CN.md)。
+
 ## 10. 证据台账
 
 | Feature ID | 生命周期 | 用户结果 | 交付 | 主要/独立证据 | 决策 | 覆盖 | 历史缺口 | 剩余缺口 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | RA-014-A | config | 启动前拒绝危险配置 | Implemented | 本地源码；10 个构造测试 | adapt | covered | backfilled | 未验证 env/部署配置 |
 | RA-014-B | timeout/network | 短暂断连有界恢复且 socket 被取消 | Implemented | Node/WHATWG；本地 abort 实验；headers 前/读取 body 测试 | adopt | partial | backfilled | 真实网络、重复计费歧义未验证 |
-| RA-014-C | HTTP retry | 状态分类一致、次数有上限 | Implemented | Anthropic SDK、OpenAI 官方文档；状态矩阵测试 | adapt | partial | backfilled | Retry-After、429 subtype、Provider 方言 |
+| RA-014-C | HTTP retry | 状态分类一致、次数有上限 | Implemented | Anthropic SDK、OpenAI 官方文档；状态矩阵测试 | adapt | partial | backfilled | 429 subtype、Provider 方言和精确费用预算；Retry-After/在途取消由 RA-014D/RA-015K 实现 |
+| RA-014D / RA-015I | Header-aware wait | Provider 建议不会被更短的 transport/durable 本地退避覆盖 | Implemented for development | seconds/date/invalid/cap/privacy focused tests；SQLite restart；2s executable smoke | deepen existing seams | partial | RA-014C 明确延期 | 精确费用、真实 Provider、jitter 与 operational evidence；delivery admission deadline/cancellation 由 RA-015J/K 实现 |
 | RA-014-D | protocol decode | 损坏响应稳定、安全失败 | Implemented | 相邻 structured-output 契约；非 JSON/missing/invalid 测试 | adapt | covered | backfilled | 真实 Provider 异常样本未验证 |
 | RA-014-E | privacy | 错误不暴露请求/响应内容 | Implemented | 本地源码审计；四类 secret 对抗测试 | adopt | partial | backfilled | 上层日志不在本切片 |
 | RA-014-F | resource cleanup | 测试不留 timer/socket 句柄 | Implemented | Node abort 行为；socket 跟踪和 teardown；目标测试退出 | adopt | partial | backfilled | CI 多平台与高并发证据未验证 |

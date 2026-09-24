@@ -17,7 +17,7 @@ RA-015A–D 已提供 revision CAS、SQLite durable Store、transactional outbox
 5. 即使应用层先检查 `leaseLost`，检查与普通 CAS 之间仍存在 TOCTOU；
 6. `recoverPendingTasks(limit)` 先 claim 多个 task 再交给 schedule callback，排队时间会预先消耗 lease。
 
-本切片的用户结果是：长任务在 heartbeat 正常时保持唯一当前 holder；一旦 heartbeat 明确失败、claim 到期或被接管，旧执行不能再提交任何 Run mutation，也不能 ack/release 新 generation。Provider 请求若已经发出仍可能重复；系统只丢弃失租后的结果，不作 exactly-once 声明。
+本切片的用户结果是：长任务在 heartbeat 正常时保持唯一当前 holder；一旦 heartbeat 明确失败、claim 到期或被接管，旧执行不能再提交任何 Run mutation，也不能 ack/release 新 generation。RA-015E 独立交付时只丢弃失租后的 Provider 结果；后续 RA-015K 已让内置 adapter 在明确失租时主动取消本地请求，但远端副作用仍可能重复，系统不作 exactly-once 声明。
 
 ## 2. 本地代码证据
 
@@ -254,8 +254,8 @@ resource 与诊断报告后在同一进程快照二分，而不是先改产品�
 | Coverage | Partial：同主机应用代码与注入故障已覆盖；Provider side effect、claim-ahead 与生产运行未覆盖 |
 | Historical gap | Reopened-by-change；RA-015C/D 明确记录 fixed lease 与 mutation fencing 缺口，未曾宣称解决 |
 | Gap origin | RA-015C 固定 lease；RA-015D 只保护 ack/release generation |
-| Remaining gap | claim-ahead/自动 worker、Provider idempotency/cancellation、multi-host clock、DLQ/backoff、metrics/runbook |
-| Last reviewed | 2026-09-16；Node 22.21.1、Vitest 4.0.16、SQLite schema v2、后续快照 `9b5993f` |
+| Remaining gap | 自动 worker 已由 RA-015F 交付，release backoff 已由 RA-015G 交付，durable Run 在途取消已由 RA-015K 交付；claim-ahead、Provider idempotency、multi-host clock、DLQ/redrive、jitter、metrics/runbook 仍缺 |
+| Last reviewed | 2026-09-25；Node 22.21.1、Vitest 4.0.16、SQLite schema v2、后续快照 `9b5993f` |
 
 ## 13. 可能推翻方案的证据
 
@@ -338,8 +338,8 @@ pnpm agent test
 
 - Provider 调用与其他外部 side effect 仍是 at-least-once，可能重复；
 - RA-015F：claim-ahead、自动常驻 poller、concurrency/backpressure、完整 worker shutdown/drain；
-- DLQ/redrive、backoff/jitter、operator metrics/alerts/runbook；
-- Provider cancellation 与 effect-specific idempotency；
+- RA-015G 已交付 release backoff；DLQ/redrive、jitter、operator metrics/alerts/runbook 仍缺；
+- effect-specific idempotency；durable Run cancellation 已由 RA-015K 补齐，同步请求断连取消仍缺；
 - PostgreSQL/Redis/SQS、多主机 clock 与生产部署；
 - SQLite `node:sqlite` 同步、Stability 1.1，仅是同主机开发级 adapter；
 - 加密、retention、备份、租户隔离与 OS/power-loss fault injection。

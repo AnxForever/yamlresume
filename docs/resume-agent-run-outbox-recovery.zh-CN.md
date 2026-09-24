@@ -159,7 +159,7 @@ drain
 | lease | SQS visibility timeout/receipt handle 类比；SQLite RETURNING；RA-015D generation/takeover 与 RA-015E renewal/fenced-mutation tests | Covered for one-host application lifecycle | Provider side effect 仍可重复；无 RA-015F worker lifecycle |
 | idempotent replay | RA-015A revision/idempotency；terminal replay test | Partial | 非 terminal LLM 阶段仍可能重复调用 |
 | exactly-once | 无法证明 | Rejected claim | 保持 at-least-once 文档 |
-| automatic polling | RA-015F bounded same-host poller | Implemented for development | 仍无 production worker/runbook、DLQ/backoff 与多主机证据 |
+| automatic polling | RA-015F bounded same-host poller；RA-015G persisted release backoff | Implemented for development | 仍无 production worker/runbook、DLQ/redrive、jitter 与多主机证据 |
 
 ## 10. 会推翻方案的证据
 
@@ -170,7 +170,7 @@ drain
 
 ## 11. 明确延期
 
-- RA-015E 已补上 heartbeat 与 leased Run mutation fencing；RA-015F 已补上有界常驻 poller，但 claim-ahead/backpressure、dead-letter storage/redrive、backoff/jitter 和运维指标仍延期；
+- RA-015E 已补上 heartbeat 与 leased Run mutation fencing；RA-015F 已补上有界常驻 poller，RA-015G 已补上基础设施异常 release 的持久化指数退避；claim-ahead/backpressure、dead-letter storage/redrive、jitter 和运维指标仍延期；
 - 完整 stage checkpoint，避免 crash 时重复未完成的 LLM 调用；
 - PostgreSQL task claim（例如 `FOR UPDATE SKIP LOCKED`）与多主机部署；
 - exactly-once 外部 side effect 声明。

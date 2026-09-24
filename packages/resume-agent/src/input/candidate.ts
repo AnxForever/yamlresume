@@ -108,6 +108,31 @@ function imageAttachments(artifacts: ExtractedArtifact[]) {
     }))
 }
 
+function structuredResumeFromArtifact(
+  artifact: ExtractedArtifact
+): ReturnType<typeof parseCandidateResume> | undefined {
+  if (!artifact.text) return undefined
+
+  try {
+    if (artifact.mediaType === 'application/yaml') {
+      return parseCandidateResume({ yaml: artifact.text })
+    }
+    if (artifact.mediaType === 'application/json') {
+      return parseCandidateResume({ resume: JSON.parse(artifact.text) })
+    }
+  } catch (error) {
+    if (
+      error instanceof CandidateValidationError ||
+      error instanceof SyntaxError
+    ) {
+      return undefined
+    }
+    throw error
+  }
+
+  return undefined
+}
+
 interface CandidateShapeNormalization {
   value: unknown
   omittedOptionalEntries: boolean
@@ -183,7 +208,8 @@ function normalizeCandidateResumeShape(
 export async function normalizeCandidateInput(
   llm: LlmClient,
   input: CandidateInput,
-  artifacts: ExtractedArtifact[]
+  artifacts: ExtractedArtifact[],
+  signal?: AbortSignal
 ): Promise<CandidateNormalizationResult> {
   const hasCanonical = input.yaml !== undefined || input.resume !== undefined
   if (!hasCanonical && artifacts.length === 0) {
@@ -199,6 +225,21 @@ export async function normalizeCandidateInput(
     }
   }
 
+  if (!hasCanonical && artifacts.length === 1) {
+    const [artifact] = artifacts
+    if (artifact) {
+      const structuredResume = structuredResumeFromArtifact(artifact)
+      if (structuredResume) {
+        return {
+          resume: structuredResume,
+          sourceArtifactIds: [artifact.id],
+          questions: [],
+          warnings: [],
+        }
+      }
+    }
+  }
+
   const completion = await completeStructuredOutput(llm, {
     request: {
       schemaName: 'CandidateNormalization',
@@ -208,6 +249,7 @@ export async function normalizeCandidateInput(
     },
     schema: CandidateNormalizationResponseSchema,
     expectedShape: CANDIDATE_NORMALIZATION_EXPECTED_SHAPE,
+    signal,
   })
   const parsed = completion.data
 
@@ -255,7 +297,10 @@ export async function normalizeCandidateInput(
       validateNormalizationFacts(original, normalized)
     } catch (error) {
       if (error instanceof DraftValidationError) {
-        throw new DraftValidationError(error.message)
+        throw new DraftValidationError(error.message, {
+          code: error.code,
+          path: error.path,
+        })
       }
       throw error
     }

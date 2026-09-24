@@ -675,6 +675,10 @@ export interface LlmCompletion<T> {
   metadata: LlmCallMetadata
 }
 
+export interface LlmCallOptions {
+  signal?: AbortSignal
+}
+
 export interface StructuredOutputTelemetry {
   provider: string
   model: string
@@ -689,5 +693,8 @@ export interface StructuredOutputTelemetry {
 }
 
 export interface LlmClient {
-  completeJson<T>(request: JsonCompletionRequest): Promise<LlmCompletion<T>>
+  completeJson<T>(
+    request: JsonCompletionRequest,
+    options?: LlmCallOptions
+  ): Promise<LlmCompletion<T>>
 }

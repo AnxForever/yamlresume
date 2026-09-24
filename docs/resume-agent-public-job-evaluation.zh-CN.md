@@ -2,11 +2,11 @@
 
 > Feature ID：RA-010C
 >
-> 状态：Implemented for development；已取得一次真实 DeepSeek campaign，但质量与稳定性未达标
+> 状态：Implemented for development；已取得真实 DeepSeek 与 StepFun campaign，但质量、延迟与稳定性未达标
 >
 > 证据覆盖：Partial
 >
-> 调研与实现日期：2026-09-16
+> 调研与实现日期：2026-09-16；最后审阅：2026-09-24
 
 ## 1. 为什么这一切片存在
 
@@ -28,11 +28,11 @@ completion 或异常正文的 campaign 报告。
 | --- | --- | --- |
 | 真实公开 JD | 已有 | 案例需求来自发布方公开岗位，但只提交人工改写的需求摘要 |
 | 真实候选人案例 | 没有 | 候选人全部为合成身份和合成经历，不是匿名真实简历 |
-| 真实 Provider 调用 | 已尝试 | 默认 Node 出网未读取代理；启用 env-proxy 后 OpenAI 返回 401、Gemini 返回 400 |
-| 真实模型质量达标 | 没有 | 3 个案例都未进入评分，不能据此判断模型好坏 |
+| 真实 Provider 调用 | 已有 | DeepSeek 与 StepFun 均已通过真实 OpenAI-compatible adapter 产生可评分结果；OpenAI 401、Gemini 400 是历史配置证据 |
+| 真实模型质量达标 | 没有 | 小样本通过率、长尾延迟与随机执行失败仍未达到生产门槛 |
 
 因此本功能不能被描述成“真实 Eval 已通过”。更准确的说法是：**公开 JD 派生数据集、真实
-Agent campaign 通道与安全报告已实现；DeepSeek 已产生可评分结果，但当前 campaign 未达标，
+Agent campaign 通道与安全报告已实现；DeepSeek 与 StepFun 已产生可评分结果，但当前 campaign 未达标，
 且仍有结构化输出执行失败。**
 
 ## 3. 调研证据与设计改变
@@ -330,6 +330,79 @@ Provider message 和异常正文均未写入报告或文档。
 §12.2。这次 campaign 首次通过可提交的命令重跑，报告里的 `runtimeRevision` 记录的是运行时
 HEAD（`00d855c`），RA-018 代码当时尚未提交，随后提交为 13479eb / b7b3490 / ac3aed2。
 
+### 2026-09-24 StepFun 本地基线
+
+使用现有可提交 campaign runner、词法匹配器、`atomic-requirements-v3` prompt、
+`step-3.7-flash` 和 runtime revision `5d851c0`，对三份公开岗位派生合成案例各运行一次。命令
+显式清除了父进程继承的 `OPENAI_*`，再从 Git 忽略且权限为 0600 的 `.env.local-app` 加载配置；
+未保存原始 JD、候选人、Prompt、completion、Provider 错误正文或凭证。
+
+安全聚合结果：
+
+- `totalCaseExecutions = 3`，`passed = 1`，`failed = 2`，`scored = 2`；
+- `passRate = 0.3333`，Wilson 95% 区间 `[0.0615, 0.7923]`；
+- `failureCodeCounts`：`assertion_failed = 1`、`execution_failed = 1`、
+  `invalid_execution_result = 0`；
+- 平均 requirement coverage `0.73`，平均 must-have coverage `0.75`；覆盖率只统计两个成功进入
+  评分的执行，不能把未评分的执行失败当作零，也不能据此掩盖失败；
+- 平均端到端耗时约 `190.4s`。Grafana、Cloudflare、Anthropic 三例分别约为
+  `176.1s`、`203.1s`、`217.5s`；当前延迟不适合交互式生产体验；
+- Grafana 案例通过；Cloudflare 案例进入评分但有断言失败；Anthropic Data Engineer 案例以
+  `DraftValidationError` 失败。
+
+对失败的 Anthropic 案例做了一次只输出安全字段的固定输入复跑：`139.384s` 完成，职位为
+`Data Engineer`，requirement/must-have coverage 为 `0.70/0.75`。同一案例从草稿验证失败变为
+成功，支持“当前模型输出存在随机性”，不支持放宽 YAMLResume Schema、事实不变式或针对一次结果
+修改 prompt。因为未保存原始 completion，无法离线重放第一次失败；继续定位需要更多受控重复或
+仅记录验证错误路径的安全观测面。
+
+这次 campaign 证明 StepFun 能完成真实 Agent 工作流，但不能证明生产质量。当前最小结论是：
+Provider 可用，事实保护在失败时 fail closed；主要风险是约 2–4 分钟延迟、1/3 执行失败和小样本
+质量波动。下一轮应先改善可观测性并做有预算的重复采样，而不是增加新功能或降低验证标准。
+
+RA-010C-F 的用户结果是：草稿验证失败仍归入 `execution_failed`，同时报告一个严格
+白名单的诊断对象，只含 `stage`、稳定错误码和可选 YAMLResume 字段路径。异常消息、字段值、
+候选人内容和模型 completion 必须继续被丢弃；普通 Provider 异常不能伪装成草稿诊断。
+
+公开 interface 是 `EvalCaseResult.diagnostic?`：
+
+```json
+{
+  "stage": "draft_validation",
+  "code": "draft_schema_invalid",
+  "path": "content.work.0.startDate"
+}
+```
+
+状态转换保持兼容：
+
+```text
+DraftValidationError
+  -> execution_failed
+  -> copy allowlisted code
+  -> copy path only when it matches a bounded YAMLResume path shape
+
+other exception
+  -> execution_failed
+  -> no diagnostic
+```
+
+稳定错误码只有 `draft_validation_failed`、`draft_content_invalid`、`draft_schema_invalid`、
+`draft_immutable_fact_changed` 和 `draft_unsupported_entry`。Schema 第一条 issue、不可变 basics/location/
+section 字段以及无来源 section 都在错误产生的 module 内写入结构化 path；evaluator 只做白名单投影，
+不解析异常 message。非法或超长 path 会被省略，但稳定 code 保留。campaign CLI 在存在诊断时额外
+输出 repetition、case ID、stage、code 和 path 表格；`--out` 保存的安全报告也包含同一对象。
+
+RED → GREEN：
+
+- RED：`DraftValidationError` 进入 runner 后只剩 `execution_failed`；新增公开行为测试稳定失败，
+  同时证明旧逻辑仍未泄露异常正文。
+- GREEN：runner 保留安全 code/path；普通敏感异常无 `diagnostic`；非法 path 被丢弃；campaign
+  保留诊断但不保留异常 message。
+- RED：真实 `prepareDraftResume()` 的 Schema、不可变事实和无来源条目错误仍只有 message。
+- GREEN：三个行为分别产生 `draft_schema_invalid`、`draft_immutable_fact_changed` 和
+  `draft_unsupported_entry` 以及对应字段路径；事实验证规则本身没有放宽。
+
 ## 10. 验收门禁
 
 ```text
@@ -366,6 +439,27 @@ statements、branches、functions、lines 均为 100%；TypeScript、ESM/DTS bui
 `git diff --check` 通过。`license:check` 同样因缺少 `addlicense` binary 跳过实际扫描，新增文件的
 MIT header 已保留。
 
+2026-09-24 StepFun 基线验证：
+
+- `pnpm agent test src/evaluation/runner.test.ts src/evaluation/campaign.test.ts
+  src/evaluation/fixtures/public-job-derived.test.ts`：3 files / 41 tests 通过；
+- 清除继承的 `OPENAI_*` 后执行 `pnpm --filter @yamlresume/resume-agent exec tsx
+  scripts/campaign.ts --matcher lexical --repetitions 1 --cases public --env ../../.env.local-app`：命令
+  退出 0，得到 3 个执行、1 个通过、2 个进入评分和上述安全聚合；
+- Anthropic Data Engineer 固定案例的安全单案例复跑：命令退出 0，`139384ms` 完成并得到
+  `0.70/0.75` coverage；只输出 case ID、终态、耗时、目标职位和覆盖率。
+
+2026-09-24 RA-010C-F 验证：
+
+- `pnpm agent test src/validation/resume.test.ts src/evaluation/runner.test.ts
+  src/evaluation/campaign.test.ts`：3 files / 48 tests 通过；
+- `pnpm agent test`：25 files 通过，317 tests 通过、1 skipped；
+- `pnpm agent-api test`：7 files / 136 tests 通过；
+- `pnpm check:ci`：退出 0；保留 2 条与本切片无关的既有 API 测试 non-null assertion warning；
+- `pnpm build`：9 个 workspace package 全部构建通过；
+- 没有重跑付费 campaign：新行为在 evaluator 的公开 interface 以确定性错误对象验证，下一次真实
+  Provider 自然失败时即可获得 code/path，不需要为观测主动制造失败。
+
 真实模型验收还需在允许 Node `fetch` 访问 Provider 的受控环境中：
 
 1. 固定 provider、model、prompt revision 和 runtime revision；
@@ -381,9 +475,10 @@ MIT header 已保留。
 | --- | --- | --- | --- | --- | --- | --- |
 | RA-010C-A | 公开 JD → 可追溯 development case | Implemented for development | 3 个一手来源、版本化 provenance、Schema 与生产 Resume parser tests | Partial | none | 岗位族、语言、地区和非技术岗位覆盖很窄 |
 | RA-010C-B | 模型解析 JD → 关键术语断言 | Implemented | required keyword RED/GREEN 与安全报告 | Partial | backfilled | 同义词、责任语义和人工 gold labels 未覆盖 |
-| RA-010C-C | 配置 → 重复采样 → 统计可信的安全聚合 | Implemented for development | 重复运行、逐 case 稳定性、Wilson 95% 区间、R7 latency、空 observation、混合失败和隐私回归；campaign 10 tests | Partial | backfilled | 尚无可评分真实 Provider observations；独立同分布假设未获运行证据；token、费用和持久化未实现 |
-| RA-010C-D | corpus → 真实 Agent/Provider → 可评分结果 | Implemented but not operational | DeepSeek 真实 campaign：3 executions、1 passed、3 scored、Wilson 区间与逐 case 聚合；另有 OpenAI 401/Gemini 400 历史安全分类证据 | Backfilled | previously-overclaimed | 需更多重复样本、失败断言诊断、真实候选分布与质量门槛；仍无 Operational 证据 |
+| RA-010C-C | 配置 → 重复采样 → 统计可信的安全聚合 | Implemented for development | 重复运行、逐 case 稳定性、Wilson 95% 区间、R7 latency、空 observation、混合失败和隐私回归；DeepSeek/StepFun 真实 observations；campaign 11 tests | Partial | backfilled | 真实样本仍少；独立同分布假设未获充分运行证据；token、费用和持久化未实现 |
+| RA-010C-D | corpus → 真实 Agent/Provider → 可评分结果 | Implemented but not operational | DeepSeek 与 StepFun 真实 campaign；StepFun 3 executions、1 passed、2 scored、平均耗时约 190.4s，并有一次安全的失败案例复跑 | Backfilled | previously-overclaimed | 需更多重复样本、断言明细、安全诊断的真实运行观测、真实候选分布和质量门槛；仍无 Operational 证据 |
 | RA-010C-E | 模型结果 → 盲化人工质量记录与安全聚合 | Implemented for development | `resume-human-review-v1` 四维 anchored rubric、strict/bounded Schema、重复提交拒绝、分类分布、描述性 pairwise exact agreement 与 14 tests | Partial | backfilled | assignment UI、随机化、评审者招募/资格、授权真实数据、pilot、chance-corrected IAA/CI、裁决、持久化与 judge calibration |
+| RA-010C-F | 草稿验证失败 → 安全可定位诊断 | Implemented for development | runner/campaign 安全诊断；Schema、不可变事实、无来源条目 RED→GREEN；非法路径与敏感异常隐私回归；3 files / 48 tests | Extend existing report interface | 旧报告有意丢弃全部异常详情 | 尚无第二次真实 DraftValidationError 观测；code/path 聚合、告警和留存策略未实现 |
 
 ## 12. 参考资料
 

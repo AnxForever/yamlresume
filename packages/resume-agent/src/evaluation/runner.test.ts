@@ -31,6 +31,7 @@ import {
 } from '@/evaluation/contracts'
 import { fictionalPlatformEngineerCase } from '@/evaluation/fixtures/fictional-platform-engineer'
 import { runEvaluation } from '@/evaluation/runner'
+import { DraftValidationError } from '@/validation/resume'
 
 const validCase = {
   version: 1,
@@ -422,6 +423,50 @@ describe('runEvaluation', () => {
     expect(serializedReport).not.toContain(sensitiveCompletion)
     expect(serializedReport).not.toContain('candidate@example.invalid')
     expect(serializedReport).not.toContain('Imaginary Queue Simulator')
+    expect(report.results[0]).not.toHaveProperty('diagnostic')
+  })
+
+  it('reports only a stable code and safe path for draft validation failures', async () => {
+    const sensitiveMessage = 'PRIVATE_DRAFT_AND_COMPLETION_94720'
+    const report = await runEvaluation(
+      [fictionalPlatformEngineerCase],
+      async () => {
+        throw new DraftValidationError(sensitiveMessage, {
+          code: 'draft_schema_invalid',
+          path: 'content.work.0.startDate',
+        })
+      }
+    )
+
+    expect(report.results[0]).toMatchObject({
+      passed: false,
+      failureCode: 'execution_failed',
+      diagnostic: {
+        stage: 'draft_validation',
+        code: 'draft_schema_invalid',
+        path: 'content.work.0.startDate',
+      },
+    })
+    expect(JSON.stringify(report)).not.toContain(sensitiveMessage)
+  })
+
+  it('drops an unsafe draft path while retaining its stable code', async () => {
+    const sensitivePath = 'content.work.0.PRIVATE_FIELD_VALUE_38410'
+    const report = await runEvaluation(
+      [fictionalPlatformEngineerCase],
+      async () => {
+        throw new DraftValidationError('safe message is not reported', {
+          code: 'draft_schema_invalid',
+          path: sensitivePath,
+        })
+      }
+    )
+
+    expect(report.results[0]?.diagnostic).toEqual({
+      stage: 'draft_validation',
+      code: 'draft_schema_invalid',
+    })
+    expect(JSON.stringify(report)).not.toContain(sensitivePath)
   })
 
   it('classifies a resolved invalid result without scoring or leaking it', async () => {

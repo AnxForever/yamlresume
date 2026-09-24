@@ -2,8 +2,8 @@
 
 > Feature ID：RA-001B
 > 状态：Partial implementation；RA-001B-A1 可信识别、RA-001B-B ODT、RA-001B-C RTF 与
-> RA-001B-D legacy DOC 受限 extractor 已开发级实现；目前已有一个公开 Word 97 CFB fixture，但真实 Unicode corpus、隔离执行和跨平台验收仍未完成
-> 最后审阅：2026-09-16
+> RA-001B-D legacy DOC 受限 extractor、RA-001B-F 结构化简历附件事实保真已开发级实现；目前已有一个公开 Word 97 CFB fixture，但真实 Unicode corpus、隔离执行和跨平台验收仍未完成
+> 最后审阅：2026-09-24
 > 范围：可信文件识别，以及 ODT、RTF、旧版 DOC 的文本提取；不包含 OCR、宏执行或通用 Office 转换服务。
 
 ## 1. 用户问题与结果
@@ -260,8 +260,54 @@ parser 异常。随后使用 Apache POI 公开的 `test.doc`（SHA-256 已记录
 | RA-001B-C | RTF stream → Unicode visible text | Implemented for development | Partial：Microsoft/IANA RTF 规范、两个独立 reader 源码、本机 LibreOffice、bounded scanner 与对抗 tests | none | candidate/JD/API/Run/restart 纵向验收、跨 OS corpus、font-table charset、fuzz、隔离与 telemetry |
 | RA-001B-D | legacy DOC → visible text | Partial implementation | MS-DOC CFB signature detection、MIT `word-extractor@1.0.4` 源码/许可审阅、Buffer adapter、5 秒超时、1,000,000 字符上限、伪 CFB 稳定错误测试；加入 Apache POI `test.doc` 的真实 Word 97 CFB fixture（仅保留公开测试样本，来源与 SHA-256 已记录） | backfilled | 真实 Unicode/异构 corpus、真正可中止的 worker 隔离、跨 OS、API capabilities 与生产观测 |
 | RA-001B-E | parser failure → safe user error | In development：检测/PDF/DOCX/ODT/RTF/API/Run 已统一 | Partial：固定错误、RTF/同步 HTTP 与异步 Run 脱敏 tests | backfilled | DOC extractor 与生产日志 |
+| RA-001B-F | 上传合法 YAMLResume → 保留结构化候选人事实 | Implemented for development | 同步 HTTP YAML/JSON 回归、完整仓库 YAML 同步十格式与异步 Run smoke、全量测试/构建/检查 | none | 多个结构化简历附件、结构化简历加补充材料的冲突/合并契约；真实 Provider 与生产上传观测 |
 
-### 11.1 当前实施切片：RA-001B-A
+### 11.1 当前实施切片：RA-001B-F YAMLResume 附件事实保真
+
+用户结果：用户按本地 demo 的说明把现有 `.yml` 简历作为 `candidateFiles` 上传时，系统应把
+合法 YAMLResume 作为结构化候选人输入，至少完整保留姓名、联系方式、经历和布局；不能因为
+当前使用离线 provider 就把嵌套字段降级成启发式文本并返回 `Unnamed Candidate`。
+
+当前证据：2026-09-24 在 Node 22.21.1、离线 provider、匿名 API 和内存 RunStore 下，以
+`packages/cli/resources/resume.yml` 发送 multipart `POST /v1/tailor-resume`。HTTP 返回 200，YAML
+与 DOCX 产物均生成，但响应姓名是 `Unnamed Candidate`，而源文件姓名是 `Andy Dufresne`。
+同一 runtime 的 JSON `candidate.resume`、同步/异步 Run 和十格式渲染均已通过，因此问题已收窄到
+“结构化候选人文件 → normalization”边界，而不是 HTTP、渲染器或 Run 调度。
+
+验收与边界：
+
+1. 先在同步 multipart HTTP seam 加入回归测试，并观察源文件姓名丢失的 RED；
+2. 只对通过 `ResumeSchema` 的 YAML/JSON 候选人附件采用结构化快路径；普通 YAML/JSON 材料仍走
+   既有模型归一化，不能把任意对象误当简历；
+3. 损坏、冲突、超限和不符合 Resume Schema 的输入继续使用现有安全错误/归一化契约；
+4. 验收至少包含 focused API/Agent tests、完整 `pnpm test`、`pnpm build`、`pnpm check:ci` 与真实
+   离线 HTTP multipart smoke；真实 provider 质量、跨阅读器保真和生产部署不属于本切片。
+
+实现结果与取舍：RED 证明 multipart 已把文件正确识别为 `application/yaml`，丢失发生在
+`normalizeCandidateInput`：所有附件都被当作普通文本交给离线启发式 normalizer。修复放在候选人
+归一化深模块而非 HTTP 适配层，因此 JSON 请求里的 `candidate.files` 与 multipart 共用同一语义。
+仅当请求没有显式 canonical candidate、只有一个附件、该附件声明为 YAML/JSON 且能通过严格
+JSON/YAML 解析和真实 `ResumeSchema` 时，才直接返回结构化简历并保留 artifact ID；普通配置文件、
+损坏数据和不符合 schema 的对象继续走既有模型归一化。这样不根据扩展名盲目信任输入，也不让
+离线 provider 重解释已经结构化的事实。
+
+RED → GREEN 与验收证据：
+
+1. `pnpm agent-api test src/server.test.ts -t "preserves a valid YAMLResume uploaded as a candidate file"`
+   先稳定失败：期望 `Ada Lovelace`，实际 `Unnamed Candidate`；重建 Agent package 后同一测试通过；
+2. YAML 与 JSON 两个同步 multipart 回归：2/2 通过；完整 API suite：7 files / 125 tests；
+3. `pnpm test`：全仓 1774 tests passed，1 个可选 transformers 测试 skipped；
+4. `pnpm build`：9/10 workspace projects 构建通过；`pnpm check:ci` 退出 0，保留两条既有
+   `noNonNullAssertion` warning；环境缺少 `addlicense` binary，许可脚本明确跳过而非完成扫描；
+5. 真实开发 API smoke：上传 `packages/cli/resources/resume.yml` 后姓名保持 `Andy Dufresne`、
+   两段工作经历保留；同步请求交付 YAML/JSON/Markdown/HTML/LaTeX/PDF/DOCX/TXT/RTF/ODT
+   十种非空产物且无 render failure；异步 Run 从 202 进入 `completed` 并交付 YAML/DOCX。
+
+当前证据只支持单个合法结构化简历附件。多个结构化简历文件、结构化简历与补充材料共同上传时，
+仍需单独定义冲突、合并、提问与事实保真契约；真实模型 Eval、图片 OCR、生产隔离和多主机运行也
+不因本修复而变成 Operational。
+
+### 11.2 历史实施切片：RA-001B-A
 
 本轮实现检测 seam，不同时宣称 ODT、RTF 或 DOC 已可提取。研究复核确认：OWASP 要求把
 调用方 `Content-Type` 视为不可信信号，并将 allowlist、内容签名、扩展名和解压后大小限制
@@ -295,7 +341,7 @@ parser 异常。随后使用 Apache POI 公开的 `test.doc`（SHA-256 已记录
 当前只把已存在 extractor 的格式列入 capabilities；ODT 与 RTF 已加入，DOC 仍必须等提取、
 对抗测试和兼容性门禁完成后才能加入。
 
-### 11.2 当前验证证据
+### 11.3 RA-001B-A 验证证据
 
 - focused 输入测试：27/27；覆盖正常格式、签名优先、MIME/扩展名冲突、UTF-16、空正文、
   未知 binary、DOCX/ODT 区分、路径穿越、重复 entry、加密、展开超限和损坏压缩数据；
@@ -309,7 +355,7 @@ parser 异常。随后使用 Apache POI 公开的 `test.doc`（SHA-256 已记录
 - 当前证据只支持开发级应用边界，不包含 CFB/DOC、跨 OS、生产 worker 隔离、持续 fuzz 或
   恶意样本运营，因此 RA-001B 和 RA-001B-A 均不能标记为 Operational/Complete。
 
-### 11.3 RA-001B-B ODT 证据、契约与实现
+### 11.4 RA-001B-B ODT 证据、契约与实现
 
 2026-09-16 以 Node 22.21.1、ODF 1.3 和当前 `db6c595` 为基线重新审阅。问题不是“从 ZIP
 找一段 XML”，而是只从可信 ODT package 提取当前可见正文，同时让恶意 XML 无法读本地/
@@ -350,7 +396,7 @@ LibreOffice `idxexample.odt`，四者分别提取 191、4443、4310、65 个字�
 extractor 的独立路径可看到对应正文。该证据只支持 `Implemented for development`：跨 OS、
 更广真实 corpus、fuzz、样式派生隐藏内容、worker 隔离和生产 telemetry 仍未完成。
 
-### 11.4 RA-001B-B 验收证据
+### 11.5 RA-001B-B 验收证据
 
 - `pnpm agent test src/input/artifacts.test.ts`：44/44；覆盖正文语义、namespace alias/未绑定
   prefix、根结构、隐藏/批注/对象、DTD/XXE、fatal UTF-8、XML 深度/元素/输出上限，以及
@@ -365,7 +411,7 @@ extractor 的独立路径可看到对应正文。该证据只支持 `Implemented
   `odt.ts` 已人工核对完整 MIT header。没有用 `process.exit`、延长 timeout 或关闭泄漏检测
   代替生命周期修复。
 
-### 11.5 RA-001B-C RTF 证据与契约
+### 11.6 RA-001B-C RTF 证据与契约
 
 2026-09-16 以 Microsoft archived RTF 1.6 文档、IANA `application/rtf` 登记、RTF 1.9.1
 sample reader 衍生源码、Node 22.21.1 和 LibreOffice 24.2.7.2 为基线。用户结果不是“删除反斜杠
@@ -395,7 +441,7 @@ focused 输入 48/48、完整 resume-agent 252/252、TypeScript、build、目标
 `git diff --check` 通过。该证据仍只支持 `Implemented for development`；没有把 RTF 的跨平台
 兼容性、字体表 code page、真实 Provider 成功率和生产隔离误写成已完成。
 
-### 11.6 RA-001B-C 纵向工作流验收
+### 11.7 RA-001B-C 纵向工作流验收
 
 为定位线上真实 RTF 请求返回 `agent_validation_failed` 的边界，新增了不依赖 Provider 的公开
 工作流集成测试 `ResumeTailoringAgent.run`。合成 RTF 候选人与 JD 经过同一 `extractArtifacts`、

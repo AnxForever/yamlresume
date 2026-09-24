@@ -151,6 +151,24 @@ console.table(
         .join(' ') || '-',
   }))
 )
+const diagnostics = report.runs.flatMap((run, runIndex) =>
+  run.results.flatMap((result) =>
+    result.diagnostic
+      ? [
+          {
+            repetition: runIndex + 1,
+            caseId: result.caseId,
+            stage: result.diagnostic.stage,
+            code: result.diagnostic.code,
+            path: result.diagnostic.path ?? '-',
+          },
+        ]
+      : []
+  )
+)
+if (diagnostics.length > 0) {
+  console.table(diagnostics)
+}
 if (out) {
   writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`)
   console.error(`report written to ${out}`)

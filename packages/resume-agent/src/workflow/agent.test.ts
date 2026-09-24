@@ -152,6 +152,50 @@ describe('ResumeTailoringAgent', () => {
     ])
   })
 
+  it('propagates one cancellation signal through job analysis and drafting', async () => {
+    const receivedSignals: Array<AbortSignal | undefined> = []
+    const llm: LlmClient = {
+      async completeJson<T>(request, options) {
+        receivedSignals.push(options?.signal)
+        const data =
+          request.schemaName === 'JobSpec'
+            ? {
+                targetTitle: 'TypeScript Engineer',
+                seniority: 'junior',
+                summary: 'Builds TypeScript systems',
+                requirements: [],
+                keywords: [],
+              }
+            : {
+                resume: candidate,
+                selectedEvidenceIds: [],
+                questions: [],
+                notes: [],
+              }
+        return {
+          data: data as T,
+          metadata: {
+            provider: 'fake',
+            model: 'fake-model',
+            durationMs: 1,
+            attempt: 1,
+          },
+        }
+      },
+    }
+    const controller = new AbortController()
+
+    await new ResumeTailoringAgent(llm).run(
+      {
+        jobDescription: 'We need a TypeScript Engineer for reliable systems.',
+        candidate: { resume: candidate },
+      },
+      { signal: controller.signal }
+    )
+
+    expect(receivedSignals).toEqual([controller.signal, controller.signal])
+  })
+
   it('adds semantic evidence to the gaps, hints the draft, and keeps the lexical judge', async () => {
     const jobSpec = {
       targetTitle: 'Platform Engineer',
@@ -885,6 +929,7 @@ describe('ResumeTailoringAgent', () => {
 
   it('repairs candidate normalization through the shared output loop', async () => {
     const requests: JsonCompletionRequest[] = []
+    const receivedSignals: Array<AbortSignal | undefined> = []
     const responses = [
       { sourceArtifactIds: [], questions: [], warnings: [] },
       {
@@ -908,8 +953,9 @@ describe('ResumeTailoringAgent', () => {
       },
     ]
     const llm: LlmClient = {
-      async completeJson(request) {
+      async completeJson(request, options) {
         requests.push(request)
+        receivedSignals.push(options?.signal)
         return {
           data: responses.shift(),
           metadata: {
@@ -921,22 +967,32 @@ describe('ResumeTailoringAgent', () => {
         }
       },
     }
+    const controller = new AbortController()
 
-    const result = await new ResumeTailoringAgent(llm).run({
-      jobDescription: 'We need a TypeScript Engineer.',
-      candidate: {
-        files: [
-          {
-            filename: 'candidate.txt',
-            mediaType: 'text/plain',
-            text: 'Ada Lovelace built reliable analytical systems.',
-          },
-        ],
+    const result = await new ResumeTailoringAgent(llm).run(
+      {
+        jobDescription: 'We need a TypeScript Engineer.',
+        candidate: {
+          files: [
+            {
+              filename: 'candidate.txt',
+              mediaType: 'text/plain',
+              text: 'Ada Lovelace built reliable analytical systems.',
+            },
+          ],
+        },
       },
-    })
+      { signal: controller.signal }
+    )
 
     expect(result.status).toBe('completed')
     expect(requests).toHaveLength(4)
+    expect(receivedSignals).toEqual([
+      controller.signal,
+      controller.signal,
+      controller.signal,
+      controller.signal,
+    ])
     expect(requests[1]?.user).toContain('resume')
     expect(requests[1]?.user).toContain('"type": "single_choice"')
     expect(requests[1]?.user).toContain('"type": "date_range"')

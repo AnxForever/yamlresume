@@ -15,7 +15,7 @@ RA-015A 已阻止单个 `InMemoryRunStore` 内的 stale overwrite，但进程退
 - adapter 继续满足 clone 隔离和公开 Run 隐私边界；
 - 数据库 schema 有明确版本，连接可显式关闭，测试不会遗留文件或句柄。
 
-RA-015B 提交时只解决 durable state，未解决“状态已提交但任务未调度”的双写窗口。该历史缺口已由 RA-015C transactional outbox 在当前 schema v2 中补上；RA-015E 又在不改变 schema 的前提下加入 generation-safe renewal 与 lease-fenced Run CAS。自动 poller、claim-ahead 生命周期与生产 worker 仍未实现。
+RA-015B 提交时只解决 durable state，未解决“状态已提交但任务未调度”的双写窗口。该历史缺口已由 RA-015C transactional outbox 在当前 schema v2 中补上；RA-015E 又在不改变 schema 的前提下加入 generation-safe renewal 与 lease-fenced Run CAS，RA-015F 补齐同主机自动 poller。claim-ahead 生命周期、跨主机队列与生产运维仍未实现。
 
 ## 2. 研究证据与技术选择
 

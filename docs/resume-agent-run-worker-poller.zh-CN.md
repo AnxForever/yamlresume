@@ -32,7 +32,11 @@ RA-015C 的显式 `recoverPendingTasks()` 只覆盖进程启动窗口。任务�
 
 ## 尚未解决
 
-这是单主机、单进程的开发级 worker。仍缺：并发度/backpressure 配置、指数 backoff/jitter、DLQ/redrive、Provider side-effect idempotency/cancellation、跨主机数据库时钟证据、metrics/alerts/runbook，以及电源断电和真实长 Provider 请求演练。因此 RA-015F 不能升级为 Operational，也不能宣称 exactly-once。
+这是单主机、单进程的开发级 worker。RA-015G 已为基础设施异常 release 增加持久化指数 backoff；
+仍缺：并发度/backpressure 配置、jitter、DLQ/redrive、Provider side-effect
+idempotency、跨主机数据库时钟证据、metrics/alerts/runbook，以及电源断电和真实长 Provider 请求演练。
+同主机 durable Run 的 close/失租/deadline cancellation 已由 RA-015K 补齐，但不使 RA-015F 升级为
+Operational，也不能宣称 exactly-once。
 
 ## 学习要点
 

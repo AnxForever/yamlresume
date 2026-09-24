@@ -43,6 +43,7 @@ export interface StructuredOutputSpec<T> {
   expectedShape: string
   normalize?: (value: unknown) => unknown
   maxRepairAttempts?: 0 | 1 | 2
+  signal?: AbortSignal
 }
 
 export interface StructuredOutputResult<T> {
@@ -226,7 +227,9 @@ export async function completeStructuredOutput<T>(
     repairAttempt <= maxRepairAttempts;
     repairAttempt += 1
   ) {
-    const completion = await llm.completeJson<unknown>(request)
+    const completion = await llm.completeJson<unknown>(request, {
+      signal: spec.signal,
+    })
     addCallTelemetry(telemetry, completion.metadata)
     telemetry.repairAttempts = repairAttempt
     const validated = validateOutput(

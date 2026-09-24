@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Run the Career Agent locally with no model credentials, no accounts and no
-# database: the offline heuristic provider answers every model call, so the
-# whole pipeline (matching, validation, diff, quality report, rendering) runs
-# end to end on your own machine.
+# Run the Career Agent as a local single-user web app with no accounts. A
+# private .env.local-app can select a real OpenAI-compatible provider; without
+# it, the offline heuristic provider keeps the workflow runnable. SQLite keeps
+# Runs across restarts.
 #
 #   ./scripts/demo.sh            # API on 127.0.0.1:8787, web on localhost:3100
 #   PORT=9000 ./scripts/demo.sh  # move the API
@@ -15,13 +15,25 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-export RESUME_AGENT_LLM_PROVIDER=offline
+LOCAL_APP_ENV_FILE="${RESUME_AGENT_LOCAL_ENV_FILE:-${PWD}/.env.local-app}"
+if [ -f "${LOCAL_APP_ENV_FILE}" ]; then
+  set -a
+  # shellcheck disable=SC1090 -- the local operator chooses this ignored file.
+  source "${LOCAL_APP_ENV_FILE}"
+  set +a
+fi
+
+export RESUME_AGENT_LLM_PROVIDER="${RESUME_AGENT_LLM_PROVIDER:-offline}"
 export RESUME_AGENT_AUTH_MODE=disabled
-export RESUME_AGENT_RUN_STORE=memory
+export RESUME_AGENT_RUN_STORE="${RESUME_AGENT_RUN_STORE:-sqlite}"
+export RESUME_AGENT_RUN_DB_PATH="${RESUME_AGENT_RUN_DB_PATH:-${PWD}/.data/resume-agent/local-app.sqlite}"
 export RESUME_AGENT_HOST=127.0.0.1
 export PORT="${PORT:-8787}"
-# Make sure a key in the shell cannot silently turn this into a real run.
-unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL
+if [ "${RESUME_AGENT_LLM_PROVIDER}" = "offline" ]; then
+  # A key inherited from the shell must not silently turn the fallback into a
+  # real run. Real providers require an explicit selection in the local file.
+  unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL
+fi
 
 echo "▸ building @yamlresume/core and @yamlresume/resume-agent"
 pnpm --filter @yamlresume/core build >/dev/null
@@ -45,8 +57,11 @@ if ! curl -sf --noproxy '*' "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; 
 fi
 
 echo
-echo "▸ API   http://127.0.0.1:${PORT}   (offline provider, auth disabled, in-memory runs)"
+echo "▸ API   http://127.0.0.1:${PORT}   (${RESUME_AGENT_LLM_PROVIDER} provider, auth disabled, ${RESUME_AGENT_RUN_STORE} runs)"
 echo "▸ Web   http://localhost:3100      (opens once Next has compiled)"
+if [ "${RESUME_AGENT_RUN_STORE}" = "sqlite" ]; then
+  echo "▸ Data  ${RESUME_AGENT_RUN_DB_PATH}"
+fi
 echo "  Paste a job description in the chat, attach a resume as a candidate file, press 生成."
 echo
 
